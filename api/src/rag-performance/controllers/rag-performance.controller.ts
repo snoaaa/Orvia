@@ -1,0 +1,25 @@
+import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { CreateRagMetricDto, QueryRagMetricsDto } from '../dto/index.js';
+import { RagRequestMetricEntity } from '../entities/index.js';
+import { RagPerformanceService } from '../services/rag-performance.service.js';
+
+@ApiTags('RAG Performance')
+@Controller('rag-performance')
+export class RagPerformanceController {
+  constructor(private readonly ragService: RagPerformanceService) {}
+
+  @Get('metrics')
+  @ApiOperation({ summary: 'List RAG performance and latency telemetry' })
+  @ApiResponse({ status: 200, description: 'RAG metrics list', type: [RagRequestMetricEntity] })
+  async getMetrics(@Query() query: QueryRagMetricsDto): Promise<RagRequestMetricEntity[]> {
+    return this.ragService.findAllMetrics(query);
+  }
+
+  @Post('metrics')
+  @ApiOperation({ summary: 'Record telemetry for a RAG execution' })
+  @ApiResponse({ status: 201, description: 'Metric recorded', type: RagRequestMetricEntity })
+  async createMetric(@Body() dto: CreateRagMetricDto): Promise<RagRequestMetricEntity> {
+    return this.ragService.recordMetric(dto);
+  }
+}

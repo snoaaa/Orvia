@@ -1,0 +1,67 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model document {
+  id        String   @id
+  title     String
+  url       String
+  metadata  Json?
+  spaceId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  space     space    @relation(fields: [spaceId], references: [id], map: "Document_spaceId_fkey")
+
+  @@index([spaceId], map: "Document_spaceId_fkey")
+}
+
+model school {
+  id        String   @id
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  space     space[]
+  user      user[]
+}
+
+model space {
+  id          String     @id
+  name        String
+  description String?
+  schoolId    String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime
+  document    document[]
+  school      school?    @relation(fields: [schoolId], references: [id], map: "Space_schoolId_fkey")
+  user        user[]     @relation("spacetouser")
+
+  @@index([schoolId], map: "Space_schoolId_fkey")
+}
+
+model user {
+  id        String    @id
+  email     String    @unique(map: "User_email_key")
+  googleId  String?   @unique(map: "User_googleId_key")
+  name      String?
+  role      user_role @default(STUDENT)
+  schoolId  String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime
+  school    school?   @relation(fields: [schoolId], references: [id], map: "User_schoolId_fkey")
+  space     space[]   @relation("spacetouser")
+
+  @@index([schoolId], map: "User_schoolId_fkey")
+}
+
+enum user_role {
+  ADMIN_PLATFORM
+  SCHOOL_ADMIN
+  STAFF
+  STUDENT
+  PARENT_GUEST
+}
