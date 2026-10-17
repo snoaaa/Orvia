@@ -16,11 +16,13 @@ export interface SwaggerConfigOptions {
 export function setupSwagger(app: INestApplication, options?: SwaggerConfigOptions): boolean {
   const logger = new Logger('SwaggerSetup');
 
+  const rawEnabled = process.env.SWAGGER_ENABLED?.trim();
   const enabled =
-    options?.enabled ??
-    (process.env.SWAGGER_ENABLED !== undefined
-      ? process.env.SWAGGER_ENABLED === 'true'
-      : process.env.NODE_ENV !== 'production');
+    options?.enabled !== undefined
+      ? options.enabled
+      : rawEnabled
+        ? rawEnabled === 'true'
+        : process.env.NODE_ENV !== 'production';
 
   if (!enabled) {
     logger.log('Swagger documentation is disabled in this environment.');
@@ -34,13 +36,17 @@ export function setupSwagger(app: INestApplication, options?: SwaggerConfigOptio
   const version = options?.version ?? '1.0.0';
   const path = options?.path ?? 'api/docs';
 
+  const rawProtected = process.env.SWAGGER_PROTECTED?.trim();
   const isProtected =
-    options?.protected ??
-    (process.env.SWAGGER_PROTECTED === 'true' || process.env.NODE_ENV === 'production');
+    options?.protected !== undefined
+      ? options.protected
+      : rawProtected
+        ? rawProtected === 'true'
+        : process.env.NODE_ENV === 'production';
 
   if (isProtected) {
-    const user = options?.user ?? process.env.SWAGGER_USER ?? 'admin';
-    const password = options?.password ?? process.env.SWAGGER_PASSWORD ?? 'admin';
+    const user = options?.user || process.env.SWAGGER_USER?.trim() || 'admin';
+    const password = options?.password || process.env.SWAGGER_PASSWORD?.trim() || 'admin';
     const authMiddleware = createSwaggerAuthMiddleware({ user, password });
 
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;

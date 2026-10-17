@@ -142,4 +142,123 @@ describe('IdentityAndAccess (e2e)', () => {
       where: { id: school1.id },
     });
   });
+
+  it('should verify all 6 base roles exist in database', async () => {
+    const res = await request(app.getHttpServer()).get('/identity/roles').expect(200);
+    const roleNames = res.body.map((r: { name: string }) => r.name);
+    expect(roleNames).toContain('PLATFORM_ADMIN');
+    expect(roleNames).toContain('SCHOOL_ADMIN');
+    expect(roleNames).toContain('CONTENT_MANAGER');
+    expect(roleNames).toContain('STAFF');
+    expect(roleNames).toContain('STUDENT');
+    expect(roleNames).toContain('PARENT_GUEST');
+  });
+
+  it('should verify first platform administrator exists with active status and hashed password', async () => {
+    const adminEmail = process.env.PLATFORM_ADMIN_EMAIL || 'admin@wamdp.platform';
+    const adminUser = await prisma.user.findUnique({
+      where: { email: adminEmail },
+    });
+
+    expect(adminUser).toBeDefined();
+    expect(adminUser?.email).toBe(adminEmail);
+    expect(adminUser?.status).toBe('ACTIVE');
+    expect(adminUser?.passwordHash).toBeDefined();
+    expect(adminUser?.passwordHash).toMatch(/^\$2[aby]\$\d+\$/);
+  });
+
+  it('should verify PLATFORM_ADMIN role assignment and role-permissions in database', async () => {
+    const adminEmail = process.env.PLATFORM_ADMIN_EMAIL || 'admin@wamdp.platform';
+    const adminUser = await prisma.user.findUnique({
+      where: { email: adminEmail },
+    });
+    expect(adminUser).toBeDefined();
+
+    const platformRole = await prisma.role.findUnique({
+      where: { name: 'PLATFORM_ADMIN' },
+    });
+    expect(platformRole).toBeDefined();
+
+    const assignment = await prisma.userAssignment.findFirst({
+      where: {
+        userId: adminUser!.id,
+        roleId: platformRole!.id,
+      },
+    });
+    expect(assignment).toBeDefined();
+
+    const rolePermissions = await prisma.rolePermission.findMany({
+      where: { roleId: platformRole!.id },
+    });
+    expect(rolePermissions.length).toBeGreaterThanOrEqual(40);
+  });
+
+  it('should reject duplicate user email with 409 Conflict', async () => {
+    const email = `test-e2e-duplicate-${Date.now()}@example.com`;
+    await request(app.getHttpServer())
+      .post('/identity/users')
+      .send({
+        email,
+        fullName: 'First Copy',
+        authProvider: 'local',
+      })
+      .expect(201);
+
+    const res = await request(app.getHttpServer())
+      .post('/identity/users')
+      .send({
+        email,
+        fullName: 'Second Copy',
+        authProvider: 'local',
+      })
+      .expect(409);
+
+    expect(res.body.message).toContain('already exists');
+  });
+
+  it('should hash user password securely with bcrypt on user creation', async () => {
+    const email = `test-e2e-pwd-${Date.now()}@example.com`;
+    const res = await request(app.getHttpServer())
+      .post('/identity/users')
+      .send({
+        email,
+        fullName: 'Password Hashing User',
+        password: 'SuperSecret2026!',
+        authProvider: 'local',
+      })
+      .expect(201);
+
+    const userInDb = await prisma.user.findUnique({
+      where: { id: res.body.id },
+    });
+
+    expect(userInDb?.passwordHash).toBeDefined();
+    expect(userInDb?.passwordHash).toMatch(/^\$2[aby]\$\d+\$/);
+    expect(userInDb?.passwordHash).not.toBe('SuperSecret2026!');
+  });
+
+  it('should reject duplicate school domain with 409 Conflict', async () => {
+    const timestamp = Date.now();
+    const domain = `conflict-${timestamp}.edu`;
+
+    await request(app.getHttpServer())
+      .post('/identity/schools')
+      .send({
+        name: `Test E2E School First ${timestamp}`,
+        allowedDomains: domain,
+      })
+      .expect(201);
+
+    const res = await request(app.getHttpServer())
+      .post('/identity/schools')
+      .send({
+        name: `Test E2E School Second ${timestamp}`,
+        allowedDomains: domain,
+      })
+      .expect(409);
+
+    expect(res.body.message).toContain('already assigned');
+  });
 });
+
+

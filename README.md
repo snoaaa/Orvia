@@ -1,50 +1,45 @@
-# WAMDP - Advanced Web & Mobile Development Project
+# WAMDP (Web & Mobile Development Project)
 
-A comprehensive educational platform featuring a Retrieval-Augmented Generation (RAG) assistant, web management portal, and mobile application with offline-first synchronization.
+Educational knowledge platform with RAG assistant, web administration portal, and offline-capable mobile application.
 
-## Architecture Components
+## Repository Structure
 
-1. **`api/`** - NestJS Backend API with MySQL 8 & Prisma ORM
-2. **`web/`** - Angular Single Page Application
-3. **`mobile/`** - React Native + Expo Mobile Application
+- `api/` – NestJS backend API with MySQL 8 & Prisma ORM
+- `web/` – Angular web management client
+- `mobile/` – React Native / Expo mobile application
+- `docs/` – Technical documentation and system architecture diagrams
 
 ---
 
-## Getting Started
+## Quick Start
 
 ### 1. Backend (`api/`)
 
-The backend is built with **NestJS**, **MySQL 8**, and **Prisma ORM**.
+Requires Node.js (v20+) and a running MySQL 8 database.
 
-#### Prerequisites
-- Node.js (v20+ recommended)
-- MySQL 8.x running locally or via Docker
-
-#### Setup & Run
 ```bash
 cd api
-
-# Install dependencies
 npm install
 
-# Configure environment variables
-# Copy .env.example to .env and adjust your MySQL connection credentials
+# Copy environment template and set your database connection
 cp .env.example .env
 
-# Generate Prisma Client
+# Generate Prisma client and apply schema
 npx prisma generate
+npx prisma db push
 
-# Run in development watch mode
+# Seed base roles, permissions, and initial platform administrator
+npm run seed
+
+# Start development server
 npm run start:dev
 ```
 
-- **API Base URL**: `http://localhost:3000`
-- **Health Check & DB Status**: `http://localhost:3000/health`
-- **Swagger API Documentation**: `http://localhost:3000/api/docs`
+- API server: `http://localhost:3000`
+- Swagger documentation: `http://localhost:3000/api/docs`
+- Database health check: `http://localhost:3000/health`
 
----
-
-### 2. Web Application (`web/`)
+### 2. Web Client (`web/`)
 
 ```bash
 cd web
@@ -52,12 +47,25 @@ npm install
 npm run start
 ```
 
----
+Runs on `http://localhost:4200`.
 
-### 3. Mobile Application (`mobile/`)
+### 3. Mobile Client (`mobile/`)
 
 ```bash
 cd mobile
 npm install
 npm run start
 ```
+
+---
+
+## Architecture & Subdomains
+
+The backend is modularized according to the system specifications (`docs/RAGBackend.pdf`):
+
+- **Identity & Access**: Multi-tenant institutions, users, role-based access control, session management
+- **Documents**: Academic spaces, document versioning, chunk processing
+- **Conversations**: RAG query sessions, message history, saved answers, citations
+- **RAG Performance**: Latency, token metrics, cost tracking, citation validation
+- **Mobile Sync**: Device registration, offline resource selection, delta synchronization
+- **Audit**: Hash-chained, append-only audit event trail

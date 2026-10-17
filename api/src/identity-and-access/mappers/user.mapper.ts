@@ -15,18 +15,20 @@ export class UserMapper {
     });
   }
 
-  static fromDtoToCreateInput(dto: CreateUserDto, id: string): {
+  static fromDtoToCreateInput(dto: CreateUserDto, id: string, passwordHash?: string | null): {
     id: string;
     email: string;
     fullName: string;
     authProvider: string;
+    passwordHash: string | null;
     status: UserStatus;
   } {
     return {
       id,
-      email: dto.email,
-      fullName: dto.fullName,
+      email: dto.email.trim().toLowerCase(),
+      fullName: dto.fullName.trim(),
       authProvider: dto.authProvider || 'local',
+      passwordHash: passwordHash ?? null,
       status: 'INVITED',
     };
   }

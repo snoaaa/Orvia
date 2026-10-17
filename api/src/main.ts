@@ -58,7 +58,7 @@ async function bootstrap() {
     path: 'api/docs',
   });
 
-  const port = process.env.PORT ?? 3000;
+  const port = Number(process.env.PORT) || 3000;
   await app.listen(port);
   logger.log(`WAMDP Backend Server is running on: http://localhost:${port}`);
   logger.log(`Swagger API Documentation available at: http://localhost:${port}/api/docs`);

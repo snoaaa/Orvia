@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { UserStatus } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
 import { RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
@@ -11,7 +12,9 @@ export class IdentityAndAccessService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAllUsers(): Promise<UserEntity[]> {
-    const users = await this.prisma.user.findMany();
+    const users = await this.prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
     return users.map((u) => UserMapper.toEntity(u));
   }
 
@@ -26,8 +29,21 @@ export class IdentityAndAccessService {
   }
 
   async createUser(dto: CreateUserDto): Promise<UserEntity> {
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    const existing = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+    if (existing) {
+      throw new ConflictException(`User with email '${dto.email}' already exists`);
+    }
+
     const id = randomUUID();
-    const data = UserMapper.fromDtoToCreateInput(dto, id);
+    let passwordHash: string | null = null;
+    if (dto.password) {
+      passwordHash = await bcrypt.hash(dto.password, 12);
+    }
+
+    const data = UserMapper.fromDtoToCreateInput(dto, id, passwordHash);
     const created = await this.prisma.user.create({
       data,
     });
@@ -36,11 +52,22 @@ export class IdentityAndAccessService {
 
   async updateUser(id: string, dto: UpdateUserDto): Promise<UserEntity> {
     await this.findUserById(id);
+
+    if (dto.email) {
+      const normalizedEmail = dto.email.trim().toLowerCase();
+      const existing = await this.prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      });
+      if (existing && existing.id !== id) {
+        throw new ConflictException(`Email '${dto.email}' is already in use`);
+      }
+    }
+
     const updated = await this.prisma.user.update({
       where: { id },
       data: {
-        ...(dto.email && { email: dto.email }),
-        ...(dto.fullName && { fullName: dto.fullName }),
+        ...(dto.email && { email: dto.email.trim().toLowerCase() }),
+        ...(dto.fullName && { fullName: dto.fullName.trim() }),
         ...(dto.status && { status: dto.status.toUpperCase() as UserStatus }),
       },
     });
@@ -50,6 +77,7 @@ export class IdentityAndAccessService {
   async findAllSchools(): Promise<SchoolEntity[]> {
     const schools = await this.prisma.school.findMany({
       include: { domains: true },
+      orderBy: { name: 'asc' },
     });
     return schools.map((s) => SchoolMapper.toEntity(s));
   }
@@ -61,11 +89,20 @@ export class IdentityAndAccessService {
       .map((d) => d.trim().toLowerCase())
       .filter((d) => d.length > 0);
 
+    if (domainList.length > 0) {
+      const existingDomain = await this.prisma.schoolDomain.findFirst({
+        where: { domain: { in: domainList } },
+      });
+      if (existingDomain) {
+        throw new ConflictException(`Domain '${existingDomain.domain}' is already assigned to another school`);
+      }
+    }
+
     const created = await this.prisma.school.create({
       data: {
         id,
-        name: dto.name,
-        allowedDomains: dto.allowedDomains || '',
+        name: dto.name.trim(),
+        allowedDomains: dto.allowedDomains ? dto.allowedDomains.trim() : '',
         settings: (dto.settings as object) || null,
         domains: {
           create: domainList.map((domain) => ({ domain })),
@@ -78,16 +115,9 @@ export class IdentityAndAccessService {
   }
 
   async findAllRoles(): Promise<RoleEntity[]> {
-    const roles = await this.prisma.role.findMany();
-    if (roles.length === 0) {
-      return [
-        new RoleEntity({ id: '1', name: 'ADMIN_PLATFORM', scope: 'platform', createdAt: new Date(), updatedAt: new Date() }),
-        new RoleEntity({ id: '2', name: 'SCHOOL_ADMIN', scope: 'school', createdAt: new Date(), updatedAt: new Date() }),
-        new RoleEntity({ id: '3', name: 'STAFF', scope: 'school', createdAt: new Date(), updatedAt: new Date() }),
-        new RoleEntity({ id: '4', name: 'STUDENT', scope: 'group', createdAt: new Date(), updatedAt: new Date() }),
-        new RoleEntity({ id: '5', name: 'PARENT_GUEST', scope: 'group', createdAt: new Date(), updatedAt: new Date() }),
-      ];
-    }
+    const roles = await this.prisma.role.findMany({
+      orderBy: { name: 'asc' },
+    });
     return roles.map(
       (r) =>
         new RoleEntity({
@@ -101,12 +131,20 @@ export class IdentityAndAccessService {
   }
 
   async createRole(dto: CreateRoleDto): Promise<RoleEntity> {
+    const roleName = dto.name.trim().toUpperCase();
+    const existing = await this.prisma.role.findUnique({
+      where: { name: roleName },
+    });
+    if (existing) {
+      throw new ConflictException(`Role '${roleName}' already exists`);
+    }
+
     const id = randomUUID();
     const role = await this.prisma.role.create({
       data: {
         id,
-        name: dto.name,
-        scope: dto.scope,
+        name: roleName,
+        scope: dto.scope || 'school',
       },
     });
     return new RoleEntity({
