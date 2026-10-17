@@ -1,20 +1,57 @@
-import type { INestApplication } from '@nestjs/common';
+import { Logger, type INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { createSwaggerAuthMiddleware } from './swagger-auth.middleware.js';
 
 export interface SwaggerConfigOptions {
   title?: string;
   description?: string;
   version?: string;
   path?: string;
+  enabled?: boolean;
+  protected?: boolean;
+  user?: string;
+  password?: string;
 }
 
-export function setupSwagger(app: INestApplication, options?: SwaggerConfigOptions): void {
+export function setupSwagger(app: INestApplication, options?: SwaggerConfigOptions): boolean {
+  const logger = new Logger('SwaggerSetup');
+
+  const enabled =
+    options?.enabled ??
+    (process.env.SWAGGER_ENABLED !== undefined
+      ? process.env.SWAGGER_ENABLED === 'true'
+      : process.env.NODE_ENV !== 'production');
+
+  if (!enabled) {
+    logger.log('Swagger documentation is disabled in this environment.');
+    return false;
+  }
+
   const title = options?.title ?? 'WAMDP Backend API';
   const description =
     options?.description ??
     'Advanced Web and Mobile Development Project - Backend API with MySQL 8 & RAG Architecture';
   const version = options?.version ?? '1.0.0';
   const path = options?.path ?? 'api/docs';
+
+  const isProtected =
+    options?.protected ??
+    (process.env.SWAGGER_PROTECTED === 'true' || process.env.NODE_ENV === 'production');
+
+  if (isProtected) {
+    const user = options?.user ?? process.env.SWAGGER_USER ?? 'admin';
+    const password = options?.password ?? process.env.SWAGGER_PASSWORD ?? 'admin';
+    const authMiddleware = createSwaggerAuthMiddleware({ user, password });
+
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    const httpAdapter = app.getHttpAdapter();
+
+    httpAdapter.use(normalizedPath, authMiddleware);
+    httpAdapter.use(`${normalizedPath}-json`, authMiddleware);
+    httpAdapter.use(`${normalizedPath}-yaml`, authMiddleware);
+
+    logger.log(`Swagger documentation endpoint [${normalizedPath}] is protected with Basic Auth.`);
+  }
 
   const config = new DocumentBuilder()
     .setTitle(title)
@@ -41,6 +78,7 @@ export function setupSwagger(app: INestApplication, options?: SwaggerConfigOptio
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
+
   SwaggerModule.setup(path, app, document, {
     swaggerOptions: {
       persistAuthorization: true,
@@ -50,4 +88,7 @@ export function setupSwagger(app: INestApplication, options?: SwaggerConfigOptio
     },
     customSiteTitle: 'WAMDP API Documentation',
   });
+
+  logger.log(`Swagger documentation mounted on /${path}`);
+  return true;
 }

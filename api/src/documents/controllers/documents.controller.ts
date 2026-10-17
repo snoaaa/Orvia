@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CreateDocumentDto, CreateSpaceDto, UpdateDocumentDto } from '../dto/index.js';
 import { DocumentEntity, SpaceEntity } from '../entities/index.js';
 import { DocumentsService } from '../services/documents.service.js';
 
 @ApiTags('Documents')
+@ApiBearerAuth('bearer-jwt')
 @Controller('documents')
 export class DocumentsController {
   constructor(private readonly documentsService: DocumentsService) {}

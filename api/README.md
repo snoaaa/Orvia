@@ -151,12 +151,16 @@ npm run start:prod
 
 When the server is running, the interactive Swagger OpenAPI UI is accessible at:
 
-👉 **`http://localhost:3000/api/docs`**
+👉 **`http://localhost:3000/api/docs`**  
+OpenAPI JSON spec: **`http://localhost:3000/api/docs-json`**
 
-Features:
-- Bearer JWT authentication header support
-- Interactive testing of all domain routes (`/identity`, `/documents`, `/conversations`, `/rag-performance`, `/mobile-sync`, `/audit`, `/health`)
-- Schema inspection for all DTOs and Entities
+### Features:
+- **Bearer JWT Authentication**: Configured with the `bearer-jwt` security scheme so protected endpoints can be tested directly with a JWT access token.
+- **Automatic Documentation**: Automated schema extraction using the `@nestjs/swagger` compiler plugin in `nest-cli.json` with class-validator shim.
+- **Interactive Route Testing**: Test all domain routes (`/identity`, `/documents`, `/conversations`, `/rag-performance`, `/mobile-sync`, `/audit`, `/health`).
+- **Endpoint Protection & Production Security**:
+  - `SWAGGER_ENABLED=false`: Completely disables Swagger in production (returns `404 Not Found`).
+  - `SWAGGER_PROTECTED=true`: Enforces timing-safe HTTP Basic Authentication on `/api/docs*` and `/api/docs-json` using `SWAGGER_USER` and `SWAGGER_PASSWORD`.
 
 ---
 

@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CreateRagMetricDto, QueryRagMetricsDto } from '../dto/index.js';
 import { RagRequestMetricEntity } from '../entities/index.js';
 import { RagPerformanceService } from '../services/rag-performance.service.js';
 
 @ApiTags('RAG Performance')
+@ApiBearerAuth('bearer-jwt')
 @Controller('rag-performance')
 export class RagPerformanceController {
   constructor(private readonly ragService: RagPerformanceService) {}

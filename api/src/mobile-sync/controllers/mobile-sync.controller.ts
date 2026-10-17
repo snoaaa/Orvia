@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import {
   CreateOfflineSelectionDto,
   RegisterDeviceDto,
@@ -14,6 +14,7 @@ import {
 import { MobileSyncService } from '../services/mobile-sync.service.js';
 
 @ApiTags('Mobile & Synchronization')
+@ApiBearerAuth('bearer-jwt')
 @Controller('mobile-sync')
 export class MobileSyncController {
   constructor(private readonly mobileSyncService: MobileSyncService) {}

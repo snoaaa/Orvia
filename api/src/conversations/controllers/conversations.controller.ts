@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CreateConversationDto, CreateMessageDto, ReportAnswerDto, SaveAnswerDto } from '../dto/index.js';
 import { AnswerReportEntity, ConversationEntity, MessageEntity, SavedAnswerEntity } from '../entities/index.js';
 import { ConversationsService } from '../services/conversations.service.js';
 
 @ApiTags('Conversations')
+@ApiBearerAuth('bearer-jwt')
 @Controller('conversations')
 export class ConversationsController {
   constructor(private readonly conversationsService: ConversationsService) {}

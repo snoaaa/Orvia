@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CreateAuditEventDto, QueryAuditEventsDto } from '../dto/index.js';
 import { AuditEventEntity } from '../entities/index.js';
 import { AuditService } from '../services/audit.service.js';
 
 @ApiTags('Audit Trail')
+@ApiBearerAuth('bearer-jwt')
 @Controller('audit')
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}
