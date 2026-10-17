@@ -7,61 +7,499 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model document {
-  id        String   @id
-  title     String
-  url       String
-  metadata  Json?
-  spaceId   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime
-  space     space    @relation(fields: [spaceId], references: [id], map: "Document_spaceId_fkey")
-
-  @@index([spaceId], map: "Document_spaceId_fkey")
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
 }
 
-model school {
-  id        String   @id
+model User {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  fullName     String      @map("full_name")
+  authProvider String      @default("local") @map("auth_provider")
+  passwordHash String?     @map("password_hash")
+  status       UserStatus  @default(INVITED)
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  assignments       UserAssignment[]
+  groupMemberships  GroupMember[]
+  sessions          Session[]
+  devices           Device[]
+  conversations     Conversation[]
+  savedAnswers      SavedAnswer[]
+  answerReports     AnswerReport[]
+  auditEvents       AuditEvent[]
+  syncChanges       SyncChange[]
+
+  @@map("users")
+}
+
+model School {
+  id             String         @id @default(uuid())
+  name           String
+  allowedDomains String         @default("") @map("allowed_domains")
+  status         String         @default("active")
+  settings       Json?
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  domains        SchoolDomain[]
+  groups         Group[]
+  spaces         Space[]
+  assignments    UserAssignment[]
+  documentAccess DocumentAccess[]
+  auditEvents    AuditEvent[]
+
+  @@map("schools")
+}
+
+model SchoolDomain {
+  id        String   @id @default(uuid())
+  schoolId  String   @map("school_id")
+  domain    String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId])
+  @@map("school_domains")
+}
+
+model Group {
+  id        String        @id @default(uuid())
+  schoolId  String        @map("school_id")
   name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime
-  space     space[]
-  user      user[]
+  type      String        @default("class")
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  school         School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  members        GroupMember[]
+  assignments    UserAssignment[]
+  documentAccess DocumentAccess[]
+
+  @@index([schoolId])
+  @@map("groups")
 }
 
-model space {
-  id          String     @id
-  name        String
+model GroupMember {
+  id        String   @id @default(uuid())
+  groupId   String   @map("group_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+model Role {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  scope     String   @default("platform")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  rolePermissions RolePermission[]
+  assignments     UserAssignment[]
+  documentAccess  DocumentAccess[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  code        String   @unique
   description String?
-  schoolId    String?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime
-  document    document[]
-  school      school?    @relation(fields: [schoolId], references: [id], map: "Space_schoolId_fkey")
-  user        user[]     @relation("spacetouser")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  @@index([schoolId], map: "Space_schoolId_fkey")
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
 }
 
-model user {
-  id        String    @id
-  email     String    @unique(map: "User_email_key")
-  googleId  String?   @unique(map: "User_googleId_key")
-  name      String?
-  role      user_role @default(STUDENT)
-  schoolId  String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime
-  school    school?   @relation(fields: [schoolId], references: [id], map: "User_schoolId_fkey")
-  space     space[]   @relation("spacetouser")
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String     @map("role_id")
+  permissionId String     @map("permission_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
 
-  @@index([schoolId], map: "User_schoolId_fkey")
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
 }
 
-enum user_role {
-  ADMIN_PLATFORM
-  SCHOOL_ADMIN
-  STAFF
-  STUDENT
-  PARENT_GUEST
+model UserAssignment {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  schoolId  String   @map("school_id")
+  groupId   String?  @map("group_id")
+  roleId    String   @map("role_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  group     Group?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([schoolId])
+  @@index([groupId])
+  @@index([roleId])
+  @@map("user_assignments")
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  deviceId     String?   @map("device_id")
+  refreshToken String?   @map("refresh_token") @db.VarChar(512)
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device       Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([deviceId])
+  @@map("sessions")
+}
+
+model Space {
+  id          String   @id @default(uuid())
+  schoolId    String   @map("school_id")
+  name        String
+  description String?  @db.Text
+  language    String   @default("en")
+  privacy     String   @default("public")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  school            School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  documents         Document[]
+  conversations     Conversation[]
+  offlineSelections OfflineSelection[]
+
+  @@index([schoolId])
+  @@map("spaces")
+}
+
+model Document {
+  id        String    @id @default(uuid())
+  spaceId   String    @map("space_id")
+  title     String
+  author    String    @default("")
+  tags      String    @default("")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  space             Space              @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  versions          DocumentVersion[]
+  access            DocumentAccess[]
+  offlineSelections OfflineSelection[]
+
+  @@index([spaceId])
+  @@map("documents")
+}
+
+model DocumentVersion {
+  id         String   @id @default(uuid())
+  documentId String   @map("document_id")
+  versionNo  Int      @default(1) @map("version_no")
+  storageKey String   @map("storage_key")
+  mimeType   String   @map("mime_type")
+  checksum   String
+  status     String   @default("uploaded")
+  pageCount  Int      @default(0) @map("page_count")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  document          Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  processingJobs    ProcessingJob[]
+  messageReferences MessageReference[]
+
+  @@index([documentId])
+  @@map("document_versions")
+}
+
+model DocumentAccess {
+  id         String   @id @default(uuid())
+  documentId String   @map("document_id")
+  schoolId   String?  @map("school_id")
+  roleId     String?  @map("role_id")
+  groupId    String?  @map("group_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  school     School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  role       Role?    @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  group      Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([schoolId])
+  @@index([roleId])
+  @@index([groupId])
+  @@map("document_access")
+}
+
+model ProcessingJob {
+  id            String   @id @default(uuid())
+  versionId     String   @map("version_id")
+  step          String
+  status        String   @default("pending")
+  error         String?  @db.Text
+  durationMs    Int      @default(0) @map("duration_ms")
+  ocrConfidence Float    @default(1.0) @map("ocr_confidence")
+  pageCount     Int      @default(0) @map("page_count")
+  chunkCount    Int      @default(0) @map("chunk_count")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  version       DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([versionId])
+  @@map("processing_jobs")
+}
+
+model Conversation {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  spaceId   String    @map("space_id")
+  title     String
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  space            Space             @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  messages         Message[]
+  pendingQuestions PendingQuestion[]
+
+  @@index([userId])
+  @@index([spaceId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String    @id @default(uuid())
+  conversationId String    @map("conversation_id")
+  role           String
+  content        String    @db.Text
+  modelUsed      String    @default("default") @map("model_used")
+  parameters     Json?
+  status         String    @default("completed")
+  authSnapshot   Json?     @map("auth_snapshot")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  conversation      Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  references        MessageReference[]
+  retrievedPassages RetrievedPassage[]
+  savedAnswers      SavedAnswer[]
+  reports           AnswerReport[]
+  ragMetric         RagRequestMetric?
+
+  @@index([conversationId])
+  @@map("messages")
+}
+
+model MessageReference {
+  id                String   @id @default(uuid())
+  messageId         String   @map("message_id")
+  documentVersionId String   @map("document_version_id")
+  pageOrImageId     String   @map("page_or_image_id")
+  excerpt           String   @db.Text
+  coordinates       String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  message           Message         @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([documentVersionId])
+  @@map("message_references")
+}
+
+model RetrievedPassage {
+  id        String   @id @default(uuid())
+  messageId String   @map("message_id")
+  chunkId   String   @map("chunk_id")
+  score     Float
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("retrieved_passages")
+}
+
+model SavedAnswer {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  messageId String   @map("message_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([messageId])
+  @@map("saved_answers")
+}
+
+model AnswerReport {
+  id        String   @id @default(uuid())
+  messageId String   @map("message_id")
+  userId    String   @map("user_id")
+  reason    String
+  feedback  String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([userId])
+  @@map("answer_reports")
+}
+
+model RagRequestMetric {
+  id                   String   @id @default(uuid())
+  messageId            String   @unique @map("message_id")
+  modelUsed            String   @map("model_used")
+  latencyTotalMs       Int      @map("latency_total_ms")
+  retrievalMs          Int      @default(0) @map("retrieval_ms")
+  rerankMs             Int      @default(0) @map("rerank_ms")
+  generationMs         Int      @default(0) @map("generation_ms")
+  tokensIn             Int      @default(0) @map("tokens_in")
+  tokensOut            Int      @default(0) @map("tokens_out")
+  cost                 Float    @default(0)
+  chunksRetrieved      Int      @default(0) @map("chunks_retrieved")
+  chunksUsed           Int      @default(0) @map("chunks_used")
+  citationsValid       Int      @default(0) @map("citations_valid")
+  citationsInvalid     Int      @default(0) @map("citations_invalid")
+  insufficientEvidence Boolean  @default(false) @map("insufficient_evidence")
+  status               String   @default("success")
+  errorCode            String?  @map("error_code")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  message              Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("rag_request_metrics")
+}
+
+model Device {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  platform   String
+  lastSyncAt DateTime @default(now()) @map("last_sync_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions          Session[]
+  offlineSelections OfflineSelection[]
+  pendingQuestions  PendingQuestion[]
+
+  @@index([userId])
+  @@map("devices")
+}
+
+model OfflineSelection {
+  id         String   @id @default(uuid())
+  deviceId   String   @map("device_id")
+  spaceId    String?  @map("space_id")
+  documentId String?  @map("document_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  device     Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  space      Space?    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  document   Document? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([spaceId])
+  @@index([documentId])
+  @@map("offline_selections")
+}
+
+model PendingQuestion {
+  id             String   @id @default(uuid())
+  deviceId       String   @map("device_id")
+  conversationId String   @map("conversation_id")
+  content        String   @db.Text
+  status         String   @default("pending")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  device         Device       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([conversationId])
+  @@map("pending_questions")
+}
+
+model SyncChange {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  operation  String
+  version    Int      @default(1)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sync_changes")
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  category   String
+  action     String
+  actorId    String?  @map("actor_id")
+  actorRole  String   @map("actor_role")
+  schoolId   String?  @map("school_id")
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  ip         String
+  deviceId   String?  @map("device_id")
+  details    Json
+  prevHash   String   @map("prev_hash") @db.VarChar(64)
+  hash       String   @db.VarChar(64)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  school     School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([schoolId])
+  @@map("audit_events")
 }

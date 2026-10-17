@@ -22,21 +22,21 @@ export class SpaceMapper {
     });
   }
 
-  static fromDtoToCreateInput(dto: CreateSpaceDto, id: string): {
+  static fromDtoToCreateInput(dto: CreateSpaceDto, id: string, schoolId: string): {
     id: string;
     name: string;
-    description?: string;
-    schoolId?: string;
-    createdAt: Date;
-    updatedAt: Date;
+    description: string | null;
+    language: string;
+    privacy: string;
+    schoolId: string;
   } {
     return {
       id,
       name: dto.name,
-      description: dto.description,
-      schoolId: dto.schoolId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      description: dto.description ?? null,
+      language: dto.language ?? 'en',
+      privacy: dto.privacy ?? 'public',
+      schoolId,
     };
   }
 }

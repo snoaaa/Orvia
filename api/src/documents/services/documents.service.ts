@@ -34,21 +34,13 @@ export class DocumentsService {
   }
 
   async updateDocument(id: string, dto: UpdateDocumentDto): Promise<DocumentEntity> {
-    const existing = await this.findDocumentById(id);
-    const existingMeta = {
-      author: existing.author,
-      tags: existing.tags,
-    };
+    await this.findDocumentById(id);
     const updated = await this.prisma.document.update({
       where: { id },
       data: {
-        ...(dto.title && { title: dto.title }),
-        metadata: {
-          ...existingMeta,
-          ...(dto.author && { author: dto.author }),
-          ...(dto.tags && { tags: dto.tags }),
-          ...(dto.metadata),
-        },
+        ...(dto.title !== undefined && { title: dto.title }),
+        ...(dto.author !== undefined && { author: dto.author }),
+        ...(dto.tags !== undefined && { tags: dto.tags }),
       },
     });
     return DocumentMapper.toEntity(updated);
@@ -61,7 +53,24 @@ export class DocumentsService {
 
   async createSpace(dto: CreateSpaceDto): Promise<SpaceEntity> {
     const id = randomUUID();
-    const data = SpaceMapper.fromDtoToCreateInput(dto, id);
+    let schoolId = dto.schoolId;
+    if (!schoolId) {
+      const existingSchool = await this.prisma.school.findFirst();
+      if (existingSchool) {
+        schoolId = existingSchool.id;
+      } else {
+        const defaultSchool = await this.prisma.school.create({
+          data: {
+            id: randomUUID(),
+            name: 'Default Institution',
+            allowedDomains: '*',
+          },
+        });
+        schoolId = defaultSchool.id;
+      }
+    }
+
+    const data = SpaceMapper.fromDtoToCreateInput(dto, id, schoolId);
     const created = await this.prisma.space.create({
       data,
     });

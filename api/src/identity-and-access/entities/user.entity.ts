@@ -13,7 +13,7 @@ export class UserEntity {
   @ApiProperty({ example: 'local', description: 'Authentication provider (local, google, etc.)' })
   authProvider: string;
 
-  @ApiProperty({ example: 'active', description: 'Account status (active, invited, suspended)' })
+  @ApiProperty({ example: 'INVITED', enum: ['INVITED', 'ACTIVE', 'SUSPENDED'], description: 'Account status (INVITED, ACTIVE, SUSPENDED)' })
   status: string;
 
   @ApiProperty({ example: '2026-10-17T12:00:00.000Z', description: 'Creation timestamp' })
