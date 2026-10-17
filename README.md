@@ -1,27 +1,71 @@
-# Project Setup
+# WAMDP (Web & Mobile Development Project)
 
-This project contains three components:
-1. `web/` - Angular application
-2. `api/` - Node.js + Express.js backend
-3. `mobile/` - React Native + Expo application
+Educational knowledge platform with RAG assistant, web administration portal, and offline-capable mobile application.
 
-## Running the Web App (Angular)
+## Repository Structure
 
-```bash
-cd web
-npm run start
-```
+- `api/` – NestJS backend API with MySQL 8 & Prisma ORM
+- `web/` – Angular web management client
+- `mobile/` – React Native / Expo mobile application
+- `docs/` – Technical documentation and system architecture diagrams
 
-## Running the Backend (Node.js + Express)
+---
+
+## Quick Start
+
+### 1. Backend (`api/`)
+
+Requires Node.js (v20+) and a running MySQL 8 database.
 
 ```bash
 cd api
-npm run dev
+npm install
+
+# Copy environment template and set your database connection
+cp .env.example .env
+
+# Generate Prisma client and apply schema
+npx prisma generate
+npx prisma db push
+
+# Seed base roles, permissions, and initial platform administrator
+npm run seed
+
+# Start development server
+npm run start:dev
 ```
 
-## Running the Mobile App (React Native + Expo)
+- API server: `http://localhost:3000`
+- Swagger documentation: `http://localhost:3000/api/docs`
+- Database health check: `http://localhost:3000/health`
+
+### 2. Web Client (`web/`)
+
+```bash
+cd web
+npm install
+npm run start
+```
+
+Runs on `http://localhost:4200`.
+
+### 3. Mobile Client (`mobile/`)
 
 ```bash
 cd mobile
+npm install
 npm run start
 ```
+
+---
+
+## Architecture & Subdomains
+
+The backend is modularized according to the system specifications (`docs/RAGBackend.pdf`):
+
+- **Identity & Access**: Multi-tenant institutions, users, role-based access control, session management
+- **Documents**: Academic spaces, document versioning, chunk processing
+- **Conversations**: RAG query sessions, message history, saved answers, citations
+- **RAG Performance**: Latency, token metrics, cost tracking, citation validation
+- **Mobile Sync**: Device registration, offline resource selection, delta synchronization
+- **Audit**: Hash-chained, append-only audit event trail
