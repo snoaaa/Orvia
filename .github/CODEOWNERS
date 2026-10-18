@@ -1,0 +1,5 @@
+# Global Code Owners for WAMDP
+# Every change across the repository requires review and approval
+# from @snoaaa and @N2K-keli before merging into protected branches.
+
+* @snoaaa @N2K-keli
