@@ -507,3 +507,15 @@ model AuditEvent {
   @@index([createdAt])
   @@map("audit_events")
 }
+
+/// Single row (id = 1) holding the hash of the newest audit event. AuditService locks it
+/// (SELECT ... FOR UPDATE) while appending, so concurrent writers are serialized, and the
+/// chain verification compares it with the last event to detect deleted newest rows.
+model AuditChainHead {
+  id        Int      @id
+  hash      String   @db.Char(64)
+  eventSeq  BigInt   @default(0) @map("event_seq")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("audit_chain_head")
+}

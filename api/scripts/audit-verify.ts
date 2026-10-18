@@ -20,11 +20,12 @@ async function main(): Promise<void> {
     const bad = result.firstInvalid!;
     console.error(`✘ Audit chain BROKEN after ${result.checkedEvents} valid events.`);
     console.error(`  First invalid event: seq=${bad.seq} id=${bad.id}`);
-    console.error(
-      bad.reason === 'hash_mismatch'
-        ? '  Reason: the row content was modified (its hash no longer matches).'
-        : '  Reason: an event before it was deleted or inserted (prev_hash does not link).',
-    );
+    const reasons = {
+      hash_mismatch: 'the row content was modified (its hash no longer matches).',
+      broken_link: 'an event before it was deleted or inserted (prev_hash does not link).',
+      head_mismatch: `the chain head expects event seq ${bad.seq} as the newest, but the chain ends before it: the newest event(s) were deleted.`,
+    };
+    console.error(`  Reason: ${reasons[bad.reason]}`);
     console.error(`  Expected: ${bad.expected}\n  Actual:   ${bad.actual}`);
     process.exitCode = 1;
   } finally {

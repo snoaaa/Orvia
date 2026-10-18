@@ -40,3 +40,16 @@ CREATE INDEX `audit_events_category_action_idx` ON `audit_events`(`category`, `a
 
 -- CreateIndex
 CREATE INDEX `audit_events_created_at_idx` ON `audit_events`(`created_at`);
+
+-- CreateTable: single-row head of the chain, locked by writers to serialize appends
+CREATE TABLE `audit_chain_head` (
+    `id` INTEGER NOT NULL,
+    `hash` CHAR(64) NOT NULL,
+    `event_seq` BIGINT NOT NULL DEFAULT 0,
+    `updated_at` DATETIME(3) NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+INSERT INTO `audit_chain_head` (`id`, `hash`, `event_seq`, `updated_at`)
+VALUES (1, '0000000000000000000000000000000000000000000000000000000000000000', 0, CURRENT_TIMESTAMP(3));

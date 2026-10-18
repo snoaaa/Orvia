@@ -61,7 +61,7 @@ export interface AuditChainVerification {
   firstInvalid?: {
     seq: string;
     id: string;
-    reason: 'hash_mismatch' | 'broken_link';
+    reason: 'hash_mismatch' | 'broken_link' | 'head_mismatch';
     expected: string;
     actual: string;
   };

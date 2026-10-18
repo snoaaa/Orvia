@@ -36,6 +36,9 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.ACCOUNT_LOCKED]: AuditCategory.SECURITY,
 };
 
+/** Primary key of the single audit_chain_head row. */
+export const AUDIT_CHAIN_HEAD_ID = 1;
+
 /** prev_hash of the very first event in the chain. */
 export const AUDIT_GENESIS_HASH = '0'.repeat(64);
 
