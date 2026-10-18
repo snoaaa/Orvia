@@ -50,6 +50,8 @@ Key variables:
 - `SWAGGER_PROTECTED`: Set to `true` to require basic auth for Swagger docs
 - `JWT_ACCESS_SECRET`: Secret signing access tokens (required in production; a dev-only fallback is used otherwise)
 - `JWT_ACCESS_TTL_SECONDS`: Access token lifetime (default `900`)
+- `JWT_REFRESH_TTL_DAYS`: Session lifetime from login, not extended by refreshing (default `30`)
+- `SESSION_RETENTION_DAYS`: Days before the daily job deletes expired/revoked sessions (default `30`)
 - `AUTH_DEV_TOOLS`: Set to `true` to enable the dev-only `/auth/dev/*` routes (never in production)
 - `AUDIT_DEV_TOOLS`: Set to `true` to enable the dev-only audit simulation routes (never in production)
 
@@ -145,8 +147,40 @@ async getUsers(@CurrentUser() actor: AuthenticatedUser) { ... }
 ### Access tokens
 
 `TokenService.issueAccessToken(userId, sessionId?)` signs an HS256 JWT `{ sub, type: 'access', sid? }`
-with `JWT_ACCESS_SECRET`. Login (#8, #10) and refresh (#12) must issue tokens through it. Nothing but
-the user id is trusted from the token.
+with `JWT_ACCESS_SECRET`. Nothing but the user id (and session id) is trusted from the token.
+Login must not call it directly: use `SessionService.createSession()` (see Sessions).
+
+### Sessions & refresh tokens (#12)
+
+The access token is stateless (15 min); the **refresh token is stateful**, one per session row:
+
+- Format `<sessionId>.<secret>` (32 random bytes). Only **SHA-256(secret)** is stored, in
+  `sessions.refresh_token_hash`.
+- **Login** (#8, #10): `sessionService.createSession(userId, auditContextFromRequest(req), deviceId?)`
+  returns `{ accessToken, refreshToken, expiresIn, sessionId, refreshExpiresAt }`.
+- **`POST /auth/refresh`** `{ refreshToken }` (public): the session must exist, not be revoked or expired,
+  and the user must not be suspended. Returns a **new pair**; the presented refresh token stops working
+  (rotation, compare-and-swap on the stored hash).
+- **Reuse detection:** a refresh token that was already rotated means it was copied: the **whole
+  session is revoked** (`session_revoked` / `token_reuse`). Clients must therefore never send two
+  refreshes in parallel with the same token.
+- **`POST /auth/logout`** revokes the current session. Because the guard checks the session on every
+  request, logout and revocation cut the access token immediately too (`401 Session has ended`).
+- **Sessions are absolute:** they end `JWT_REFRESH_TTL_DAYS` after login whatever the refreshes.
+- Every rejected refresh is audited as `token_refresh_failure` with its reason; the HTTP answer is
+  always the generic `401 Invalid refresh token` (or `403 Account suspended`).
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `POST /auth/refresh` | public | Rotate the token pair |
+| `POST /auth/logout` | logged in | End the current session |
+| `GET /auth/sessions` | logged in | My active sessions + devices (`current: true` = this one) |
+| `DELETE /auth/sessions/{id}` | logged in | Revoke one of my sessions |
+| `GET /identity/users/{id}/sessions` | `users:read`, school-scoped | A user's active sessions |
+| `DELETE /identity/users/{id}/sessions[/{sessionId}]` | `users:suspend`, school-scoped | Revoke all / one |
+
+Suspending a user (`PATCH /identity/users/{id}` with `status: SUSPENDED`) revokes all their sessions.
+A daily job (03:00) deletes sessions expired or revoked more than `SESSION_RETENTION_DAYS` ago.
 
 ### School scoping
 
@@ -173,7 +207,9 @@ roles granting it, and the users holding it. School admins only see holders in t
 With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
 **Authentication (dev tools)**; otherwise these answer 404:
 
-- `POST /auth/dev/token` `{ "email": "..." }` → an access token for any existing user, no password
+- `POST /auth/dev/token` `{ "email": "..." }` → logs in as any existing user without a password:
+  creates a real session and returns an access token **and a refresh token**
+- `POST /auth/dev/cleanup-sessions` → runs the daily session cleanup now
 - `POST /auth/dev/fixtures` → creates *Demo School A/B* with users `admin.a@demo.test` (SCHOOL_ADMIN),
   `student.a@demo.test`, `suspended.a@demo.test` (SUSPENDED), `invited.a@demo.test` (INVITED),
   `admin.b@demo.test`, `student.b@demo.test`

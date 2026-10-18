@@ -55,8 +55,9 @@ export class IdentityAndAccessController {
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
     @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
   ): Promise<UserEntity> {
-    return this.identityService.updateUser(id, dto, actor);
+    return this.identityService.updateUser(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Get('schools')

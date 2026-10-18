@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
+import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -23,6 +24,7 @@ export class IdentityAndAccessService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly sessions: SessionService,
   ) {}
 
   /** Platform admins see everyone; others only users assigned to a school they can read users in. */
@@ -100,7 +102,13 @@ export class IdentityAndAccessService {
     return UserMapper.toEntity(created);
   }
 
-  async updateUser(id: string, dto: UpdateUserDto, actor: AuthenticatedUser): Promise<UserEntity> {
+  /** Suspending a user also revokes all their sessions (#12), so no token keeps working. */
+  async updateUser(
+    id: string,
+    dto: UpdateUserDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
     const target = await this.findUserInScope(id, actor, 'users:update');
     if (dto.status) {
       // Suspending / reactivating is a separate right from editing a profile.
@@ -125,6 +133,14 @@ export class IdentityAndAccessService {
         ...(dto.status && { status: dto.status.toUpperCase() as UserStatus }),
       },
     });
+    if (updated.status === 'SUSPENDED') {
+      await this.sessions.revokeAllForUser(
+        id,
+        'user_suspended',
+        { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        auditContext,
+      );
+    }
     return UserMapper.toEntity(updated);
   }
 
