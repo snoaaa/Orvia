@@ -1,4 +1,5 @@
 import { AUDIT_GENESIS_HASH } from '../constants/audit-events.constants.js';
+import { verifyChainWith } from './audit-chain.util.js';
 import { canonicalJson, computeAuditHash, verifyAuditChain, type HashableAuditEvent } from './audit-hash.util.js';
 
 function buildChain(count: number) {
@@ -70,5 +71,28 @@ describe('verifyAuditChain', () => {
     const forged = { ...chain[1], ip: '6.6.6.6' };
     chain[1] = { ...forged, hash: computeAuditHash(forged) };
     expect(verifyAuditChain(chain).firstInvalid).toMatchObject({ seq: '3', reason: 'broken_link' });
+  });
+});
+
+describe('verifyChainWith (chain head)', () => {
+  const chain = buildChain(3);
+  const fakePrisma = (headHash: string) => ({
+    auditEvent: {
+      findMany: async ({ where }: { where: { seq?: { gt: bigint } } }) =>
+        where.seq ? [] : chain,
+    },
+    auditChainHead: {
+      findUnique: async () => ({ id: 1, hash: headHash, eventSeq: 3n, updatedAt: new Date() }),
+    },
+  });
+
+  it('is valid when the head points at the newest event', async () => {
+    const result = await verifyChainWith(fakePrisma(chain[2].hash) as never);
+    expect(result).toMatchObject({ valid: true, checkedEvents: 3 });
+  });
+
+  it('detects deleted newest events through the head', async () => {
+    const result = await verifyChainWith(fakePrisma('f'.repeat(64)) as never);
+    expect(result).toMatchObject({ valid: false, firstInvalid: { reason: 'head_mismatch', seq: '3' } });
   });
 });

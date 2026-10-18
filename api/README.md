@@ -202,8 +202,9 @@ With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
   `TRUNCATE`). The API exposes no endpoint to create, edit or delete events.
 - **Hash chain:** each row stores `prev_hash` (the previous row's hash) and
   `hash = SHA-256(canonical JSON of the row + prev_hash)`. Editing, deleting or inserting a row
-  directly in the database breaks the chain. `prev_hash` is unique, so concurrent writers cannot
-  fork it (the loser retries on the new head).
+  directly in the database breaks the chain. Writers lock the single `audit_chain_head` row
+  (`SELECT ... FOR UPDATE`) while appending, so concurrent events queue up instead of racing, even
+  across several API instances; `prev_hash` is also unique, so the chain can never fork.
 - **No secrets:** `details` goes through `redactSecrets()`, which replaces passwords, tokens,
   secrets, API keys, cookies, JWTs, bearer headers and bcrypt hashes with `[REDACTED]`. Do not
   pass them anyway.
@@ -238,9 +239,10 @@ npm run audit:verify          # CLI, exit code 1 if tampering is detected
 ```
 
 or `GET /audit/verify` in Swagger. The result names the first broken event:
-`hash_mismatch` = the row was edited, `broken_link` = a row before it was deleted or inserted.
-Deleting the newest rows cannot be seen from the chain alone: keep a copy of the returned
-`headHash` elsewhere (e.g. a daily export) to detect that too.
+`hash_mismatch` = the row was edited, `broken_link` = a row before it was deleted or inserted,
+`head_mismatch` = the newest event(s) were deleted (`audit_chain_head` still points at them).
+Someone with full database rights could also rewrite the head row, so for strong guarantees keep a
+copy of the returned `headHash` outside the database (e.g. a daily export).
 
 ### Dev-only simulation routes
 
