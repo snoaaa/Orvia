@@ -2,6 +2,9 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { randomUUID } from 'node:crypto';
 import type { UserStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
+import { AuditService } from '../../audit/services/audit.service.js';
+import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
 import { RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
@@ -9,7 +12,10 @@ import { SchoolMapper, UserMapper } from '../mappers/index.js';
 
 @Injectable()
 export class IdentityAndAccessService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   async findAllUsers(): Promise<UserEntity[]> {
     const users = await this.prisma.user.findMany({
@@ -28,7 +34,8 @@ export class IdentityAndAccessService {
     return UserMapper.toEntity(user);
   }
 
-  async createUser(dto: CreateUserDto): Promise<UserEntity> {
+  /** New users start as INVITED, so creating one is audited as identity_access/user_invited. */
+  async createUser(dto: CreateUserDto, auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT): Promise<UserEntity> {
     const normalizedEmail = dto.email.trim().toLowerCase();
     const existing = await this.prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -47,6 +54,13 @@ export class IdentityAndAccessService {
     const created = await this.prisma.user.create({
       data,
     });
+    // TODO(#9/#13): pass the inviting admin as `invitedBy` once the current user is known.
+    await this.audit.record(
+      AuditEvents.userInvited(
+        { invitedUserId: created.id, email: created.email, schoolId: dto.schoolId ?? null },
+        auditContext,
+      ),
+    );
     return UserMapper.toEntity(created);
   }
 

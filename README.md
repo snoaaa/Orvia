@@ -21,12 +21,12 @@ Requires Node.js (v20+) and a running MySQL 8 database.
 cd api
 npm install
 
-# Copy environment template and set your database connection
+# Copy environment template and set DATABASE_URL (app user) and DATABASE_ADMIN_URL (MySQL admin)
 cp .env.example .env
 
-# Generate Prisma client and apply schema
+# Generate Prisma client, apply migrations as admin, make the audit trail insert-only
 npx prisma generate
-npx prisma db push
+npm run db:migrate
 
 # Seed base roles, permissions, and initial platform administrator
 npm run seed
