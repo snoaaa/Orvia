@@ -2,6 +2,9 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { randomUUID } from 'node:crypto';
 import type { UserStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
+import { AuditService } from '../../audit/services/audit.service.js';
+import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -17,7 +20,10 @@ import { SchoolMapper, UserMapper } from '../mappers/index.js';
 
 @Injectable()
 export class IdentityAndAccessService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   /** Platform admins see everyone; others only users assigned to a school they can read users in. */
   async findAllUsers(actor: AuthenticatedUser): Promise<UserEntity[]> {
@@ -47,8 +53,15 @@ export class IdentityAndAccessService {
     return user;
   }
 
-  /** School-scoped admins must invite into one of their own schools. */
-  async createUser(dto: CreateUserDto, actor: AuthenticatedUser): Promise<UserEntity> {
+  /**
+   * School-scoped admins must invite into one of their own schools. New users start as
+   * INVITED, so creating one is audited as identity_access/user_invited.
+   */
+  async createUser(
+    dto: CreateUserDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
     if (dto.schoolId) {
       assertSchoolAccess(actor, 'users:invite', dto.schoolId);
     } else if (schoolsWithPermission(actor, 'users:invite') !== 'all') {
@@ -73,6 +86,17 @@ export class IdentityAndAccessService {
     const created = await this.prisma.user.create({
       data,
     });
+    await this.audit.record(
+      AuditEvents.userInvited(
+        {
+          invitedUserId: created.id,
+          email: created.email,
+          schoolId: dto.schoolId ?? null,
+          invitedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
     return UserMapper.toEntity(created);
   }
 
