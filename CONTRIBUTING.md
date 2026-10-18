@@ -28,9 +28,12 @@ All pull requests targeting `main` must be reviewed and approved by the designat
 | **Keli** | [@N2K-keli](https://github.com/N2K-keli) | Core Reviewer |
 
 ### Review & Merge Rules:
-1. **Automatic Assignment**: GitHub automatically requests reviews from `@snoaaa` and `@N2K-keli` via `.github/CODEOWNERS` as soon as a PR is created.
-2. **Required Approval**: Under GitHub branch protection rules, code owner review is **required**. Pull requests cannot be merged without approvals from the code owners.
-3. **No Self-Approvals**: Pull request authors cannot approve their own pull requests.
+1. **Automatic Assignment**: GitHub automatically requests reviews from `@snoaaa` and `@N2K-keli` via `.github/CODEOWNERS` on every pull request.
+2. **Approval Requirements**:
+   - **PRs authored by team contributors**: Require approval from **both** `@snoaaa` and `@N2K-keli` (2 required approvals).
+   - **PRs authored by `@snoaaa`**: Reviewed and approved by **`@N2K-keli`** (authors cannot approve their own PRs).
+   - **PRs authored by `@N2K-keli`**: Reviewed and approved by **`@snoaaa`**.
+3. **Code Owner Enforcement**: Code owner reviews are strictly required on `main`. Pull requests cannot bypass code owner sign-off.
 4. **Conversation Resolution**: All review comments and discussions must be addressed and resolved prior to merging.
 
 ---
