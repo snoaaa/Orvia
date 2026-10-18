@@ -69,3 +69,13 @@ The backend is modularized according to the system specifications (`docs/RAGBack
 - **RAG Performance**: Latency, token metrics, cost tracking, citation validation
 - **Mobile Sync**: Device registration, offline resource selection, delta synchronization
 - **Audit**: Hash-chained, append-only audit event trail
+
+---
+
+## Branch Rules & Code Review Policy
+
+This repository enforces branch protection and code ownership on `main`:
+- **Designated Reviewers & Code Owners**: [@snoaaa](https://github.com/snoaaa) and [@N2K-keli](https://github.com/N2K-keli)
+- Direct pushes to `main` are disabled. All merges require pull requests with code owner approval.
+- Detailed contribution rules and checklist are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
+
