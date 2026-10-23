@@ -7,7 +7,7 @@
 ## Required Reviewers
 > **IMPORTANT**: Make sure the base branch for this PR is set to **`develop`** (GitHub defaults to `main`).
 This repository enforces branch protection and code ownership on `develop` (integration) and `main` (production).
-Every pull request must be reviewed and approved by the code owners:
+Every pull request must be reviewed and approved by at least one of the code owners:
 - [ ] @snoaaa
 - [ ] @N2K-keli
 

@@ -40,9 +40,10 @@ All pull requests targeting `develop` or `main` must be reviewed and approved by
 ### Review & Merge Rules:
 1. **Automatic Assignment**: GitHub automatically requests reviews from `@snoaaa` and `@N2K-keli` via `.github/CODEOWNERS` on every pull request.
 2. **Approval Requirements**:
-   - **PRs authored by team contributors**: Require approval from **both** `@snoaaa` and `@N2K-keli` (2 required approvals).
+   - **Minimum Approval**: At least **one** approving review from a designated code owner (`@snoaaa` or `@N2K-keli`) is required to approve and merge pull requests (1 required approving review).
    - **PRs authored by `@snoaaa`**: Reviewed and approved by **`@N2K-keli`** (authors cannot approve their own PRs).
    - **PRs authored by `@N2K-keli`**: Reviewed and approved by **`@snoaaa`**.
+   - **PRs authored by team contributors**: Approved and merged once at least one designated reviewer (`@snoaaa` or `@N2K-keli`) approves.
 3. **Code Owner Enforcement**: Code owner reviews are strictly required on both `develop` and `main`. Pull requests cannot bypass code owner sign-off.
 4. **Conversation Resolution**: All review comments and discussions must be addressed and resolved prior to merging.
 
@@ -59,4 +60,4 @@ Before submitting your PR:
    - Mobile (`mobile/`): Validate TypeScript builds and linting.
 4. **Database Changes**: If modifying Prisma schema (`schema.prisma`), include database migrations and make sure `npm run seed` runs without errors.
 5. **PR Description**: Fill out the pull request template completely, explaining the problem solved and steps to test.
-6. **Wait for Approvals**: Wait for `@snoaaa` and `@N2K-keli` to review and approve your PR before attempting to merge.
+6. **Wait for Approval**: Wait for at least one designated code owner (`@snoaaa` or `@N2K-keli`) to review and approve your PR before attempting to merge.
