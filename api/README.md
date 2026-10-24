@@ -42,24 +42,40 @@ cp .env.example .env
 ```
 
 Key variables:
-- `DATABASE_URL`: MySQL connection string (e.g. `mysql://user:password@localhost:3306/wamdp_db`)
+- `DATABASE_URL`: MySQL connection of the **application user** (e.g. `mysql://wamdp_api_user:password@localhost:3306/wamdp_db`)
+- `DATABASE_ADMIN_URL`: MySQL connection of an **admin** (e.g. `mysql://root:password@localhost:3306/wamdp_db`), used only by `npm run db:migrate` / `npm run db:harden`
 - `PORT`: Server port (defaults to `3000` if omitted)
 - `PLATFORM_ADMIN_EMAIL`: Email for the initial platform administrator
 - `PLATFORM_ADMIN_PASSWORD`: Password for the initial administrator (hashed with bcrypt)
 - `SWAGGER_PROTECTED`: Set to `true` to require basic auth for Swagger docs
-- `JWT_ACCESS_SECRET`: Secret signing access tokens (required in production; a dev-only fallback is used otherwise)
-- `JWT_ACCESS_TTL_SECONDS`: Access token lifetime (default `900`)
-- `AUTH_DEV_TOOLS`: Set to `true` to enable the dev-only `/auth/dev/*` routes (never in production)
+- `AUDIT_DEV_TOOLS`: Set to `true` to enable the dev-only audit simulation routes (never in production)
 
 ### 3. Database Setup & Seeding
 
+The application user must exist before the first run (once, as MySQL root):
+
+```sql
+CREATE DATABASE IF NOT EXISTS wamdp_db;
+CREATE USER IF NOT EXISTS 'wamdp_api_user'@'localhost' IDENTIFIED BY 'choose-a-password';
+```
+
 ```bash
-# Push schema models and indexes to MySQL
-npx prisma db push
+# Generate the Prisma client
+npx prisma generate
+
+# Apply migrations as admin, then make audit_events insert-only (see "Audit trail")
+npm run db:migrate
 
 # Seed 6 base roles, 42 permissions, role mappings, and the first administrator
 npm run seed
 ```
+
+> **Already have a database created with `prisma db push`?** Mark the initial migration
+> as applied once, then run `npm run db:migrate` as above:
+> ```bash
+> npx prisma migrate resolve --applied 0_init
+> ```
+> (run it with `DATABASE_URL` pointing to the admin account, e.g. via `$env:DATABASE_URL="<admin url>"` in PowerShell).
 
 ### 4. Start the Application
 
@@ -89,6 +105,9 @@ npm run start:prod
 | `npm run start:dev` | Start NestJS in watch mode |
 | `npm run build` | Compile TypeScript with `nest build` |
 | `npm run seed` | Seed roles, permissions, and admin user |
+| `npm run db:migrate` | Apply Prisma migrations as admin, then run `db:harden` |
+| `npm run db:harden` | Install the audit triggers and least-privilege grants (re-run after new tables) |
+| `npm run audit:verify` | Verify the audit hash chain (exit code 1 if tampered) |
 | `npm run lint` | Run Oxlint linter (type-aware) |
 | `npm run test` | Run unit tests with Vitest |
 | `npm run test:e2e` | Run end-to-end integration tests |
@@ -96,63 +115,79 @@ npm run start:prod
 
 ---
 
-## Authentication & authorization
+## Audit trail
 
-Implemented in `src/auth/` (issue #13, spec sections 4.6 and 4.7).
+`src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of
+**people's actions**, kept separate from technical logs and monitoring.
 
-### Every route is protected by default
+### How it works
 
-Two global guards run on every request:
+- **One writer:** `AuditService.record()` is the only way to write an event. Use the builders
+  in `AuditEvents` so every event has the same shape:
 
-1. **`JwtAuthGuard`** needs `Authorization: Bearer <access token>`.
-   - no token, malformed, forged or expired token, unknown user → **401**
-   - user `SUSPENDED` → **403** `Account suspended`; user still `INVITED` → **403** `Account not activated`
-   - The user, their role assignments and permissions are **reloaded from the database on every
-     request**, so a suspension or role change applies immediately, even to tokens already issued.
-2. **`PermissionsGuard`** enforces `@RequirePermission(...)` → **403** `Missing permission: ...`
+  ```ts
+  await this.audit.record(
+    AuditEvents.loginFailure(
+      { email: dto.email, reason: 'invalid_credentials', method: 'password' },
+      auditContextFromRequest(req),
+    ),
+  );
+  ```
+- **Insert-only:** `npm run db:harden` (run by `db:migrate`) installs two triggers that reject any
+  `UPDATE`/`DELETE` on `audit_events` for every MySQL user, and gives the application user only
+  `SELECT, INSERT` on that table (no DDL, `TRIGGER` or `DROP`, so it cannot remove the triggers or
+  `TRUNCATE`). The API exposes no endpoint to create, edit or delete events.
+- **Hash chain:** each row stores `prev_hash` (the previous row's hash) and
+  `hash = SHA-256(canonical JSON of the row + prev_hash)`. Editing, deleting or inserting a row
+  directly in the database breaks the chain. Writers lock the single `audit_chain_head` row
+  (`SELECT ... FOR UPDATE`) while appending, so concurrent events queue up instead of racing, even
+  across several API instances; `prev_hash` is also unique, so the chain can never fork.
+- **No secrets:** `details` goes through `redactSecrets()`, which replaces passwords, tokens,
+  secrets, API keys, cookies, JWTs, bearer headers and bcrypt hashes with `[REDACTED]`. Do not
+  pass them anyway.
+- **One row per event:** the global exception filter records `access_denied` for a 403 only if the
+  request has not already recorded its own event (e.g. a `login_failure`).
+- **No foreign keys** on `actor_id` / `school_id`: deleting a user or school must not modify
+  audit rows.
 
-Open a route with `@Public()` (login, refresh, health). Swagger UI is always reachable; use its
-**Authorize** button to paste a token.
+### Event catalogue
 
-```ts
-@Get('users')
-@RequirePermission('users:read')          // codes from prisma/seed.ts
-async getUsers(@CurrentUser() actor: AuthenticatedUser) { ... }
+| Category | Action | Recorded when | Actor | Entity | `details` |
+|---|---|---|---|---|---|
+| `authentication` | `login_success` | Successful login (password or Google) | the user | `user` | `method`, `sessionId` |
+| `authentication` | `login_failure` | Rejected login | anonymous | `user` (if known) | attempted `email`, `reason`, `method` — **never the password** |
+| `authentication` | `logout` | User logs out | the user | `session` | — |
+| `authentication` | `token_refresh_failure` | Refresh token rejected (invalid, expired, revoked, reused, suspended user) | the user if known | `session` | `reason` — **never the token** |
+| `authentication` | `session_revoked` | A session is revoked (admin action, suspension, token reuse) | the admin, or anonymous if automatic | `session` | `ownerUserId`, `reason` |
+| `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
+| `security` | `access_denied` | Any HTTP 403 | the user if authenticated | `route` (`METHOD /path`) | `reason`, `requiredPermission` |
+| `security` | `account_locked` | An account is locked (e.g. too many failed logins) | anonymous | `user` | `email`, `reason`, `failedAttempts`, `lockedUntil` |
+
+Every event also stores `ip`, `device_id` (from the `X-Device-Id` header) and the user agent
+(in `details.userAgent`).
+
+> Login, refresh, logout, session revocation and lockout are built in #8, #10, #12 and #13; they only
+> need to call the matching `AuditEvents` builder. Until then, the dev-only routes below simulate them.
+
+### Verifying the chain
+
+```bash
+npm run audit:verify          # CLI, exit code 1 if tampering is detected
 ```
 
-### Access tokens
+or `GET /audit/verify` in Swagger. The result names the first broken event:
+`hash_mismatch` = the row was edited, `broken_link` = a row before it was deleted or inserted,
+`head_mismatch` = the newest event(s) were deleted (`audit_chain_head` still points at them).
+Someone with full database rights could also rewrite the head row, so for strong guarantees keep a
+copy of the returned `headHash` outside the database (e.g. a daily export).
 
-`TokenService.issueAccessToken(userId, sessionId?)` signs an HS256 JWT `{ sub, type: 'access', sid? }`
-with `JWT_ACCESS_SECRET`. Login (#8, #10) and refresh (#12) must issue tokens through it. Nothing but
-the user id is trusted from the token.
+### Dev-only simulation routes
 
-### School scoping
+With `AUDIT_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
+**Audit Trail (dev tools)**:
 
-Roles with scope `platform` (`PLATFORM_ADMIN`) act on every school. Every other role only acts in the
-school of its assignment, and permissions are checked **per school** (a school admin in A who is a
-student in B cannot read users of B). Helpers in `src/auth/utils/school-scope.util.ts`:
+- `POST /audit/dev/simulate/{event}` – records `login-success`, `login-failure`, `logout`,
+  `token-refresh-failure`, `session-revoked`, `user-invited` or `account-locked`
+- `GET /audit/dev/forbidden` – always answers 403 (recorded as `access_denied`)
 
-| Helper | Use |
-|---|---|
-| `assertSchoolAccess(user, permission, schoolId[s])` | Before reading/changing one record: 403 if outside scope |
-| `schoolIdFilter(user, permission)` | In list queries: `undefined` (all) or `{ in: [...] }` |
-| `schoolsWithPermission(user, permission)` | `'all'` or the list of school ids (also for the RAG filters, 4.7) |
-
-Applied today to users, schools, spaces and documents. A school admin must pass one of their own
-`schoolId`s when inviting a user or creating a space.
-
-### Permission overview
-
-`GET /identity/permissions[?code=users:invite]` (`users:assign_role`) lists every permission, the
-roles granting it, and the users holding it. School admins only see holders in their own schools.
-
-### Dev-only routes (until #8 / #10 exist)
-
-With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
-**Authentication (dev tools)**; otherwise these answer 404:
-
-- `POST /auth/dev/token` `{ "email": "..." }` → an access token for any existing user, no password
-- `POST /auth/dev/fixtures` → creates *Demo School A/B* with users `admin.a@demo.test` (SCHOOL_ADMIN),
-  `student.a@demo.test`, `suspended.a@demo.test` (SUSPENDED), `invited.a@demo.test` (INVITED),
-  `admin.b@demo.test`, `student.b@demo.test`
-
+Otherwise these routes answer 404. Remove them once the real auth endpoints exist.
