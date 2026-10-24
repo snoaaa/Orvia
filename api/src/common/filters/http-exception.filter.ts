@@ -7,12 +7,19 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
+import type { AuditActor } from '../../audit/dto/record-audit-event.input.js';
+import type { AuditService } from '../../audit/services/audit.service.js';
+import { auditContextFromRequest, isRequestAudited } from '../../audit/utils/audit-request-context.util.js';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
-  catch(exception: unknown, host: ArgumentsHost): void {
+  /** When given, every 403 is recorded once as security/access_denied (issue #14). */
+  constructor(private readonly audit?: AuditService) {}
+
+  async catch(exception: unknown, host: ArgumentsHost): Promise<void> {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
@@ -39,6 +46,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
       message = 'An unexpected internal error occurred';
     }
 
+    if (status === HttpStatus.FORBIDDEN) {
+      await this.auditAccessDenied(request, message);
+    }
+
     response.status(status).json({
       statusCode: status,
       timestamp: new Date().toISOString(),
@@ -48,4 +59,37 @@ export class HttpExceptionFilter implements ExceptionFilter {
       message,
     });
   }
+
+  private async auditAccessDenied(request: Request, message: string | object): Promise<void> {
+    // Skip if this request already recorded its own event (e.g. a login_failure), so one
+    // incident never produces two rows. Audit failures must not change the HTTP answer.
+    if (!this.audit || isRequestAudited(request)) return;
+    try {
+      await this.audit.record(
+        AuditEvents.accessDenied(
+          {
+            actor: actorFromRequest(request),
+            method: request.method,
+            path: request.originalUrl.split('?')[0],
+            reason: typeof message === 'string' ? message : undefined,
+          },
+          auditContextFromRequest(request),
+        ),
+      );
+    } catch (error) {
+      this.logger.error('Could not audit access_denied', error instanceof Error ? error.stack : error);
+    }
+  }
+}
+
+/** Reads the authenticated user if an auth guard (#13) attached one to the request. */
+function actorFromRequest(request: Request): AuditActor | null {
+  const user = (request as Request & { user?: Record<string, unknown> }).user;
+  if (!user) return null;
+  const str = (v: unknown) => (typeof v === 'string' ? v : null);
+  return {
+    userId: str(user.id) ?? str(user.sub),
+    role: str(user.role),
+    schoolId: str(user.schoolId),
+  };
 }

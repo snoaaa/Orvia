@@ -3,3 +3,4 @@ export * from './school.entity.js';
 export * from './role.entity.js';
 export * from './group.entity.js';
 export * from './session.entity.js';
+export * from './permission-overview.entity.js';
