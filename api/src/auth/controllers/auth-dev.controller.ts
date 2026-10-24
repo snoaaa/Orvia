@@ -1,15 +1,12 @@
-import { Body, CanActivate, Controller, HttpCode, Injectable, NotFoundException, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, CanActivate, Controller, HttpCode, Injectable, NotFoundException, Post, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
-import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import type { UserStatus } from '@prisma/client';
 import type { AuthConfig } from '../../config/index.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { Public } from '../decorators/auth.decorators.js';
 import { DevTokenDto } from '../dto/index.js';
-import { SessionCleanupService } from '../services/session-cleanup.service.js';
-import { SessionService, type TokenPair } from '../services/session.service.js';
+import { TokenService, type IssuedAccessToken } from '../services/token.service.js';
 
 /** Hidden (404) unless AUTH_DEV_TOOLS=true and not in production. */
 @Injectable()
@@ -33,27 +30,16 @@ class AuthDevToolsGuard implements CanActivate {
 export class AuthDevController {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly sessions: SessionService,
-    private readonly cleanup: SessionCleanupService,
+    private readonly tokens: TokenService,
   ) {}
 
   @Post('token')
   @HttpCode(200)
-  @ApiOperation({
-    summary: '[DEV] Log in as an existing user without a password: creates a real session',
-    description: 'Returns an access token and a refresh token, like the real login (#8, #10) will.',
-  })
-  async token(@Body() dto: DevTokenDto, @Req() req: Request): Promise<TokenPair & { userId: string }> {
+  @ApiOperation({ summary: '[DEV] Get an access token for an existing user (no password check)' })
+  async token(@Body() dto: DevTokenDto): Promise<IssuedAccessToken & { userId: string }> {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email.trim().toLowerCase() } });
     if (!user) throw new NotFoundException(`No user with email ${dto.email}`);
-    return { userId: user.id, ...(await this.sessions.createSession(user.id, auditContextFromRequest(req))) };
-  }
-
-  @Post('cleanup-sessions')
-  @HttpCode(200)
-  @ApiOperation({ summary: '[DEV] Run the daily session cleanup now' })
-  async cleanupSessions(): Promise<{ deleted: number }> {
-    return { deleted: await this.cleanup.run() };
+    return { userId: user.id, ...(await this.tokens.issueAccessToken(user.id)) };
   }
 
   @Post('fixtures')

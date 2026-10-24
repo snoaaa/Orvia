@@ -4,15 +4,12 @@ import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
 import { AuditService } from '../src/audit/services/audit.service.js';
-import { TokenService } from '../src/auth/services/token.service.js';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter.js';
 import { PrismaService } from '../src/database/prisma.service.js';
 
 describe('Audit trail (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
-  // Identity and audit routes are protected since #13: act as the seeded platform administrator.
-  let adminToken: string;
   const previousDevTools = process.env.AUDIT_DEV_TOOLS;
 
   beforeAll(async () => {
@@ -26,10 +23,6 @@ describe('Audit trail (e2e)', () => {
     app.useGlobalFilters(new HttpExceptionFilter(app.get(AuditService)));
     await app.init();
     prisma = app.get(PrismaService);
-    const admin = await prisma.user.findUniqueOrThrow({
-      where: { email: process.env.PLATFORM_ADMIN_EMAIL || 'admin@wamdp.platform' },
-    });
-    adminToken = (await app.get(TokenService).issueAccessToken(admin.id)).accessToken;
   });
 
   afterAll(async () => {
@@ -74,18 +67,12 @@ describe('Audit trail (e2e)', () => {
     const email = `test-e2e-audit-${Date.now()}@school.edu`;
     const res = await request(app.getHttpServer())
       .post('/identity/users')
-      .set('Authorization', `Bearer ${adminToken}`)
       .set('x-device-id', device)
       .send({ email, fullName: 'Audit E2E', password: 'Password123!' })
       .expect(201);
     const rows = await prisma.auditEvent.findMany({ where: { deviceId: device } });
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      category: 'identity_access',
-      action: 'user_invited',
-      entityId: res.body.id,
-      actorRole: 'PLATFORM_ADMIN',
-    });
+    expect(rows[0]).toMatchObject({ category: 'identity_access', action: 'user_invited', entityId: res.body.id });
     expect(JSON.stringify(rows[0].details)).not.toContain('Password123!');
   });
 
@@ -95,10 +82,7 @@ describe('Audit trail (e2e)', () => {
         request(app.getHttpServer()).post('/audit/dev/simulate/login-success').send({}).expect(201),
       ),
     );
-    const res = await request(app.getHttpServer())
-      .get('/audit/verify')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .expect(200);
+    const res = await request(app.getHttpServer()).get('/audit/verify').expect(200);
     expect(res.body.valid).toBe(true);
   });
 

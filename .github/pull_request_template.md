@@ -5,8 +5,9 @@
 <!-- Link related issues e.g. Closes #123 -->
 
 ## Required Reviewers
-This repository enforces branch protection and code ownership on `main`.
-Every pull request must be reviewed and approved by the code owners:
+> **IMPORTANT**: Make sure the base branch for this PR is set to **`develop`** (GitHub defaults to `main`).
+This repository enforces branch protection and code ownership on `develop` (integration) and `main` (production).
+Every pull request must be reviewed and approved by at least one of the code owners:
 - [ ] @snoaaa
 - [ ] @N2K-keli
 
@@ -17,6 +18,7 @@ Every pull request must be reviewed and approved by the code owners:
 - [ ] Refactor / Chore / Documentation
 
 ## Checklist
+- [ ] This PR targets the `develop` branch (manually select `develop` from the GitHub base branch dropdown; `main` is only for release promotions / hotfixes)
 - [ ] My code follows the project's architecture and coding standards
 - [ ] I have performed a self-review of my own code
 - [ ] Existing and new automated tests pass locally

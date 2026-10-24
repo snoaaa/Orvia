@@ -1,85 +1,18 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, Req } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
-import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
-import { CurrentUser, Public } from '../decorators/auth.decorators.js';
-import { RefreshTokenDto } from '../dto/index.js';
-import { ActiveSessionEntity, TokenPairEntity } from '../entities/index.js';
-import { SessionService } from '../services/session.service.js';
+import { Controller, Get } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../types/authenticated-user.js';
 
 @ApiTags('Authentication')
+@ApiBearerAuth('bearer-jwt')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly sessions: SessionService) {}
-
   @Get('me')
-  @ApiBearerAuth('bearer-jwt')
   @ApiOperation({ summary: 'Current user with roles, schools and permissions' })
   @ApiResponse({ status: 200, description: 'The authenticated user' })
-  @ApiResponse({ status: 401, description: 'Missing, invalid or expired token, or session revoked' })
+  @ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })
   @ApiResponse({ status: 403, description: 'Account suspended or not activated' })
   me(@CurrentUser() user: AuthenticatedUser): AuthenticatedUser {
     return user;
-  }
-
-  @Post('refresh')
-  @Public()
-  @HttpCode(200)
-  @ApiOperation({
-    summary: 'Exchange a refresh token for a new token pair (rotation)',
-    description:
-      'The presented refresh token stops working. Presenting an already-used refresh token is treated as theft: ' +
-      'the whole session is revoked.',
-  })
-  @ApiResponse({ status: 200, description: 'New access and refresh tokens', type: TokenPairEntity })
-  @ApiResponse({ status: 401, description: 'Invalid, expired, revoked or reused refresh token' })
-  @ApiResponse({ status: 403, description: 'Account suspended' })
-  async refresh(@Body() dto: RefreshTokenDto, @Req() req: Request): Promise<TokenPairEntity> {
-    return this.sessions.refresh(dto.refreshToken, auditContextFromRequest(req));
-  }
-
-  @Post('logout')
-  @HttpCode(204)
-  @ApiBearerAuth('bearer-jwt')
-  @ApiOperation({ summary: 'End the current session: its refresh and access tokens stop working' })
-  @ApiResponse({ status: 204, description: 'Logged out' })
-  async logout(@CurrentUser() user: AuthenticatedUser, @Req() req: Request): Promise<void> {
-    if (!user.sessionId) throw new BadRequestException('This access token is not attached to a session');
-    await this.sessions.logout(
-      user.sessionId,
-      { userId: user.id, role: user.role, schoolId: user.schoolId },
-      auditContextFromRequest(req),
-    );
-  }
-
-  @Get('sessions')
-  @ApiBearerAuth('bearer-jwt')
-  @ApiOperation({ summary: 'My active sessions and their devices' })
-  @ApiResponse({ status: 200, type: [ActiveSessionEntity] })
-  async mySessions(@CurrentUser() user: AuthenticatedUser): Promise<ActiveSessionEntity[]> {
-    const rows = await this.sessions.listActive(user.id);
-    return rows.map((r) => ActiveSessionEntity.from(r, user.sessionId));
-  }
-
-  @Delete('sessions/:sessionId')
-  @HttpCode(204)
-  @ApiBearerAuth('bearer-jwt')
-  @ApiOperation({ summary: 'Revoke one of my sessions (e.g. a lost phone)' })
-  @ApiParam({ name: 'sessionId', description: 'Session UUID' })
-  @ApiResponse({ status: 204, description: 'Session revoked' })
-  @ApiResponse({ status: 404, description: 'Not one of my sessions' })
-  async revokeMySession(
-    @Param('sessionId', new ParseUUIDPipe()) sessionId: string,
-    @CurrentUser() user: AuthenticatedUser,
-    @Req() req: Request,
-  ): Promise<void> {
-    await this.sessions.revokeUserSession(
-      user.id,
-      sessionId,
-      'user_request',
-      { userId: user.id, role: user.role, schoolId: user.schoolId },
-      auditContextFromRequest(req),
-    );
   }
 }

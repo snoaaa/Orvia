@@ -1,9 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
-import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
-import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
 import { PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
@@ -38,12 +36,8 @@ export class IdentityAndAccessController {
   @RequirePermission('users:invite')
   @ApiOperation({ summary: 'Create (invite) a new user; school admins must give one of their schools' })
   @ApiResponse({ status: 201, description: 'User successfully created', type: UserEntity })
-  async createUser(
-    @Body() dto: CreateUserDto,
-    @CurrentUser() actor: AuthenticatedUser,
-    @Req() req: Request,
-  ): Promise<UserEntity> {
-    return this.identityService.createUser(dto, actor, auditContextFromRequest(req));
+  async createUser(@Body() dto: CreateUserDto, @Req() req: Request): Promise<UserEntity> {
+    return this.identityService.createUser(dto, auditContextFromRequest(req));
   }
 
   @Patch('users/:id')
@@ -55,9 +49,8 @@ export class IdentityAndAccessController {
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
     @CurrentUser() actor: AuthenticatedUser,
-    @Req() req: Request,
   ): Promise<UserEntity> {
-    return this.identityService.updateUser(id, dto, actor, auditContextFromRequest(req));
+    return this.identityService.updateUser(id, dto, actor);
   }
 
   @Get('schools')
