@@ -1,5 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
+import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
 import { RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
@@ -29,8 +31,8 @@ export class IdentityAndAccessController {
   @Post('users')
   @ApiOperation({ summary: 'Create a new user' })
   @ApiResponse({ status: 201, description: 'User successfully created', type: UserEntity })
-  async createUser(@Body() dto: CreateUserDto): Promise<UserEntity> {
-    return this.identityService.createUser(dto);
+  async createUser(@Body() dto: CreateUserDto, @Req() req: Request): Promise<UserEntity> {
+    return this.identityService.createUser(dto, auditContextFromRequest(req));
   }
 
   @Patch('users/:id')
