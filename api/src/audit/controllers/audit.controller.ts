@@ -11,6 +11,7 @@ import { AuditQueryService } from '../services/audit-query.service.js';
  */
 @ApiTags('Audit Trail')
 @ApiBearerAuth('bearer-jwt')
+@RequirePermission('audit:read')
 @Controller('audit')
 export class AuditController {
   constructor(private readonly auditQuery: AuditQueryService) {}

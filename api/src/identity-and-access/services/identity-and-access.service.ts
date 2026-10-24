@@ -106,6 +106,14 @@ export class IdentityAndAccessService {
         ...(dto.status && { status: dto.status.toUpperCase() as UserStatus }),
       },
     });
+    if (updated.status === 'SUSPENDED') {
+      await this.sessions.revokeAllForUser(
+        id,
+        'user_suspended',
+        { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        auditContext,
+      );
+    }
     return UserMapper.toEntity(updated);
   }
 

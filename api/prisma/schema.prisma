@@ -160,21 +160,28 @@ model UserAssignment {
   @@map("user_assignments")
 }
 
+/// A login. The access token is stateless; the refresh token is stateful (issue #12):
+/// only the SHA-256 of its secret is stored, and it changes on every refresh (rotation).
 model Session {
-  id           String    @id @default(uuid())
-  userId       String    @map("user_id")
-  deviceId     String?   @map("device_id")
-  refreshToken String?   @map("refresh_token") @db.VarChar(512)
-  expiresAt    DateTime  @map("expires_at")
-  revokedAt    DateTime? @map("revoked_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  id               String    @id @default(uuid())
+  userId           String    @map("user_id")
+  deviceId         String?   @map("device_id")
+  refreshTokenHash String?   @map("refresh_token_hash") @db.Char(64)
+  /// Absolute end of the session: refreshing does not extend it.
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  lastUsedAt       DateTime? @map("last_used_at")
+  ip               String?   @db.VarChar(45)
+  userAgent        String?   @map("user_agent") @db.VarChar(255)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   device       Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([deviceId])
+  @@index([expiresAt])
   @@map("sessions")
 }
 
