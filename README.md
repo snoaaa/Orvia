@@ -21,12 +21,12 @@ Requires Node.js (v20+) and a running MySQL 8 database.
 cd api
 npm install
 
-# Copy environment template and set your database connection
+# Copy environment template and set DATABASE_URL (app user) and DATABASE_ADMIN_URL (MySQL admin)
 cp .env.example .env
 
-# Generate Prisma client and apply schema
+# Generate Prisma client, apply migrations as admin, make the audit trail insert-only
 npx prisma generate
-npx prisma db push
+npm run db:migrate
 
 # Seed base roles, permissions, and initial platform administrator
 npm run seed
@@ -74,8 +74,8 @@ The backend is modularized according to the system specifications (`docs/RAGBack
 
 ## Branch Rules & Code Review Policy
 
-This repository enforces branch protection and code ownership on `main`:
+This repository enforces branch protection and code ownership on `develop` and `main`:
 - **Designated Reviewers & Code Owners**: [@snoaaa](https://github.com/snoaaa) and [@N2K-keli](https://github.com/N2K-keli)
-- Direct pushes to `main` are disabled. All merges require pull requests with code owner approval.
+- Direct pushes to protected branches are disabled. All merges require pull requests with approval from at least one designated reviewer/code owner.
 - Detailed contribution rules and checklist are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
