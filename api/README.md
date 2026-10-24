@@ -12,6 +12,7 @@ The codebase follows domain separation matching the system specifications:
 - `src/rag-performance/` – Retrieval telemetry, latency, token metrics
 - `src/mobile-sync/` – Device registration, offline cache selections, delta sync
 - `src/audit/` – Append-only SHA-256 audit event logging
+- `src/auth/` – JWT authentication, permission guards, school scoping, `@CurrentUser()`
 - `src/database/` – Prisma service and connection lifecycle
 - `src/config/` – Swagger, CORS, security, and environment configuration
 

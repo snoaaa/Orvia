@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { UserStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
@@ -7,7 +7,13 @@ import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
-import { RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
+import {
+  PermissionHolderEntity,
+  PermissionOverviewEntity,
+  RoleEntity,
+  SchoolEntity,
+  UserEntity,
+} from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
 
 @Injectable()
@@ -17,21 +23,32 @@ export class IdentityAndAccessService {
     private readonly audit: AuditService,
   ) {}
 
-  async findAllUsers(): Promise<UserEntity[]> {
+  /** Platform admins see everyone; others only users assigned to a school they can read users in. */
+  async findAllUsers(actor: AuthenticatedUser): Promise<UserEntity[]> {
+    const schoolId = schoolIdFilter(actor, 'users:read');
     const users = await this.prisma.user.findMany({
+      where: schoolId ? { assignments: { some: { schoolId } } } : undefined,
       orderBy: { createdAt: 'desc' },
     });
     return users.map((u) => UserMapper.toEntity(u));
   }
 
-  async findUserById(id: string): Promise<UserEntity> {
+  async findUserById(id: string, actor: AuthenticatedUser): Promise<UserEntity> {
+    const user = await this.findUserInScope(id, actor, 'users:read');
+    return UserMapper.toEntity(user);
+  }
+
+  /** Loads a user and throws 403 unless `actor` has `permission` in one of the user's schools. */
+  private async findUserInScope(id: string, actor: AuthenticatedUser, permission: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
+      include: { assignments: { select: { schoolId: true } } },
     });
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
-    return UserMapper.toEntity(user);
+    assertSchoolAccess(actor, permission, user.assignments.map((a) => a.schoolId));
+    return user;
   }
 
   /** New users start as INVITED, so creating one is audited as identity_access/user_invited. */
@@ -64,8 +81,12 @@ export class IdentityAndAccessService {
     return UserMapper.toEntity(created);
   }
 
-  async updateUser(id: string, dto: UpdateUserDto): Promise<UserEntity> {
-    await this.findUserById(id);
+  async updateUser(id: string, dto: UpdateUserDto, actor: AuthenticatedUser): Promise<UserEntity> {
+    const target = await this.findUserInScope(id, actor, 'users:update');
+    if (dto.status) {
+      // Suspending / reactivating is a separate right from editing a profile.
+      assertSchoolAccess(actor, 'users:suspend', target.assignments.map((a) => a.schoolId));
+    }
 
     if (dto.email) {
       const normalizedEmail = dto.email.trim().toLowerCase();
@@ -88,8 +109,10 @@ export class IdentityAndAccessService {
     return UserMapper.toEntity(updated);
   }
 
-  async findAllSchools(): Promise<SchoolEntity[]> {
+  async findAllSchools(actor: AuthenticatedUser): Promise<SchoolEntity[]> {
+    const id = schoolIdFilter(actor, 'schools:read');
     const schools = await this.prisma.school.findMany({
+      where: id ? { id } : undefined,
       include: { domains: true },
       orderBy: { name: 'asc' },
     });
@@ -168,5 +191,57 @@ export class IdentityAndAccessService {
       createdAt: role.createdAt,
       updatedAt: role.updatedAt,
     });
+  }
+
+  /**
+   * Every permission with the roles that grant it and the users holding it. Holders are
+   * limited to the schools where `actor` may assign roles (all schools for platform admins).
+   */
+  async findPermissionOverview(actor: AuthenticatedUser, code?: string): Promise<PermissionOverviewEntity[]> {
+    const schoolId = schoolIdFilter(actor, 'users:assign_role');
+    const permissions = await this.prisma.permission.findMany({
+      where: code ? { code } : undefined,
+      orderBy: { code: 'asc' },
+      include: {
+        rolePermissions: {
+          include: {
+            role: {
+              include: {
+                assignments: {
+                  where: schoolId ? { schoolId } : undefined,
+                  include: { user: true, school: { select: { name: true } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (code && permissions.length === 0) {
+      throw new NotFoundException(`Permission '${code}' not found`);
+    }
+
+    return permissions.map(
+      (p) =>
+        new PermissionOverviewEntity({
+          code: p.code,
+          description: p.description,
+          roles: p.rolePermissions.map((rp) => rp.role.name).sort(),
+          holders: p.rolePermissions.flatMap((rp) =>
+            rp.role.assignments.map(
+              (a) =>
+                new PermissionHolderEntity({
+                  userId: a.user.id,
+                  email: a.user.email,
+                  fullName: a.user.fullName,
+                  status: a.user.status,
+                  role: rp.role.name,
+                  schoolId: a.schoolId,
+                  schoolName: a.school.name,
+                }),
+            ),
+          ),
+        }),
+    );
   }
 }
