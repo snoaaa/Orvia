@@ -167,6 +167,9 @@ model Session {
   userId           String    @map("user_id")
   deviceId         String?   @map("device_id")
   refreshTokenHash String?   @map("refresh_token_hash") @db.Char(64)
+  /// Hash replaced by the last rotation: accepted again only within the reuse grace window.
+  previousRefreshTokenHash String? @map("previous_refresh_token_hash") @db.Char(64)
+  refreshRotatedAt DateTime? @map("refresh_rotated_at") @db.DateTime(3)
   /// Absolute end of the session: refreshing does not extend it.
   expiresAt        DateTime  @map("expires_at")
   revokedAt        DateTime? @map("revoked_at")
