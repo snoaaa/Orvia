@@ -23,8 +23,20 @@ export class CreateUserDto {
   @IsOptional()
   authProvider?: string;
 
-  @ApiPropertyOptional({ example: '123e4567-e89b-12d3-a456-426614174001', description: 'School UUID if belonging to a school' })
+  @ApiPropertyOptional({
+    example: '123e4567-e89b-12d3-a456-426614174001',
+    description: 'School the user is invited into: the user is assigned to it with `role`',
+  })
   @IsString()
   @IsOptional()
   schoolId?: string;
+
+  @ApiPropertyOptional({
+    example: 'STUDENT',
+    default: 'STUDENT',
+    description: 'Role in that school (requires schoolId). Platform roles can only be given by a platform admin.',
+  })
+  @IsString()
+  @IsOptional()
+  role?: string;
 }

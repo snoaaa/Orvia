@@ -208,6 +208,11 @@ student in B cannot read users of B). Helpers in `src/auth/utils/school-scope.ut
 Applied today to users, schools, spaces and documents. A school admin must pass one of their own
 `schoolId`s when inviting a user or creating a space.
 
+**Inviting into a school** (`POST /identity/users` with `schoolId`): the new user is assigned to that
+school in the same transaction, with `role` (default `STUDENT`), so the inviting school admin sees
+them immediately. Any school/group role can be given; platform roles (`PLATFORM_ADMIN`) only by a
+platform admin (403 otherwise). Unknown role or `role` without `schoolId` → 400; unknown school → 404.
+
 ### Permission overview
 
 `GET /identity/permissions[?code=users:invite]` (`users:assign_role`) lists every permission, the
