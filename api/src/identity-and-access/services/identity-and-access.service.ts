@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { UserStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
@@ -18,6 +18,9 @@ import {
   UserEntity,
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
+
+/** Role given to invited users when none is specified. */
+const DEFAULT_INVITE_ROLE = 'STUDENT';
 
 @Injectable()
 export class IdentityAndAccessService {
@@ -69,6 +72,10 @@ export class IdentityAndAccessService {
     } else if (schoolsWithPermission(actor, 'users:invite') !== 'all') {
       throw new BadRequestException('schoolId is required: you can only invite users into your own school');
     }
+    const role = dto.schoolId ? await this.resolveInviteRole(dto.schoolId, dto.role, actor) : null;
+    if (!dto.schoolId && dto.role) {
+      throw new BadRequestException('role requires schoolId');
+    }
 
     const normalizedEmail = dto.email.trim().toLowerCase();
     const existing = await this.prisma.user.findUnique({
@@ -85,8 +92,14 @@ export class IdentityAndAccessService {
     }
 
     const data = UserMapper.fromDtoToCreateInput(dto, id, passwordHash);
-    const created = await this.prisma.user.create({
-      data,
+    // User and school assignment together: an invited user must never exist without the
+    // school they were invited into, or their school admin could not see them.
+    const created = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({ data });
+      if (dto.schoolId && role) {
+        await tx.userAssignment.create({ data: { userId: user.id, schoolId: dto.schoolId, roleId: role.id } });
+      }
+      return user;
     });
     await this.audit.record(
       AuditEvents.userInvited(
@@ -100,6 +113,27 @@ export class IdentityAndAccessService {
       ),
     );
     return UserMapper.toEntity(created);
+  }
+
+  /**
+   * Role given to an invited user in `schoolId` (default STUDENT, the least-privileged school
+   * member). The school must exist; a platform-scoped role (e.g. PLATFORM_ADMIN) can only be
+   * given by someone who assigns roles platform-wide.
+   */
+  private async resolveInviteRole(schoolId: string, roleName: string | undefined, actor: AuthenticatedUser) {
+    const school = await this.prisma.school.findUnique({ where: { id: schoolId }, select: { id: true } });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${schoolId} not found`);
+    }
+    const name = (roleName ?? DEFAULT_INVITE_ROLE).trim().toUpperCase();
+    const role = await this.prisma.role.findUnique({ where: { name } });
+    if (!role) {
+      throw new BadRequestException(`Unknown role '${name}'`);
+    }
+    if (role.scope === 'platform' && schoolsWithPermission(actor, 'users:assign_role') !== 'all') {
+      throw new ForbiddenException(`Only a platform administrator can assign the ${role.name} role`);
+    }
+    return role;
   }
 
   /** Suspending a user also revokes all their sessions (#12), so no token keeps working. */
