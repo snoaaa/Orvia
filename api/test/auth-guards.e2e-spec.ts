@@ -22,13 +22,18 @@ describe('Auth guards (e2e)', () => {
   async function createUser(key: string, roleName: string, school: 'A' | 'B', status: UserStatus) {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: roleName } });
     const user = await prisma.user.create({
-      data: { email: `test-e2e-guard-${key}-${stamp}@school.edu`, fullName: key, status },
+      data: { email: `e2e-guard-${key}-${stamp}@school.edu`, fullName: key, status },
     });
     await prisma.userAssignment.create({ data: { userId: user.id, roleId: role.id, schoolId: schoolIds[school] } });
     userIds[key] = user.id;
   }
 
+  // Force the dev routes off, whatever the developer's api/.env says (ConfigModule does not
+  // override variables that are already set), so the "hidden" test is deterministic.
+  const previousDevTools = process.env.AUTH_DEV_TOOLS;
+
   beforeAll(async () => {
+    process.env.AUTH_DEV_TOOLS = 'false';
     const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
@@ -46,7 +51,8 @@ describe('Auth guards (e2e)', () => {
   });
 
   afterAll(async () => {
-    await prisma.user.deleteMany({ where: { email: { contains: `test-e2e-guard-` } } });
+    process.env.AUTH_DEV_TOOLS = previousDevTools;
+    await prisma.user.deleteMany({ where: { email: { contains: `e2e-guard-` } } });
     await prisma.school.deleteMany({ where: { name: { contains: `Test E2E Guard School` } } });
     await app.close();
   });
@@ -146,7 +152,7 @@ describe('Auth guards (e2e)', () => {
       await request(app.getHttpServer())
         .post('/identity/users')
         .set('Authorization', await bearer('adminA'))
-        .send({ email: `test-e2e-guard-x-${stamp}@school.edu`, fullName: 'X', schoolId: schoolIds.B })
+        .send({ email: `e2e-guard-x-${stamp}@school.edu`, fullName: 'X', schoolId: schoolIds.B })
         .expect(403);
     });
 
