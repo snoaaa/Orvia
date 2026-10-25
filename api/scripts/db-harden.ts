@@ -7,6 +7,10 @@
  * triggers and changing grants requires privileges the application must not have.
  * Safe to re-run; run it again after every migration that adds a table.
  *
+ * MySQL with binary logging (log_bin=ON, the default since 8.0) refuses CREATE TRIGGER from an
+ * account without SUPER unless log_bin_trust_function_creators = 1; this script detects that
+ * case and explains the fix instead of printing the raw SQL error (see README "Audit trail").
+ *
  * 1. Triggers that reject any UPDATE or DELETE on audit_events, for every user.
  * 2. Least-privilege grants for the application user taken from DATABASE_URL:
  *    - audit_events:        SELECT, INSERT          (no UPDATE / DELETE)
@@ -46,18 +50,18 @@ async function main(): Promise<void> {
   const adminUser = decodeURIComponent(adminUrl.username);
 
   const triggers = spawnSync(`npx prisma db execute --file ${TRIGGERS_SQL} --url "${adminUrl.toString()}"`, {
-    stdio: ['ignore', 'ignore', 'inherit'],
+    stdio: ['ignore', 'pipe', 'pipe'],
     shell: true,
+    encoding: 'utf-8',
   });
   if (triggers.status !== 0) {
-    console.error(`Could not install the triggers from ${TRIGGERS_SQL}.`);
+    console.error(explainTriggerFailure([triggers.stdout, triggers.stderr].join('\n'), adminUser));
     process.exit(1);
   }
   console.log('✔ Triggers installed: audit_events_block_update, audit_events_block_delete');
 
   const admin = new PrismaClient({ datasourceUrl: adminUrl.toString() });
   try {
-
     if (appUser === adminUser) {
       console.warn(
         `⚠ DATABASE_URL uses the admin user '${appUser}'. Grants were NOT changed.\n` +
@@ -93,6 +97,34 @@ async function main(): Promise<void> {
   } finally {
     await admin.$disconnect();
   }
+}
+
+/** Turns the output of a failed `prisma db execute` into an actionable message. */
+function explainTriggerFailure(output: string, adminUser: string): string {
+  if (/SUPER privilege|binary logging is enabled|log_bin_trust_function_creators|\b1419\b/i.test(output)) {
+    return [
+      '✘ Could not install the audit triggers: MySQL binary logging is ON and the admin account',
+      `  '${adminUser}' does not have the SUPER privilege (MySQL error 1419).`,
+      '',
+      '  Fix (once, as MySQL root), then run `npm run db:harden` again:',
+      '    SET PERSIST log_bin_trust_function_creators = 1;   -- survives restarts (MySQL 8+)',
+      '  or, until the next MySQL restart only:',
+      '    SET GLOBAL log_bin_trust_function_creators = 1;',
+      '',
+      '  Alternatively use root in DATABASE_ADMIN_URL. See api/README.md, "Audit trail".',
+    ].join('\n');
+  }
+  // Prisma prints a bare code ("Error: P1000") followed by the human-readable explanation.
+  const reason =
+    output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0 && !/^Error:\s*P\d+$/.test(line)) ?? 'unknown error';
+  return [
+    `✘ Could not install the audit triggers from ${TRIGGERS_SQL}.`,
+    `  ${reason}`,
+    '  Check DATABASE_ADMIN_URL (host, user, password, database) and that the migrations ran (`npm run db:migrate`).',
+  ].join('\n');
 }
 
 main().catch((error) => {

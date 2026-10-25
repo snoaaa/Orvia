@@ -82,6 +82,17 @@ npm run seed
 > ```
 > (run it with `DATABASE_URL` pointing to the admin account, e.g. via `$env:DATABASE_URL="<admin url>"` in PowerShell).
 
+> **MySQL with binary logging (`log_bin=ON`, the default in MySQL 8).** Creating the audit
+> triggers then requires the `SUPER` privilege. If `DATABASE_ADMIN_URL` is not `root` (or another
+> `SUPER` account), `npm run db:harden` stops with *"MySQL binary logging is ON and the admin
+> account ... does not have the SUPER privilege"*. Run this once as MySQL root, then re-run
+> `npm run db:harden`:
+> ```sql
+> SET GLOBAL log_bin_trust_function_creators = 1;   -- until the next MySQL restart
+> SET PERSIST log_bin_trust_function_creators = 1;  -- or permanently (MySQL 8+)
+> ```
+> Check the current value with `SHOW VARIABLES LIKE 'log_bin%';`.
+
 ### 4. Start the Application
 
 ```bash
@@ -235,7 +246,9 @@ With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
 - **Insert-only:** `npm run db:harden` (run by `db:migrate`) installs two triggers that reject any
   `UPDATE`/`DELETE` on `audit_events` for every MySQL user, and gives the application user only
   `SELECT, INSERT` on that table (no DDL, `TRIGGER` or `DROP`, so it cannot remove the triggers or
-  `TRUNCATE`). The API exposes no endpoint to create, edit or delete events.
+  `TRUNCATE`). The API exposes no endpoint to create, edit or delete events. With binary logging
+  on, installing the triggers needs `SUPER` or `log_bin_trust_function_creators = 1` (see
+  "Database Setup & Seeding").
 - **Hash chain:** each row stores `prev_hash` (the previous row's hash) and
   `hash = SHA-256(canonical JSON of the row + prev_hash)`. Editing, deleting or inserting a row
   directly in the database breaks the chain. Writers lock the single `audit_chain_head` row
