@@ -76,14 +76,26 @@ describe('verifyAuditChain', () => {
 
 describe('verifyChainWith (chain head)', () => {
   const chain = buildChain(3);
-  const fakePrisma = (headHash: string) => ({
+  type Where = { seq?: { gt: bigint }; AND?: { seq: { lte: bigint } }[] };
+  /** Fake Prisma honoring the `seq > afterSeq` and `seq <= head.eventSeq` filters. */
+  const fakePrisma = (headHash: string, events = chain, headSeq = 3n) => ({
     auditEvent: {
-      findMany: async ({ where }: { where: { seq?: { gt: bigint } } }) =>
-        where.seq ? [] : chain,
+      findMany: async ({ where }: { where: Where }) =>
+        events.filter(
+          (e) =>
+            (!where.seq || e.seq > where.seq.gt) &&
+            (!where.AND || where.AND.every((c) => e.seq <= c.seq.lte)),
+        ),
     },
     auditChainHead: {
-      findUnique: async () => ({ id: 1, hash: headHash, eventSeq: 3n, updatedAt: new Date() }),
+      findUnique: async () => ({ id: 1, hash: headHash, eventSeq: headSeq, updatedAt: new Date() }),
     },
+  });
+
+  it('ignores events appended after the head was read (no false head_mismatch)', async () => {
+    // The head was read when the chain had 2 events; a 3rd was appended during verification.
+    const result = await verifyChainWith(fakePrisma(chain[1].hash, chain, 2n) as never);
+    expect(result).toMatchObject({ valid: true, checkedEvents: 2 });
   });
 
   it('is valid when the head points at the newest event', async () => {
