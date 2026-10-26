@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
+import { Public } from '../../auth/decorators/auth.decorators.js';
 import { AuditEvents } from '../builders/audit-events.builder.js';
 import type { RecordAuditEventInput } from '../dto/index.js';
 import { SimulateAuditEventDto } from '../dto/index.js';
@@ -47,6 +48,7 @@ enum SimulatedEvent {
  * Remove once the real auth endpoints are merged.
  */
 @ApiTags('Audit Trail (dev tools)')
+@Public()
 @UseGuards(AuditDevToolsGuard)
 @Controller('audit/dev')
 export class AuditDevController {

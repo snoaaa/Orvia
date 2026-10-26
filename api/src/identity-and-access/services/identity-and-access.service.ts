@@ -1,10 +1,13 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { UserStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
+import { SessionService } from '../../auth/services/session.service.js';
+import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
+import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
 import {
@@ -16,11 +19,15 @@ import {
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
 
+/** Role given to invited users when none is specified. */
+const DEFAULT_INVITE_ROLE = 'STUDENT';
+
 @Injectable()
 export class IdentityAndAccessService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly sessions: SessionService,
   ) {}
 
   /** Platform admins see everyone; others only users assigned to a school they can read users in. */
@@ -51,8 +58,25 @@ export class IdentityAndAccessService {
     return user;
   }
 
-  /** New users start as INVITED, so creating one is audited as identity_access/user_invited. */
-  async createUser(dto: CreateUserDto, auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT): Promise<UserEntity> {
+  /**
+   * School-scoped admins must invite into one of their own schools. New users start as
+   * INVITED, so creating one is audited as identity_access/user_invited.
+   */
+  async createUser(
+    dto: CreateUserDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    if (dto.schoolId) {
+      assertSchoolAccess(actor, 'users:invite', dto.schoolId);
+    } else if (schoolsWithPermission(actor, 'users:invite') !== 'all') {
+      throw new BadRequestException('schoolId is required: you can only invite users into your own school');
+    }
+    const role = dto.schoolId ? await this.resolveInviteRole(dto.schoolId, dto.role, actor) : null;
+    if (!dto.schoolId && dto.role) {
+      throw new BadRequestException('role requires schoolId');
+    }
+
     const normalizedEmail = dto.email.trim().toLowerCase();
     const existing = await this.prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -68,20 +92,57 @@ export class IdentityAndAccessService {
     }
 
     const data = UserMapper.fromDtoToCreateInput(dto, id, passwordHash);
-    const created = await this.prisma.user.create({
-      data,
+    // User and school assignment together: an invited user must never exist without the
+    // school they were invited into, or their school admin could not see them.
+    const created = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({ data });
+      if (dto.schoolId && role) {
+        await tx.userAssignment.create({ data: { userId: user.id, schoolId: dto.schoolId, roleId: role.id } });
+      }
+      return user;
     });
-    // TODO(#9/#13): pass the inviting admin as `invitedBy` once the current user is known.
     await this.audit.record(
       AuditEvents.userInvited(
-        { invitedUserId: created.id, email: created.email, schoolId: dto.schoolId ?? null },
+        {
+          invitedUserId: created.id,
+          email: created.email,
+          schoolId: dto.schoolId ?? null,
+          invitedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
         auditContext,
       ),
     );
     return UserMapper.toEntity(created);
   }
 
-  async updateUser(id: string, dto: UpdateUserDto, actor: AuthenticatedUser): Promise<UserEntity> {
+  /**
+   * Role given to an invited user in `schoolId` (default STUDENT, the least-privileged school
+   * member). The school must exist; a platform-scoped role (e.g. PLATFORM_ADMIN) can only be
+   * given by someone who assigns roles platform-wide.
+   */
+  private async resolveInviteRole(schoolId: string, roleName: string | undefined, actor: AuthenticatedUser) {
+    const school = await this.prisma.school.findUnique({ where: { id: schoolId }, select: { id: true } });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${schoolId} not found`);
+    }
+    const name = (roleName ?? DEFAULT_INVITE_ROLE).trim().toUpperCase();
+    const role = await this.prisma.role.findUnique({ where: { name } });
+    if (!role) {
+      throw new BadRequestException(`Unknown role '${name}'`);
+    }
+    if (role.scope === 'platform' && schoolsWithPermission(actor, 'users:assign_role') !== 'all') {
+      throw new ForbiddenException(`Only a platform administrator can assign the ${role.name} role`);
+    }
+    return role;
+  }
+
+  /** Suspending a user also revokes all their sessions (#12), so no token keeps working. */
+  async updateUser(
+    id: string,
+    dto: UpdateUserDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
     const target = await this.findUserInScope(id, actor, 'users:update');
     if (dto.status) {
       // Suspending / reactivating is a separate right from editing a profile.
