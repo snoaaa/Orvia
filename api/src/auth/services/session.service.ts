@@ -72,7 +72,7 @@ export class SessionService {
    * Validates a refresh token and rotates it: returns a new pair, and the presented token
    * stops working. Every rejection is audited as token_refresh_failure.
    */
-  async refresh(refreshToken: string, context: AuditRequestContext): Promise<TokenPair> {
+  async refresh(refreshToken: string, context: AuditRequestContext, afterLostRace = false): Promise<TokenPair> {
     const parsed = parseRefreshToken(refreshToken);
     if (!parsed) return this.rejectRefresh('invalid_token', context);
 
@@ -86,7 +86,10 @@ export class SessionService {
     if (session.revokedAt) return this.rejectRefresh('revoked', context, failure);
     if (session.expiresAt <= new Date()) return this.rejectRefresh('expired', context, failure);
 
-    if (!session.refreshTokenHash || !sameHash(sha256(parsed.secret), session.refreshTokenHash)) {
+    const presented = sha256(parsed.secret);
+    const isCurrent = !!session.refreshTokenHash && sameHash(presented, session.refreshTokenHash);
+    const isGraceRetry = !isCurrent && this.withinReuseGrace(session, presented);
+    if (!isCurrent && !isGraceRetry) {
       await this.revokeSession(session.id, 'token_reuse', null, context);
       return this.rejectRefresh('reused', context, failure);
     }
@@ -94,18 +97,49 @@ export class SessionService {
       return this.rejectRefresh('user_suspended', context, failure, true);
     }
 
-    // Compare-and-swap on the old hash: if two requests use the same token at the same time,
-    // only one rotates; the other is treated as reuse.
+    // Compare-and-swap on the current hash, so two requests can never both rotate from the
+    // same state. Normal rotation keeps the replaced hash as `previous` for the grace window;
+    // a grace retry keeps `previous` unchanged (the token the client still holds) and only
+    // replaces the pair it never received.
     const { secret, hash } = newSecret();
+    const now = new Date();
     const rotated = await this.prisma.session.updateMany({
       where: { id: session.id, refreshTokenHash: session.refreshTokenHash, revokedAt: null },
-      data: { refreshTokenHash: hash, lastUsedAt: new Date(), ip: context.ip, userAgent: context.userAgent },
+      data: {
+        refreshTokenHash: hash,
+        ...(isCurrent && { previousRefreshTokenHash: session.refreshTokenHash, refreshRotatedAt: now }),
+        lastUsedAt: now,
+        ip: context.ip,
+        userAgent: context.userAgent,
+      },
     });
     if (rotated.count !== 1) {
+      // Lost the race: another request rotated this session in between. Re-check once on the
+      // fresh state, which applies the same rules (grace window or reuse); losing twice means
+      // real contention on a copied token.
+      if (!afterLostRace) return this.refresh(refreshToken, context, true);
       await this.revokeSession(session.id, 'token_reuse', null, context);
       return this.rejectRefresh('reused', context, failure);
     }
+    if (isGraceRetry) {
+      this.logger.log(`Refresh token reused within the grace window on session ${session.id}: accepted as a retry`);
+    }
     return this.pair(session.userId, session.id, secret, session.expiresAt);
+  }
+
+  /** True if `presentedHash` is the token replaced by the last rotation, still inside the grace window. */
+  private withinReuseGrace(
+    session: { previousRefreshTokenHash: string | null; refreshRotatedAt: Date | null },
+    presentedHash: string,
+  ): boolean {
+    const graceMs = this.authConfig().refreshReuseGraceSeconds * 1000;
+    return (
+      graceMs > 0 &&
+      !!session.previousRefreshTokenHash &&
+      !!session.refreshRotatedAt &&
+      Date.now() - session.refreshRotatedAt.getTime() <= graceMs &&
+      sameHash(presentedHash, session.previousRefreshTokenHash)
+    );
   }
 
   /** Ends the current session. Idempotent: logging out twice is not an error. */

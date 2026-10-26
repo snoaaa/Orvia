@@ -52,6 +52,7 @@ Key variables:
 - `JWT_ACCESS_TTL_SECONDS`: Access token lifetime (default `900`)
 - `JWT_REFRESH_TTL_DAYS`: Session lifetime from login, not extended by refreshing (default `30`)
 - `SESSION_RETENTION_DAYS`: Days before the daily job deletes expired/revoked sessions (default `30`)
+- `REFRESH_REUSE_GRACE_SECONDS`: Seconds the just-replaced refresh token is still accepted, for network retries (default `10`, `0` = strict)
 - `AUTH_DEV_TOOLS`: Set to `true` to enable the dev-only `/auth/dev/*` routes (never in production)
 - `AUDIT_DEV_TOOLS`: Set to `true` to enable the dev-only audit simulation routes (never in production)
 
@@ -173,8 +174,12 @@ The access token is stateless (15 min); the **refresh token is stateful**, one p
   and the user must not be suspended. Returns a **new pair**; the presented refresh token stops working
   (rotation, compare-and-swap on the stored hash).
 - **Reuse detection:** a refresh token that was already rotated means it was copied: the **whole
-  session is revoked** (`session_revoked` / `token_reuse`). Clients must therefore never send two
-  refreshes in parallel with the same token.
+  session is revoked** (`session_revoked` / `token_reuse`).
+- **Grace window for retries:** the token replaced by the *last* rotation is still accepted for
+  `REFRESH_REUSE_GRACE_SECONDS` (default 10 s) and returns a fresh pair, so an automatic retry after a
+  lost response, or two simultaneous refreshes, do not log the user out. Older tokens, or the
+  previous one after the window, still revoke the session. Clients should always keep the most
+  recent refresh token they received. `0` disables the window (strict rotation).
 - **`POST /auth/logout`** revokes the current session. Because the guard checks the session on every
   request, logout and revocation cut the access token immediately too (`401 Session has ended`).
 - **Sessions are absolute:** they end `JWT_REFRESH_TTL_DAYS` after login whatever the refreshes.
