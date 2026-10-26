@@ -1,61 +1,83 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
+import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
+import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
+import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
-import { RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
+import { PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
 @ApiTags('Identity and Access')
 @ApiBearerAuth('bearer-jwt')
+@ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })
+@ApiResponse({ status: 403, description: 'Missing permission, suspended account, or another school' })
 @Controller('identity')
 export class IdentityAndAccessController {
   constructor(private readonly identityService: IdentityAndAccessService) {}
 
   @Get('users')
-  @ApiOperation({ summary: 'List all users' })
+  @RequirePermission('users:read')
+  @ApiOperation({ summary: 'List users (school admins only see users of their schools)' })
   @ApiResponse({ status: 200, description: 'List of users retrieved', type: [UserEntity] })
-  async getUsers(): Promise<UserEntity[]> {
-    return this.identityService.findAllUsers();
+  async getUsers(@CurrentUser() actor: AuthenticatedUser): Promise<UserEntity[]> {
+    return this.identityService.findAllUsers(actor);
   }
 
   @Get('users/:id')
+  @RequirePermission('users:read')
   @ApiOperation({ summary: 'Get user by ID' })
   @ApiParam({ name: 'id', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User retrieved', type: UserEntity })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async getUserById(@Param('id') id: string): Promise<UserEntity> {
-    return this.identityService.findUserById(id);
+  async getUserById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<UserEntity> {
+    return this.identityService.findUserById(id, actor);
   }
 
   @Post('users')
-  @ApiOperation({ summary: 'Create a new user' })
+  @RequirePermission('users:invite')
+  @ApiOperation({ summary: 'Create (invite) a new user; school admins must give one of their schools' })
   @ApiResponse({ status: 201, description: 'User successfully created', type: UserEntity })
-  async createUser(@Body() dto: CreateUserDto): Promise<UserEntity> {
-    return this.identityService.createUser(dto);
+  async createUser(
+    @Body() dto: CreateUserDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.identityService.createUser(dto, actor, auditContextFromRequest(req));
   }
 
   @Patch('users/:id')
-  @ApiOperation({ summary: 'Update an existing user' })
+  @RequirePermission('users:update')
+  @ApiOperation({ summary: 'Update an existing user (changing the status also needs users:suspend)' })
   @ApiParam({ name: 'id', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User updated', type: UserEntity })
-  async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto): Promise<UserEntity> {
-    return this.identityService.updateUser(id, dto);
+  async updateUser(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.identityService.updateUser(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Get('schools')
-  @ApiOperation({ summary: 'List all schools' })
+  @RequirePermission('schools:read')
+  @ApiOperation({ summary: 'List schools (school admins only see their own)' })
   @ApiResponse({ status: 200, description: 'List of schools', type: [SchoolEntity] })
-  async getSchools(): Promise<SchoolEntity[]> {
-    return this.identityService.findAllSchools();
+  async getSchools(@CurrentUser() actor: AuthenticatedUser): Promise<SchoolEntity[]> {
+    return this.identityService.findAllSchools(actor);
   }
 
   @Post('schools')
-  @ApiOperation({ summary: 'Register a new school' })
+  @RequirePermission('schools:create')
+  @ApiOperation({ summary: 'Register a new school (platform admin)' })
   @ApiResponse({ status: 201, description: 'School registered', type: SchoolEntity })
   async createSchool(@Body() dto: CreateSchoolDto): Promise<SchoolEntity> {
     return this.identityService.createSchool(dto);
   }
 
   @Get('roles')
+  @RequirePermission('users:assign_role')
   @ApiOperation({ summary: 'List available roles' })
   @ApiResponse({ status: 200, description: 'List of roles', type: [RoleEntity] })
   async getRoles(): Promise<RoleEntity[]> {
@@ -63,9 +85,25 @@ export class IdentityAndAccessController {
   }
 
   @Post('roles')
-  @ApiOperation({ summary: 'Define a custom role' })
+  @RequirePermission('system:manage')
+  @ApiOperation({ summary: 'Define a custom role (platform admin)' })
   @ApiResponse({ status: 201, description: 'Role created', type: RoleEntity })
   async createRole(@Body() dto: CreateRoleDto): Promise<RoleEntity> {
     return this.identityService.createRole(dto);
+  }
+
+  @Get('permissions')
+  @RequirePermission('users:assign_role')
+  @ApiOperation({
+    summary: 'All permissions, the roles granting them, and who holds them',
+    description: 'Platform admins see every holder; school admins only see holders in their own schools.',
+  })
+  @ApiQuery({ name: 'code', required: false, description: "Only this permission, e.g. 'users:invite'" })
+  @ApiResponse({ status: 200, description: 'Permission overview', type: [PermissionOverviewEntity] })
+  async getPermissions(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query('code') code?: string,
+  ): Promise<PermissionOverviewEntity[]> {
+    return this.identityService.findPermissionOverview(actor, code);
   }
 }

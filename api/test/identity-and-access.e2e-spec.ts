@@ -3,11 +3,14 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
+import { TokenService } from '../src/auth/services/token.service.js';
 import { PrismaService } from '../src/database/prisma.service.js';
 
 describe('IdentityAndAccess (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
+  // All identity routes are protected since #13: act as the seeded platform administrator.
+  let adminToken: string;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -19,6 +22,10 @@ describe('IdentityAndAccess (e2e)', () => {
     await app.init();
 
     prisma = app.get(PrismaService);
+    const admin = await prisma.user.findUniqueOrThrow({
+      where: { email: process.env.PLATFORM_ADMIN_EMAIL || 'admin@wamdp.platform' },
+    });
+    adminToken = (await app.get(TokenService).issueAccessToken(admin.id)).accessToken;
   });
 
   afterAll(async () => {
@@ -43,6 +50,7 @@ describe('IdentityAndAccess (e2e)', () => {
     const email = `test-e2e-user-${Date.now()}@example.com`;
     const res = await request(app.getHttpServer())
       .post('/identity/users')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({
         email,
         fullName: 'Test E2E User',
@@ -61,6 +69,7 @@ describe('IdentityAndAccess (e2e)', () => {
     const email = `test-e2e-status-${Date.now()}@example.com`;
     const createRes = await request(app.getHttpServer())
       .post('/identity/users')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({
         email,
         fullName: 'Status Lifecycle User',
@@ -73,6 +82,7 @@ describe('IdentityAndAccess (e2e)', () => {
 
     const activateRes = await request(app.getHttpServer())
       .patch(`/identity/users/${userId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ status: 'ACTIVE' })
       .expect(200);
 
@@ -80,6 +90,7 @@ describe('IdentityAndAccess (e2e)', () => {
 
     const suspendRes = await request(app.getHttpServer())
       .patch(`/identity/users/${userId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ status: 'SUSPENDED' })
       .expect(200);
 
@@ -93,6 +104,7 @@ describe('IdentityAndAccess (e2e)', () => {
 
     const res = await request(app.getHttpServer())
       .post('/identity/schools')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({
         name: `Test E2E School ${timestamp}`,
         allowedDomains: `${domain1}, ${domain2}`,
@@ -144,7 +156,10 @@ describe('IdentityAndAccess (e2e)', () => {
   });
 
   it('should verify all 6 base roles exist in database', async () => {
-    const res = await request(app.getHttpServer()).get('/identity/roles').expect(200);
+    const res = await request(app.getHttpServer())
+      .get('/identity/roles')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
     const roleNames = res.body.map((r: { name: string }) => r.name);
     expect(roleNames).toContain('PLATFORM_ADMIN');
     expect(roleNames).toContain('SCHOOL_ADMIN');
@@ -197,6 +212,7 @@ describe('IdentityAndAccess (e2e)', () => {
     const email = `test-e2e-duplicate-${Date.now()}@example.com`;
     await request(app.getHttpServer())
       .post('/identity/users')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({
         email,
         fullName: 'First Copy',
@@ -206,6 +222,7 @@ describe('IdentityAndAccess (e2e)', () => {
 
     const res = await request(app.getHttpServer())
       .post('/identity/users')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({
         email,
         fullName: 'Second Copy',
@@ -220,6 +237,7 @@ describe('IdentityAndAccess (e2e)', () => {
     const email = `test-e2e-pwd-${Date.now()}@example.com`;
     const res = await request(app.getHttpServer())
       .post('/identity/users')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({
         email,
         fullName: 'Password Hashing User',
@@ -243,6 +261,7 @@ describe('IdentityAndAccess (e2e)', () => {
 
     await request(app.getHttpServer())
       .post('/identity/schools')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({
         name: `Test E2E School First ${timestamp}`,
         allowedDomains: domain,
@@ -251,6 +270,7 @@ describe('IdentityAndAccess (e2e)', () => {
 
     const res = await request(app.getHttpServer())
       .post('/identity/schools')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({
         name: `Test E2E School Second ${timestamp}`,
         allowedDomains: domain,

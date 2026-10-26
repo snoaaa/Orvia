@@ -30,7 +30,6 @@ model User {
   conversations     Conversation[]
   savedAnswers      SavedAnswer[]
   answerReports     AnswerReport[]
-  auditEvents       AuditEvent[]
   syncChanges       SyncChange[]
 
   @@map("users")
@@ -50,7 +49,6 @@ model School {
   spaces         Space[]
   assignments    UserAssignment[]
   documentAccess DocumentAccess[]
-  auditEvents    AuditEvent[]
 
   @@map("schools")
 }
@@ -162,21 +160,31 @@ model UserAssignment {
   @@map("user_assignments")
 }
 
+/// A login. The access token is stateless; the refresh token is stateful (issue #12):
+/// only the SHA-256 of its secret is stored, and it changes on every refresh (rotation).
 model Session {
-  id           String    @id @default(uuid())
-  userId       String    @map("user_id")
-  deviceId     String?   @map("device_id")
-  refreshToken String?   @map("refresh_token") @db.VarChar(512)
-  expiresAt    DateTime  @map("expires_at")
-  revokedAt    DateTime? @map("revoked_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  id               String    @id @default(uuid())
+  userId           String    @map("user_id")
+  deviceId         String?   @map("device_id")
+  refreshTokenHash String?   @map("refresh_token_hash") @db.Char(64)
+  /// Hash replaced by the last rotation: accepted again only within the reuse grace window.
+  previousRefreshTokenHash String? @map("previous_refresh_token_hash") @db.Char(64)
+  refreshRotatedAt DateTime? @map("refresh_rotated_at") @db.DateTime(3)
+  /// Absolute end of the session: refreshing does not extend it.
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  lastUsedAt       DateTime? @map("last_used_at")
+  ip               String?   @db.VarChar(45)
+  userAgent        String?   @map("user_agent") @db.VarChar(255)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   device       Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([deviceId])
+  @@index([expiresAt])
   @@map("sessions")
 }
 
@@ -479,27 +487,45 @@ model SyncChange {
   @@map("sync_changes")
 }
 
+/// Append-only, hash-chained audit trail (issue #14).
+/// No foreign keys and no updated_at on purpose: a row must never change after
+/// insertion, so actor/school ids are kept as plain values even if the referenced
+/// user or school is deleted later. UPDATE/DELETE are blocked by triggers and
+/// grants installed by `npm run db:harden` (see README "Audit trail").
 model AuditEvent {
   id         String   @id @default(uuid())
-  category   String
-  action     String
+  /// Insertion order of the chain. Not part of the hash (assigned by MySQL).
+  seq        BigInt   @unique @default(autoincrement())
+  category   String   @db.VarChar(32)
+  action     String   @db.VarChar(64)
   actorId    String?  @map("actor_id")
-  actorRole  String   @map("actor_role")
+  actorRole  String?  @map("actor_role")
   schoolId   String?  @map("school_id")
-  entityType String   @map("entity_type")
-  entityId   String   @map("entity_id")
-  ip         String
+  entityType String?  @map("entity_type")
+  entityId   String?  @map("entity_id")
+  ip         String?  @db.VarChar(45)
   deviceId   String?  @map("device_id")
   details    Json
-  prevHash   String   @map("prev_hash") @db.VarChar(64)
-  hash       String   @db.VarChar(64)
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  /// Unique so two events can never claim the same predecessor (no forks).
+  prevHash   String   @unique @map("prev_hash") @db.Char(64)
+  hash       String   @unique @db.Char(64)
+  createdAt  DateTime @map("created_at") @db.DateTime(3)
 
-  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
-  school     School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
-
+  @@index([category, action])
   @@index([actorId])
   @@index([schoolId])
+  @@index([createdAt])
   @@map("audit_events")
+}
+
+/// Single row (id = 1) holding the hash of the newest audit event. AuditService locks it
+/// (SELECT ... FOR UPDATE) while appending, so concurrent writers are serialized, and the
+/// chain verification compares it with the last event to detect deleted newest rows.
+model AuditChainHead {
+  id        Int      @id
+  hash      String   @db.Char(64)
+  eventSeq  BigInt   @default(0) @map("event_seq")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("audit_chain_head")
 }

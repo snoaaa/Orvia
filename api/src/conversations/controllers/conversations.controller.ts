@@ -1,16 +1,20 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import { CreateConversationDto, CreateMessageDto, ReportAnswerDto, SaveAnswerDto } from '../dto/index.js';
 import { AnswerReportEntity, ConversationEntity, MessageEntity, SavedAnswerEntity } from '../entities/index.js';
 import { ConversationsService } from '../services/conversations.service.js';
 
 @ApiTags('Conversations')
 @ApiBearerAuth('bearer-jwt')
+@ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })
+@ApiResponse({ status: 403, description: 'Missing permission or suspended account' })
 @Controller('conversations')
 export class ConversationsController {
   constructor(private readonly conversationsService: ConversationsService) {}
 
   @Get()
+  @RequirePermission('conversations:read')
   @ApiOperation({ summary: 'List user conversations' })
   @ApiResponse({ status: 200, description: 'List of conversations', type: [ConversationEntity] })
   async getConversations(): Promise<ConversationEntity[]> {
@@ -18,6 +22,7 @@ export class ConversationsController {
   }
 
   @Post()
+  @RequirePermission('conversations:create')
   @ApiOperation({ summary: 'Start a new conversation thread' })
   @ApiResponse({ status: 201, description: 'Conversation started', type: ConversationEntity })
   async createConversation(@Body() dto: CreateConversationDto): Promise<ConversationEntity> {
@@ -25,6 +30,7 @@ export class ConversationsController {
   }
 
   @Get(':id')
+  @RequirePermission('conversations:read')
   @ApiOperation({ summary: 'Get conversation details by ID' })
   @ApiParam({ name: 'id', description: 'Conversation UUID' })
   @ApiResponse({ status: 200, description: 'Conversation details', type: ConversationEntity })
@@ -33,6 +39,7 @@ export class ConversationsController {
   }
 
   @Get(':id/messages')
+  @RequirePermission('conversations:read')
   @ApiOperation({ summary: 'Get messages for a conversation' })
   @ApiParam({ name: 'id', description: 'Conversation UUID' })
   @ApiResponse({ status: 200, description: 'Messages list', type: [MessageEntity] })
@@ -41,6 +48,7 @@ export class ConversationsController {
   }
 
   @Post(':id/messages')
+  @RequirePermission('messages:send')
   @ApiOperation({ summary: 'Post a new message or query to conversation' })
   @ApiParam({ name: 'id', description: 'Conversation UUID' })
   @ApiResponse({ status: 201, description: 'Message created', type: MessageEntity })
@@ -49,6 +57,7 @@ export class ConversationsController {
   }
 
   @Post('saved-answers')
+  @RequirePermission('answers:save')
   @ApiOperation({ summary: 'Bookmark or save an assistant answer' })
   @ApiResponse({ status: 201, description: 'Answer saved', type: SavedAnswerEntity })
   async saveAnswer(@Body() dto: SaveAnswerDto): Promise<SavedAnswerEntity> {
@@ -56,6 +65,7 @@ export class ConversationsController {
   }
 
   @Post('reports')
+  @RequirePermission('answers:report')
   @ApiOperation({ summary: 'Report a hallucinated or incorrect answer' })
   @ApiResponse({ status: 201, description: 'Report logged', type: AnswerReportEntity })
   async reportAnswer(@Body() dto: ReportAnswerDto): Promise<AnswerReportEntity> {

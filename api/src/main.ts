@@ -2,6 +2,7 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { AppModule } from './app.module.js';
+import { AuditService } from './audit/services/audit.service.js';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
 import { setupSwagger } from './config/swagger/index.js';
 
@@ -16,7 +17,7 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalFilters(new HttpExceptionFilter());
+  app.useGlobalFilters(new HttpExceptionFilter(app.get(AuditService)));
 
   app.useGlobalPipes(
     new ValidationPipe({
