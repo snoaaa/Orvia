@@ -54,21 +54,55 @@ describe('Sessions (e2e)', () => {
     await app.close();
   });
 
+  /** Moves the last rotation out of the reuse grace window (REFRESH_REUSE_GRACE_SECONDS, 10 s by default). */
+  const endGraceWindow = (sessionId: string) =>
+    prisma.session.update({ where: { id: sessionId }, data: { refreshRotatedAt: new Date(Date.now() - 60_000) } });
+
   it('a valid refresh token returns a new pair and the old one stops working', async () => {
     const first = await login();
     const res = await refresh(first.refreshToken).expect(200);
     expect(res.body.refreshToken).not.toBe(first.refreshToken);
     expect(res.body.sessionId).toBe(first.sessionId);
     await http().get('/auth/me').set('Authorization', `Bearer ${res.body.accessToken}`).expect(200);
+    await endGraceWindow(first.sessionId);
     await refresh(first.refreshToken).expect(401);
   });
 
-  it('reusing an old refresh token revokes the whole session', async () => {
+  it('reusing an old refresh token after the grace window revokes the whole session', async () => {
     const first = await login();
     const second = (await refresh(first.refreshToken).expect(200)).body;
+    await endGraceWindow(first.sessionId);
     await refresh(first.refreshToken).expect(401);
     await refresh(second.refreshToken).expect(401);
     await http().get('/auth/me').set('Authorization', `Bearer ${second.accessToken}`).expect(401);
+    const row = await prisma.session.findUniqueOrThrow({ where: { id: first.sessionId } });
+    expect(row.revokedAt).not.toBeNull();
+  });
+
+  it('accepts a retry with the just-replaced token within the grace window (lost response)', async () => {
+    const first = await login();
+    await refresh(first.refreshToken).expect(200); // response "lost" on the network
+    const retry = (await refresh(first.refreshToken).expect(200)).body; // client retries with what it has
+    await http().get('/auth/me').set('Authorization', `Bearer ${retry.accessToken}`).expect(200);
+    const next = (await refresh(retry.refreshToken).expect(200)).body;
+    expect(next.sessionId).toBe(first.sessionId);
+    const row = await prisma.session.findUniqueOrThrow({ where: { id: first.sessionId } });
+    expect(row.revokedAt).toBeNull();
+  });
+
+  it('accepts two simultaneous refreshes with the same token without revoking the session', async () => {
+    const first = await login();
+    const [a, b] = await Promise.all([refresh(first.refreshToken), refresh(first.refreshToken)]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    const row = await prisma.session.findUniqueOrThrow({ where: { id: first.sessionId } });
+    expect(row.revokedAt).toBeNull();
+  });
+
+  it('rejects a token two rotations old even within the grace window', async () => {
+    const first = await login();
+    const second = (await refresh(first.refreshToken).expect(200)).body;
+    await refresh(second.refreshToken).expect(200);
+    await refresh(first.refreshToken).expect(401);
     const row = await prisma.session.findUniqueOrThrow({ where: { id: first.sessionId } });
     expect(row.revokedAt).not.toBeNull();
   });

@@ -1,13 +1,13 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { QueryAuditEventsDto } from '../dto/index.js';
+import { RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import { AuditEventEntity } from '../entities/index.js';
 import { AuditQueryService } from '../services/audit-query.service.js';
 
 /**
  * Read-only access to the audit trail. There is deliberately no POST/PATCH/DELETE:
  * events are written by the backend through AuditService, never by clients.
- * TODO(#13): protect with @RequirePermission('audit:read') once the guards exist.
  */
 @ApiTags('Audit Trail')
 @ApiBearerAuth('bearer-jwt')

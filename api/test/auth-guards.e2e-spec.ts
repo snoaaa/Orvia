@@ -22,13 +22,18 @@ describe('Auth guards (e2e)', () => {
   async function createUser(key: string, roleName: string, school: 'A' | 'B', status: UserStatus) {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: roleName } });
     const user = await prisma.user.create({
-      data: { email: `test-e2e-guard-${key}-${stamp}@school.edu`, fullName: key, status },
+      data: { email: `e2e-guard-${key}-${stamp}@school.edu`, fullName: key, status },
     });
     await prisma.userAssignment.create({ data: { userId: user.id, roleId: role.id, schoolId: schoolIds[school] } });
     userIds[key] = user.id;
   }
 
+  // Force the dev routes off, whatever the developer's api/.env says (ConfigModule does not
+  // override variables that are already set), so the "hidden" test is deterministic.
+  const previousDevTools = process.env.AUTH_DEV_TOOLS;
+
   beforeAll(async () => {
+    process.env.AUTH_DEV_TOOLS = 'false';
     const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
@@ -46,7 +51,8 @@ describe('Auth guards (e2e)', () => {
   });
 
   afterAll(async () => {
-    await prisma.user.deleteMany({ where: { email: { contains: `test-e2e-guard-` } } });
+    process.env.AUTH_DEV_TOOLS = previousDevTools;
+    await prisma.user.deleteMany({ where: { email: { contains: `e2e-guard-` } } });
     await prisma.school.deleteMany({ where: { name: { contains: `Test E2E Guard School` } } });
     await app.close();
   });
@@ -146,8 +152,68 @@ describe('Auth guards (e2e)', () => {
       await request(app.getHttpServer())
         .post('/identity/users')
         .set('Authorization', await bearer('adminA'))
-        .send({ email: `test-e2e-guard-x-${stamp}@school.edu`, fullName: 'X', schoolId: schoolIds.B })
+        .send({ email: `e2e-guard-x-${stamp}@school.edu`, fullName: 'X', schoolId: schoolIds.B })
         .expect(403);
+    });
+
+    it('a user invited into a school is attached to it, so the school admin can see them', async () => {
+      const auth = await bearer('adminA');
+      const invited = await request(app.getHttpServer())
+        .post('/identity/users')
+        .set('Authorization', auth)
+        .send({ email: `e2e-guard-invited-${stamp}@school.edu`, fullName: 'Invited', schoolId: schoolIds.A })
+        .expect(201);
+
+      const assignments = await prisma.userAssignment.findMany({
+        where: { userId: invited.body.id },
+        include: { role: true },
+      });
+      expect(assignments).toHaveLength(1);
+      expect(assignments[0]).toMatchObject({ schoolId: schoolIds.A, role: { name: 'STUDENT' } });
+
+      await request(app.getHttpServer()).get(`/identity/users/${invited.body.id}`).set('Authorization', auth).expect(200);
+      const list = await request(app.getHttpServer()).get('/identity/users').set('Authorization', auth).expect(200);
+      expect(list.body.map((u: { id: string }) => u.id)).toContain(invited.body.id);
+    });
+
+    it('a school admin can invite with a school role but not with a platform role', async () => {
+      const auth = await bearer('adminA');
+      const staff = await request(app.getHttpServer())
+        .post('/identity/users')
+        .set('Authorization', auth)
+        .send({ email: `e2e-guard-staff-${stamp}@school.edu`, fullName: 'Staff', schoolId: schoolIds.A, role: 'staff' })
+        .expect(201);
+      const assignment = await prisma.userAssignment.findFirstOrThrow({
+        where: { userId: staff.body.id },
+        include: { role: true },
+      });
+      expect(assignment.role.name).toBe('STAFF');
+
+      await request(app.getHttpServer())
+        .post('/identity/users')
+        .set('Authorization', auth)
+        .send({
+          email: `e2e-guard-escalate-${stamp}@school.edu`,
+          fullName: 'Escalate',
+          schoolId: schoolIds.A,
+          role: 'PLATFORM_ADMIN',
+        })
+        .expect(403);
+      expect(await prisma.user.count({ where: { email: `e2e-guard-escalate-${stamp}@school.edu` } })).toBe(0);
+    });
+
+    it('rejects an unknown role or a role without a school', async () => {
+      const auth = await bearer('adminA');
+      await request(app.getHttpServer())
+        .post('/identity/users')
+        .set('Authorization', auth)
+        .send({ email: `e2e-guard-badrole-${stamp}@school.edu`, fullName: 'X', schoolId: schoolIds.A, role: 'WIZARD' })
+        .expect(400);
+      await request(app.getHttpServer())
+        .post('/identity/users')
+        .set('Authorization', auth)
+        .send({ email: `e2e-guard-noschool-${stamp}@school.edu`, fullName: 'X', role: 'STAFF' })
+        .expect(400);
     });
 
     it('a school admin only lists users and schools of their school', async () => {
@@ -185,6 +251,6 @@ describe('Auth guards (e2e)', () => {
   });
 
   it('hides the dev token route when AUTH_DEV_TOOLS is off', async () => {
-    await request(app.getHttpServer()).post('/auth/dev/token').send({ email: 'x@y.z' }).expect(404);
+    await request(app.getHttpServer()).post('/auth/dev/token').send({ email: 'nobody@school.edu' }).expect(404);
   });
 });
