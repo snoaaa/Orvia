@@ -19,6 +19,8 @@ model User {
   fullName     String      @map("full_name")
   authProvider String      @default("local") @map("auth_provider")
   passwordHash String?     @map("password_hash")
+  /// Google OpenID Connect subject identifier, set on first Google login.
+  googleSub    String?     @unique @map("google_sub")
   status       UserStatus  @default(INVITED)
   createdAt    DateTime    @default(now()) @map("created_at")
   updatedAt    DateTime    @updatedAt @map("updated_at")

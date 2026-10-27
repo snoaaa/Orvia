@@ -4,9 +4,10 @@ import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
+import { CreateRoleDto, CreateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import { PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
+import { InviteUserService } from '../services/invite-user.service.js';
 
 @ApiTags('Identity and Access')
 @ApiBearerAuth('bearer-jwt')
@@ -14,7 +15,10 @@ import { IdentityAndAccessService } from '../services/identity-and-access.servic
 @ApiResponse({ status: 403, description: 'Missing permission, suspended account, or another school' })
 @Controller('identity')
 export class IdentityAndAccessController {
-  constructor(private readonly identityService: IdentityAndAccessService) {}
+  constructor(
+    private readonly identityService: IdentityAndAccessService,
+    private readonly inviteService: InviteUserService,
+  ) {}
 
   @Get('users')
   @RequirePermission('users:read')
@@ -32,6 +36,38 @@ export class IdentityAndAccessController {
   @ApiResponse({ status: 404, description: 'User not found' })
   async getUserById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<UserEntity> {
     return this.identityService.findUserById(id, actor);
+  }
+
+  /**
+   * Issue #9: Minimal user invitation endpoint.
+   *
+   * - Restricted to admins with the `users:invite` permission.
+   * - School admins can only invite into their own assigned school.
+   * - The invited user's email domain is validated against the school's allowed domains
+   *   (school_domains table). Schools with no configured domains skip domain validation.
+   * - The created user has status INVITED, authProvider = 'google', and no password.
+   * - A user_assignments record is created for the given school and role.
+   */
+  @Post('users/invite')
+  @RequirePermission('users:invite')
+  @ApiOperation({
+    summary: 'Invite a new user (school-domain-validated)',
+    description:
+      'Creates a new user with status INVITED and no password (they will authenticate via Google). ' +
+      'School admins must provide a schoolId from their own assigned schools. ' +
+      'The email domain is checked against the school\'s configured domains in school_domains. ' +
+      'Schools with no configured domains do NOT restrict by domain (no domain config = no restriction). ' +
+      'Duplicate emails across the entire platform are rejected with 409.',
+  })
+  @ApiResponse({ status: 201, description: 'User invited successfully', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'Invalid input, unknown role, or email domain not allowed for school' })
+  @ApiResponse({ status: 409, description: 'Email already in use' })
+  async inviteUser(
+    @Body() dto: InviteUserDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.inviteService.invite(dto, actor, auditContextFromRequest(req));
   }
 
   @Post('users')
