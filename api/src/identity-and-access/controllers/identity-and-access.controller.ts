@@ -102,8 +102,12 @@ export class IdentityAndAccessController {
   @RequirePermission('schools:create')
   @ApiOperation({ summary: 'Register a new school (platform admin)' })
   @ApiResponse({ status: 201, description: 'School registered', type: SchoolEntity })
-  async createSchool(@Body() dto: CreateSchoolDto): Promise<SchoolEntity> {
-    return this.identityService.createSchool(dto);
+  async createSchool(
+    @Body() dto: CreateSchoolDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<SchoolEntity> {
+    return this.identityService.createSchool(dto, actor, auditContextFromRequest(req));
   }
 
   @Get('roles')

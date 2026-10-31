@@ -23,10 +23,10 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         scope: 'platform',
         schoolId: 'school-1',
         groupId: null,
-        permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update'],
+        permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create'],
       },
     ],
-    permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update'],
+    permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create'],
     schoolIds: ['school-1'],
     isPlatformAdmin: true,
     role: 'PLATFORM_ADMIN',
@@ -69,6 +69,20 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           }
           return Promise.resolve(null);
         }),
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockImplementation(({ data }: { data: any }) =>
+          Promise.resolve({
+            ...data,
+            id: data.id || 'generated-school-id',
+            status: data.status || 'active',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            domains: data.domains?.create || [],
+          }),
+        ),
+      },
+      schoolDomain: {
+        findFirst: vi.fn().mockResolvedValue(null),
       },
       role: {
         findUnique: vi.fn().mockImplementation(({ where }: { where: { name: string } }) => {
@@ -305,5 +319,101 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
-});
+  describe('createSchool - Acceptance criteria (Issue #27)', () => {
+    it('creates a school with status active when called by platform admin', async () => {
+      const dto = {
+        name: 'Alpha Engineering Academy',
+        settings: { maxStudents: 500 },
+      };
 
+      const result = await service.createSchool(dto, platformAdmin, fakeContext);
+
+      expect(result).toBeDefined();
+      expect(result.name).toBe('Alpha Engineering Academy');
+      expect(result.status).toBe('active');
+      expect(result.settings).toEqual({ maxStudents: 500 });
+      expect(mockPrisma.school.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            name: 'Alpha Engineering Academy',
+            status: 'active',
+            settings: { maxStudents: 500 },
+          }),
+        }),
+      );
+    });
+
+    it('preserves provided status active and trims whitespace from school name', async () => {
+      const dto = {
+        name: '   Beta Science College   ',
+        status: 'active',
+      };
+
+      const result = await service.createSchool(dto, platformAdmin, fakeContext);
+
+      expect(result.name).toBe('Beta Science College');
+      expect(result.status).toBe('active');
+      expect(mockPrisma.school.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            name: 'Beta Science College',
+            status: 'active',
+          }),
+        }),
+      );
+    });
+
+    it('rejects duplicate school name with 409 ConflictException', async () => {
+      mockPrisma.school.findFirst.mockResolvedValueOnce({
+        id: 'existing-school-id',
+        name: 'Alpha Engineering Academy',
+      });
+
+      const dto = {
+        name: 'Alpha Engineering Academy',
+      };
+
+      await expect(service.createSchool(dto, platformAdmin, fakeContext)).rejects.toThrow(
+        new ConflictException("School with name 'Alpha Engineering Academy' already exists"),
+      );
+    });
+
+    it('rejects school creation by non-platform admin with 403 ForbiddenException', async () => {
+      const dto = {
+        name: 'Unauthorized School',
+      };
+
+      await expect(service.createSchool(dto, schoolAdmin, fakeContext)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      await expect(service.createSchool(dto, schoolAdmin, fakeContext)).rejects.toThrow(
+        'Only a platform administrator can create a school',
+      );
+    });
+
+    it('rejects empty or whitespace-only school name with 400 BadRequestException', async () => {
+      await expect(service.createSchool({ name: '' }, platformAdmin, fakeContext)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(service.createSchool({ name: '   ' }, platformAdmin, fakeContext)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('rejects duplicate school domain with 409 ConflictException', async () => {
+      mockPrisma.schoolDomain.findFirst.mockResolvedValueOnce({
+        id: 'existing-domain-id',
+        domain: 'alpha.edu',
+      });
+
+      const dto = {
+        name: 'Unique School Name',
+        allowedDomains: 'alpha.edu',
+      };
+
+      await expect(service.createSchool(dto, platformAdmin, fakeContext)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+  });
+});

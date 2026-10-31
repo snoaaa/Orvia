@@ -268,7 +268,37 @@ export class IdentityAndAccessService {
     return schools.map((s) => SchoolMapper.toEntity(s));
   }
 
-  async createSchool(dto: CreateSchoolDto): Promise<SchoolEntity> {
+  /**
+   * Register/create a new school (Issue #27).
+   *
+   * Enforces:
+   *  - Platform administrator restriction (actor must hold schools:create platform-wide).
+   *  - Required fields and non-empty name.
+   *  - Unique school name validation: rejects duplicates with 409 Conflict.
+   *  - Default status 'active'.
+   *  - Optional domain validation against existing school domains if domains are provided.
+   */
+  async createSchool(
+    dto: CreateSchoolDto,
+    actor?: AuthenticatedUser,
+    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SchoolEntity> {
+    if (actor && schoolsWithPermission(actor, 'schools:create') !== 'all') {
+      throw new ForbiddenException('Only a platform administrator can create a school');
+    }
+
+    const trimmedName = dto.name?.trim();
+    if (!trimmedName) {
+      throw new BadRequestException('School name is required and cannot be empty');
+    }
+
+    const existingByName = await this.prisma.school.findFirst({
+      where: { name: trimmedName },
+    });
+    if (existingByName) {
+      throw new ConflictException(`School with name '${trimmedName}' already exists`);
+    }
+
     const id = randomUUID();
     const domainList = (dto.allowedDomains || '')
       .split(',')
@@ -284,15 +314,21 @@ export class IdentityAndAccessService {
       }
     }
 
+    const status = dto.status?.trim() || 'active';
+
     const created = await this.prisma.school.create({
       data: {
         id,
-        name: dto.name.trim(),
+        name: trimmedName,
+        status,
         allowedDomains: dto.allowedDomains ? dto.allowedDomains.trim() : '',
         settings: (dto.settings as object) || null,
-        domains: {
-          create: domainList.map((domain) => ({ domain })),
-        },
+        domains:
+          domainList.length > 0
+            ? {
+                create: domainList.map((domain) => ({ domain })),
+              }
+            : undefined,
       },
       include: { domains: true },
     });
