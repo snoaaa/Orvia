@@ -23,10 +23,10 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         scope: 'platform',
         schoolId: 'school-1',
         groupId: null,
-        permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create'],
+        permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read'],
       },
     ],
-    permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create'],
+    permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read'],
     schoolIds: ['school-1'],
     isPlatformAdmin: true,
     role: 'PLATFORM_ADMIN',
@@ -45,10 +45,10 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         scope: 'school',
         schoolId: 'school-1',
         groupId: null,
-        permissions: ['users:invite', 'users:read'],
+        permissions: ['users:invite', 'users:read', 'schools:read'],
       },
     ],
-    permissions: ['users:invite', 'users:read'],
+    permissions: ['users:invite', 'users:read', 'schools:read'],
     schoolIds: ['school-1'],
     isPlatformAdmin: false,
     role: 'SCHOOL_ADMIN',
@@ -80,6 +80,29 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             domains: data.domains?.create || [],
           }),
         ),
+        count: vi.fn().mockResolvedValue(2),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'school-1',
+            name: 'School school-1',
+            status: 'active',
+            allowedDomains: '',
+            settings: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            domains: [],
+          },
+          {
+            id: 'school-2',
+            name: 'School school-2',
+            status: 'active',
+            allowedDomains: '',
+            settings: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            domains: [],
+          },
+        ]),
       },
       schoolDomain: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -414,6 +437,76 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       await expect(service.createSchool(dto, platformAdmin, fakeContext)).rejects.toBeInstanceOf(
         ConflictException,
       );
+    });
+  });
+  describe('findAllSchools & findSchoolById - Acceptance criteria (Issue #29)', () => {
+    describe('findAllSchools', () => {
+      it('allows platform admin to see all schools with pagination', async () => {
+        const query = { page: 1, limit: 10, status: 'active', search: 'School' };
+        const result = await service.findAllSchools(platformAdmin, query);
+
+        expect(result).toBeDefined();
+        expect(result.data.length).toBe(2);
+        expect(result.total).toBe(2);
+        expect(result.page).toBe(1);
+        expect(result.limit).toBe(10);
+        expect(result.totalPages).toBe(1);
+
+        expect(mockPrisma.school.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              status: 'active',
+              name: { contains: 'School' },
+            }),
+            skip: 0,
+            take: 10,
+          }),
+        );
+      });
+
+      it('scopes school list query to school admin assigned schools', async () => {
+        await service.findAllSchools(schoolAdmin, { page: 1, limit: 10 });
+
+        expect(mockPrisma.school.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              id: { in: ['school-1'] },
+            }),
+          }),
+        );
+      });
+    });
+
+    describe('findSchoolById', () => {
+      it('allows platform admin to read any school by ID', async () => {
+        const result = await service.findSchoolById('school-2', platformAdmin);
+
+        expect(result).toBeDefined();
+        expect(result.id).toBe('school-2');
+        expect(result.name).toBe('School school-2');
+      });
+
+      it('allows school admin to read their own assigned school', async () => {
+        const result = await service.findSchoolById('school-1', schoolAdmin);
+
+        expect(result).toBeDefined();
+        expect(result.id).toBe('school-1');
+      });
+
+      it('rejects school admin reading another school with 403 Forbidden', async () => {
+        await expect(service.findSchoolById('school-2', schoolAdmin)).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        await expect(service.findSchoolById('school-2', schoolAdmin)).rejects.toThrow(
+          'You do not have access to this school',
+        );
+      });
+
+      it('throws 404 NotFoundException if school does not exist', async () => {
+        await expect(service.findSchoolById('school-nonexistent', platformAdmin)).rejects.toBeInstanceOf(
+          NotFoundException,
+        );
+      });
     });
   });
 });

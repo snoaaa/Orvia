@@ -3,9 +3,9 @@ import type { Request } from 'express';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { SchoolsController } from './schools.controller.js';
 import type { IdentityAndAccessService } from '../services/identity-and-access.service.js';
-import { SchoolEntity } from '../entities/index.js';
+import { PaginatedSchoolsEntity, SchoolEntity } from '../entities/index.js';
 
-describe('SchoolsController (Issue #27)', () => {
+describe('SchoolsController (Issue #27 & #29)', () => {
   const platformAdmin: AuthenticatedUser = {
     id: 'platform-admin-id',
     email: 'admin@wamdp.platform',
@@ -69,5 +69,66 @@ describe('SchoolsController (Issue #27)', () => {
     );
     expect(result).toBe(mockCreated);
     expect(result.status).toBe('active');
+  });
+
+  it('delegates paginated school listing to IdentityAndAccessService', async () => {
+    const mockPaginated = new PaginatedSchoolsEntity({
+      data: [
+        new SchoolEntity({
+          id: 'school-1',
+          name: 'School 1',
+          status: 'active',
+          allowedDomains: '',
+          settings: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 10,
+      totalPages: 1,
+    });
+
+    const findAllSchoolsMock = vi.fn().mockResolvedValue(mockPaginated);
+    const mockIdentityService = {
+      findAllSchools: findAllSchoolsMock,
+    } as unknown as IdentityAndAccessService;
+
+    const controller = new SchoolsController(mockIdentityService);
+    const query = { page: 1, limit: 10, status: 'active', search: 'School' };
+
+    const result = await controller.getSchools(query, platformAdmin);
+
+    expect(findAllSchoolsMock).toHaveBeenCalledWith(platformAdmin, query);
+    expect(result).toBe(mockPaginated);
+    expect(result.data.length).toBe(1);
+    expect(result.total).toBe(1);
+  });
+
+  it('delegates viewing single school by ID to IdentityAndAccessService', async () => {
+    const mockSchool = new SchoolEntity({
+      id: '00000000-0000-0000-0000-000000000001',
+      name: 'WAMDP Platform Administration',
+      status: 'active',
+      allowedDomains: '',
+      settings: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const findSchoolByIdMock = vi.fn().mockResolvedValue(mockSchool);
+    const mockIdentityService = {
+      findSchoolById: findSchoolByIdMock,
+    } as unknown as IdentityAndAccessService;
+
+    const controller = new SchoolsController(mockIdentityService);
+    const schoolId = '00000000-0000-0000-0000-000000000001';
+
+    const result = await controller.getSchoolById(schoolId, platformAdmin);
+
+    expect(findSchoolByIdMock).toHaveBeenCalledWith(schoolId, platformAdmin);
+    expect(result).toBe(mockSchool);
+    expect(result.id).toBe(schoolId);
   });
 });

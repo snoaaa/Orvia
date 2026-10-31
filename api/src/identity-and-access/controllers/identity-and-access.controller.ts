@@ -95,7 +95,22 @@ export class IdentityAndAccessController {
   @ApiOperation({ summary: 'List schools (school admins only see their own)' })
   @ApiResponse({ status: 200, description: 'List of schools', type: [SchoolEntity] })
   async getSchools(@CurrentUser() actor: AuthenticatedUser): Promise<SchoolEntity[]> {
-    return this.identityService.findAllSchools(actor);
+    const paginated = await this.identityService.findAllSchools(actor, { limit: 100 });
+    return paginated.data;
+  }
+
+  @Get('schools/:id')
+  @RequirePermission('schools:read')
+  @ApiOperation({ summary: 'Get school by ID' })
+  @ApiParam({ name: 'id', description: 'School UUID' })
+  @ApiResponse({ status: 200, description: 'School retrieved', type: SchoolEntity })
+  @ApiResponse({ status: 403, description: 'Forbidden: school admin cannot read another school' })
+  @ApiResponse({ status: 404, description: 'School not found' })
+  async getSchoolById(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SchoolEntity> {
+    return this.identityService.findSchoolById(id, actor);
   }
 
   @Post('schools')
