@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { AuditModule } from './audit/audit.module.js';
-import { appConfig, databaseConfig, swaggerEnvConfig } from './config/index.js';
+import { AuthModule } from './auth/auth.module.js';
+import { appConfig, authConfig, databaseConfig, swaggerEnvConfig } from './config/index.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
 import { PrismaModule } from './database/prisma.module.js';
 import { DocumentsModule } from './documents/documents.module.js';
@@ -15,9 +17,11 @@ import { RagPerformanceModule } from './rag-performance/rag-performance.module.j
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, databaseConfig, swaggerEnvConfig],
+      load: [appConfig, authConfig, databaseConfig, swaggerEnvConfig],
     }),
+    ScheduleModule.forRoot(),
     PrismaModule,
+    AuthModule,
     IdentityAndAccessModule,
     DocumentsModule,
     ConversationsModule,

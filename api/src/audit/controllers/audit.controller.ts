@@ -1,26 +1,36 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { CreateAuditEventDto, QueryAuditEventsDto } from '../dto/index.js';
+import { QueryAuditEventsDto } from '../dto/index.js';
+import { RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import { AuditEventEntity } from '../entities/index.js';
-import { AuditService } from '../services/audit.service.js';
+import { AuditQueryService } from '../services/audit-query.service.js';
 
+/**
+ * Read-only access to the audit trail. There is deliberately no POST/PATCH/DELETE:
+ * events are written by the backend through AuditService, never by clients.
+ */
 @ApiTags('Audit Trail')
 @ApiBearerAuth('bearer-jwt')
+@RequirePermission('audit:read')
 @Controller('audit')
 export class AuditController {
-  constructor(private readonly auditService: AuditService) {}
+  constructor(private readonly auditQuery: AuditQueryService) {}
 
   @Get('events')
-  @ApiOperation({ summary: 'Query append-only audit trail logs' })
+  @ApiOperation({ summary: 'List audit events, newest first' })
   @ApiResponse({ status: 200, description: 'Audit events list', type: [AuditEventEntity] })
   async getEvents(@Query() query: QueryAuditEventsDto): Promise<AuditEventEntity[]> {
-    return this.auditService.findAll(query);
+    return this.auditQuery.findAll(query);
   }
 
-  @Post('events')
-  @ApiOperation({ summary: 'Append a verified event to the audit trail' })
-  @ApiResponse({ status: 201, description: 'Audit event appended', type: AuditEventEntity })
-  async createEvent(@Body() dto: CreateAuditEventDto): Promise<AuditEventEntity> {
-    return this.auditService.logEvent(dto);
+  @Get('verify')
+  @ApiOperation({
+    summary: 'Verify the audit hash chain',
+    description:
+      'Recomputes every hash in insertion order. `valid: false` means a row was edited, removed or inserted outside the application.',
+  })
+  @ApiResponse({ status: 200, description: 'Verification result' })
+  async verify() {
+    return this.auditQuery.verifyChain();
   }
 }
