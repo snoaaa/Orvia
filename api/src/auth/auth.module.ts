@@ -41,10 +41,9 @@ import { TokenService } from './services/token.service.js';
     SessionService,
     SessionCleanupService,
     AdminLoginService,
-    GoogleLoginService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
-  exports: [TokenService, AuthUserService, SessionService, AdminLoginService, GoogleLoginService],
+  exports: [TokenService, AuthUserService, SessionService, AdminLoginService],
 })
 export class AuthModule {}
