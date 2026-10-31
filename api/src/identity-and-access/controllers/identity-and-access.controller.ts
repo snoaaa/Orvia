@@ -4,7 +4,7 @@ import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
+import { CreateRoleDto, CreateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import { PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
@@ -32,6 +32,36 @@ export class IdentityAndAccessController {
   @ApiResponse({ status: 404, description: 'User not found' })
   async getUserById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<UserEntity> {
     return this.identityService.findUserById(id, actor);
+  }
+
+  /**
+   * Minimal user invitation endpoint (Issue #9).
+   *
+   * Creates an invited user without a password (authenticated via institutional Google OAuth).
+   * Validates the email domain against the school's configured domains in `school_domains`.
+   * Schools with no configured domains permit any domain.
+   */
+  @Post('users/invite')
+  @RequirePermission('users:invite')
+  @ApiOperation({
+    summary: 'Invite a new user (school-domain-validated)',
+    description:
+      'Creates a new user with status INVITED and no password (they will authenticate via Google). ' +
+      'School admins must provide a schoolId from their own assigned schools. ' +
+      "The email domain is checked against the school's configured domains in school_domains. " +
+      'Schools with no configured domains do NOT restrict by domain (no domain config = no restriction). ' +
+      'Duplicate emails across the entire platform are rejected with 409.',
+  })
+  @ApiResponse({ status: 201, description: 'User invited successfully', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'Invalid input, unknown role, or email domain not allowed for school' })
+  @ApiResponse({ status: 403, description: 'Missing permission or not authorized for school' })
+  @ApiResponse({ status: 409, description: 'Email already in use' })
+  async inviteUser(
+    @Body() dto: InviteUserDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.identityService.inviteUser(dto, actor, auditContextFromRequest(req));
   }
 
   @Post('users')
