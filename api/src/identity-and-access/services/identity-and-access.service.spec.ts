@@ -23,10 +23,10 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         scope: 'platform',
         schoolId: 'school-1',
         groupId: null,
-        permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read'],
+        permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read', 'schools:update'],
       },
     ],
-    permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read'],
+    permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read', 'schools:update'],
     schoolIds: ['school-1'],
     isPlatformAdmin: true,
     role: 'PLATFORM_ADMIN',
@@ -45,10 +45,10 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         scope: 'school',
         schoolId: 'school-1',
         groupId: null,
-        permissions: ['users:invite', 'users:read', 'schools:read'],
+        permissions: ['users:invite', 'users:read', 'schools:read', 'schools:update'],
       },
     ],
-    permissions: ['users:invite', 'users:read', 'schools:read'],
+    permissions: ['users:invite', 'users:read', 'schools:read', 'schools:update'],
     schoolIds: ['school-1'],
     isPlatformAdmin: false,
     role: 'SCHOOL_ADMIN',
@@ -103,6 +103,18 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             domains: [],
           },
         ]),
+        update: vi.fn().mockImplementation(({ where, data }: { where: { id: string }; data: any }) =>
+          Promise.resolve({
+            id: where.id,
+            name: data.name ?? `School ${where.id}`,
+            status: 'active',
+            allowedDomains: '',
+            settings: data.settings ?? null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            domains: [],
+          }),
+        ),
       },
       schoolDomain: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -507,6 +519,101 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           NotFoundException,
         );
       });
+    });
+  });
+  describe('updateSchool - Acceptance criteria (Issue #30)', () => {
+    it('allows platform admin to update any school name and settings', async () => {
+      const dto = {
+        name: 'Updated School 2',
+        settings: { maxUsers: 1500 },
+      };
+
+      const result = await service.updateSchool('school-2', dto, platformAdmin, fakeContext);
+
+      expect(result).toBeDefined();
+      expect(result.id).toBe('school-2');
+      expect(result.name).toBe('Updated School 2');
+      expect(result.settings).toEqual({ maxUsers: 1500 });
+      expect(mockPrisma.school.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'school-2' },
+          data: expect.objectContaining({
+            name: 'Updated School 2',
+            settings: { maxUsers: 1500 },
+          }),
+        }),
+      );
+    });
+
+    it('allows school admin to update their own assigned school', async () => {
+      const dto = {
+        settings: { maxUsers: 800 },
+      };
+
+      const result = await service.updateSchool('school-1', dto, schoolAdmin, fakeContext);
+
+      expect(result).toBeDefined();
+      expect(result.id).toBe('school-1');
+      expect(result.settings).toEqual({ maxUsers: 800 });
+    });
+
+    it('rejects school admin updating another school with 403 ForbiddenException', async () => {
+      const dto = {
+        name: 'Hacked Name',
+      };
+
+      await expect(service.updateSchool('school-2', dto, schoolAdmin, fakeContext)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      await expect(service.updateSchool('school-2', dto, schoolAdmin, fakeContext)).rejects.toThrow(
+        'You do not have access to this school',
+      );
+    });
+
+    it('rejects duplicate school name if already used by another school with 409 ConflictException', async () => {
+      mockPrisma.school.findFirst.mockResolvedValueOnce({
+        id: 'different-school-id',
+        name: 'Conflicting School Name',
+      });
+
+      const dto = {
+        name: 'Conflicting School Name',
+      };
+
+      await expect(service.updateSchool('school-1', dto, schoolAdmin, fakeContext)).rejects.toThrow(
+        new ConflictException("School with name 'Conflicting School Name' already exists"),
+      );
+    });
+
+    it('allows school to retain its current name without throwing conflict', async () => {
+      mockPrisma.school.findFirst.mockResolvedValueOnce({
+        id: 'school-1',
+        name: 'School school-1',
+      });
+
+      const dto = {
+        name: 'School school-1',
+        settings: { updatedSetting: true },
+      };
+
+      const result = await service.updateSchool('school-1', dto, schoolAdmin, fakeContext);
+      expect(result).toBeDefined();
+      expect(result.id).toBe('school-1');
+    });
+
+    it('rejects empty or whitespace-only school name with 400 BadRequestException', async () => {
+      await expect(service.updateSchool('school-1', { name: '' }, schoolAdmin, fakeContext)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(service.updateSchool('school-1', { name: '   ' }, schoolAdmin, fakeContext)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('throws 404 NotFoundException if target school does not exist', async () => {
+      await expect(service.updateSchool('school-nonexistent', { name: 'Name' }, platformAdmin, fakeContext)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

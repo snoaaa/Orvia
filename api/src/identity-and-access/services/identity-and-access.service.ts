@@ -9,7 +9,7 @@ import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateRoleDto, CreateSchoolDto, ListSchoolsQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import type { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import {
   PaginatedSchoolsEntity,
   PermissionHolderEntity,
@@ -329,6 +329,56 @@ export class IdentityAndAccessService {
       throw new NotFoundException(`School with ID '${id}' not found`);
     }
     return SchoolMapper.toEntity(school);
+  }
+
+  /**
+   * Update school parameters (name, settings) (Issue #30).
+   *
+   * Scoping:
+   *  - Platform administrator may edit any school.
+   *  - School administrator can only edit their own school (throws 403 Forbidden).
+   *  - Rejects duplicate names across institutions with 409 Conflict.
+   *  - Prisma @updatedAt automatically updates updated_at timestamp.
+   */
+  async updateSchool(
+    id: string,
+    dto: UpdateSchoolDto,
+    actor: AuthenticatedUser,
+    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SchoolEntity> {
+    assertSchoolAccess(actor, 'schools:update', id);
+
+    const school = await this.prisma.school.findUnique({
+      where: { id },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID '${id}' not found`);
+    }
+
+    if (dto.name !== undefined) {
+      const trimmedName = dto.name.trim();
+      if (!trimmedName) {
+        throw new BadRequestException('School name cannot be empty');
+      }
+
+      const duplicate = await this.prisma.school.findFirst({
+        where: { name: trimmedName },
+      });
+      if (duplicate && duplicate.id !== id) {
+        throw new ConflictException(`School with name '${trimmedName}' already exists`);
+      }
+    }
+
+    const updated = await this.prisma.school.update({
+      where: { id },
+      data: {
+        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+        ...(dto.settings !== undefined ? { settings: dto.settings as object } : {}),
+      },
+      include: { domains: true },
+    });
+
+    return SchoolMapper.toEntity(updated);
   }
 
   /**

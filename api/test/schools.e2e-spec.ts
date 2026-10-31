@@ -335,4 +335,115 @@ describe('Schools (e2e) - Create, List and View (Issues #27 & #29)', () => {
         .expect(401);
     });
   });
+
+  describe('PATCH /schools/:id (Issue #30 - Update School, Scoping & Validation)', () => {
+    it('allows platform admin to update school name and settings and updates updated_at', async () => {
+      // 1. Fetch initial school state
+      const initial = await prisma.school.findUniqueOrThrow({ where: { id: anotherSchoolId } });
+
+      // Small delay to ensure timestamp tick
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const updatedName = `${testPrefix}-updated-by-platform-admin`;
+      const res = await request(app.getHttpServer())
+        .patch(`/schools/${anotherSchoolId}`)
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .send({
+          name: updatedName,
+          settings: { maxUsers: 5000, libraryAccess: true },
+        })
+        .expect(200);
+
+      expect(res.body.id).toBe(anotherSchoolId);
+      expect(res.body.name).toBe(updatedName);
+      expect(res.body.settings).toEqual({ maxUsers: 5000, libraryAccess: true });
+
+      // Verify updated_at changes
+      const after = await prisma.school.findUniqueOrThrow({ where: { id: anotherSchoolId } });
+      expect(new Date(after.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(initial.updatedAt).getTime());
+    });
+
+    it('allows school admin to edit only their own assigned school', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/schools/${tempSchoolId}`)
+        .set('Authorization', `Bearer ${schoolAdminToken}`)
+        .send({
+          settings: { maxUsers: 750, quota: 'standard' },
+        })
+        .expect(200);
+
+      expect(res.body.id).toBe(tempSchoolId);
+      expect(res.body.settings).toEqual({ maxUsers: 750, quota: 'standard' });
+    });
+
+    it('rejects school admin editing another school with 403 Forbidden', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/schools/${anotherSchoolId}`)
+        .set('Authorization', `Bearer ${schoolAdminToken}`)
+        .send({
+          name: 'Unauthorized School Edit',
+        })
+        .expect(403);
+
+      expect(res.body.message).toContain('You do not have access to this school');
+    });
+
+    it('rejects invalid settings with a clear 400 Bad Request error', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/schools/${tempSchoolId}`)
+        .set('Authorization', `Bearer ${schoolAdminToken}`)
+        .send({
+          settings: 'invalid-string-settings',
+        })
+        .expect(400);
+
+      expect(JSON.stringify(res.body.message)).toContain('settings must be an object');
+    });
+
+    it('rejects empty school name with 400 Bad Request', async () => {
+      await request(app.getHttpServer())
+        .patch(`/schools/${tempSchoolId}`)
+        .set('Authorization', `Bearer ${schoolAdminToken}`)
+        .send({ name: '' })
+        .expect(400);
+    });
+
+    it('rejects duplicate school name when updated to an existing school name with 409 Conflict', async () => {
+      const existingSchool = await prisma.school.findUniqueOrThrow({ where: { id: anotherSchoolId } });
+
+      const res = await request(app.getHttpServer())
+        .patch(`/schools/${tempSchoolId}`)
+        .set('Authorization', `Bearer ${schoolAdminToken}`)
+        .send({ name: existingSchool.name })
+        .expect(409);
+
+      expect(res.body.message).toContain(`School with name '${existingSchool.name}' already exists`);
+    });
+
+    it('returns 404 Not Found for non-existent school ID when requested by platform admin', async () => {
+      const nonExistentUuid = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+      const res = await request(app.getHttpServer())
+        .patch(`/schools/${nonExistentUuid}`)
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .send({ name: 'Does Not Matter' })
+        .expect(404);
+
+      expect(res.body.message).toContain(`School with ID '${nonExistentUuid}' not found`);
+    });
+
+    it('rejects student editing a school with 403 Forbidden', async () => {
+      await request(app.getHttpServer())
+        .patch(`/schools/${tempSchoolId}`)
+        .set('Authorization', `Bearer ${studentToken}`)
+        .send({ settings: { maxUsers: 10 } })
+        .expect(403);
+    });
+
+    it('rejects unauthenticated request to edit school with 401 Unauthorized', async () => {
+      await request(app.getHttpServer())
+        .patch(`/schools/${tempSchoolId}`)
+        .send({ settings: { maxUsers: 10 } })
+        .expect(401);
+    });
+  });
 });

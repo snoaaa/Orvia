@@ -1,10 +1,10 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateSchoolDto, ListSchoolsQueryDto } from '../dto/index.js';
+import { CreateSchoolDto, ListSchoolsQueryDto, UpdateSchoolDto } from '../dto/index.js';
 import { PaginatedSchoolsEntity, SchoolEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
@@ -86,5 +86,30 @@ export class SchoolsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<SchoolEntity> {
     return this.identityService.findSchoolById(id, actor);
+  }
+
+  @Patch(':id')
+  @RequirePermission('schools:update')
+  @ApiOperation({
+    summary: 'Update school details and settings (Section 4.5)',
+    description:
+      'Updates school parameters (name, settings) (Issue #30). ' +
+      'Platform administrators can edit any school; school administrators can only edit their own school. ' +
+      'Enforces unique school name and validates settings object.',
+  })
+  @ApiParam({ name: 'id', description: 'School UUID' })
+  @ApiResponse({ status: 200, description: 'School updated successfully', type: SchoolEntity })
+  @ApiResponse({ status: 400, description: 'Validation failed: invalid settings format or empty name' })
+  @ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })
+  @ApiResponse({ status: 403, description: 'Forbidden: school admin cannot edit another school' })
+  @ApiResponse({ status: 404, description: 'School not found' })
+  @ApiResponse({ status: 409, description: 'A school with this name already exists' })
+  async updateSchool(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateSchoolDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<SchoolEntity> {
+    return this.identityService.updateSchool(id, dto, actor, auditContextFromRequest(req));
   }
 }
