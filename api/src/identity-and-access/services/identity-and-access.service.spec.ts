@@ -23,10 +23,10 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         scope: 'platform',
         schoolId: 'school-1',
         groupId: null,
-        permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read', 'schools:update'],
+        permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read', 'schools:update', 'schools:delete'],
       },
     ],
-    permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read', 'schools:update'],
+    permissions: ['users:invite', 'users:assign_role', 'users:read', 'users:update', 'schools:create', 'schools:read', 'schools:update', 'schools:delete'],
     schoolIds: ['school-1'],
     isPlatformAdmin: true,
     role: 'PLATFORM_ADMIN',
@@ -614,6 +614,68 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       await expect(service.updateSchool('school-nonexistent', { name: 'Name' }, platformAdmin, fakeContext)).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  describe('deactivateSchool & reactivateSchool - Acceptance criteria (Issue #31)', () => {
+    describe('deactivateSchool', () => {
+      it('allows platform admin to deactivate a school (sets status to deactivated)', async () => {
+        const result = await service.deactivateSchool('school-1', platformAdmin, fakeContext);
+
+        expect(result).toBeDefined();
+        expect(result.id).toBe('school-1');
+        expect(mockPrisma.school.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: 'school-1' },
+            data: { status: 'deactivated' },
+          }),
+        );
+      });
+
+      it('rejects school admin deactivating a school with 403 ForbiddenException', async () => {
+        await expect(service.deactivateSchool('school-1', schoolAdmin, fakeContext)).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        await expect(service.deactivateSchool('school-1', schoolAdmin, fakeContext)).rejects.toThrow(
+          'Only platform administrators may deactivate schools',
+        );
+      });
+
+      it('throws 404 NotFoundException if school to deactivate does not exist', async () => {
+        await expect(service.deactivateSchool('school-nonexistent', platformAdmin, fakeContext)).rejects.toBeInstanceOf(
+          NotFoundException,
+        );
+      });
+    });
+
+    describe('reactivateSchool', () => {
+      it('allows platform admin to reactivate a school (sets status to active)', async () => {
+        const result = await service.reactivateSchool('school-1', platformAdmin, fakeContext);
+
+        expect(result).toBeDefined();
+        expect(result.id).toBe('school-1');
+        expect(mockPrisma.school.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: 'school-1' },
+            data: { status: 'active' },
+          }),
+        );
+      });
+
+      it('rejects school admin reactivating a school with 403 ForbiddenException', async () => {
+        await expect(service.reactivateSchool('school-1', schoolAdmin, fakeContext)).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        await expect(service.reactivateSchool('school-1', schoolAdmin, fakeContext)).rejects.toThrow(
+          'Only platform administrators may reactivate schools',
+        );
+      });
+
+      it('throws 404 NotFoundException if school to reactivate does not exist', async () => {
+        await expect(service.reactivateSchool('school-nonexistent', platformAdmin, fakeContext)).rejects.toBeInstanceOf(
+          NotFoundException,
+        );
+      });
     });
   });
 });

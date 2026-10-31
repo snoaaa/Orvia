@@ -20,6 +20,7 @@ export type LoginFailureReason =
   | 'invalid_credentials'
   | 'account_suspended'
   | 'account_locked'
+  | 'school_deactivated'
   | 'not_admin'
   | 'invalid_google_token'
   | 'domain_not_allowed'
@@ -31,6 +32,7 @@ export type TokenRefreshFailureReason =
   | 'revoked'
   | 'reused'
   | 'user_suspended'
+  | 'school_deactivated'
   | 'session_not_found';
 
 export type SessionRevocationReason = 'admin_action' | 'user_suspended' | 'token_reuse' | 'user_request';

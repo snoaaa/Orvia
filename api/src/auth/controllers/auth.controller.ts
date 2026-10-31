@@ -82,7 +82,7 @@ export class AuthController {
   })
   @ApiResponse({ status: 200, description: 'New access and refresh tokens', type: TokenPairEntity })
   @ApiResponse({ status: 401, description: 'Invalid, expired, revoked or reused refresh token' })
-  @ApiResponse({ status: 403, description: 'Account suspended' })
+  @ApiResponse({ status: 403, description: 'Account suspended or school deactivated' })
   async refresh(@Body() dto: RefreshTokenDto, @Req() req: Request): Promise<TokenPairEntity> {
     return this.sessions.refresh(dto.refreshToken, auditContextFromRequest(req));
   }

@@ -17,10 +17,10 @@ describe('SchoolsController (Issue #27, #29, #30)', () => {
         scope: 'platform',
         schoolId: '00000000-0000-0000-0000-000000000001',
         groupId: null,
-        permissions: ['schools:create', 'schools:read', 'schools:update'],
+        permissions: ['schools:create', 'schools:read', 'schools:update', 'schools:delete'],
       },
     ],
-    permissions: ['schools:create', 'schools:read', 'schools:update'],
+    permissions: ['schools:create', 'schools:read', 'schools:update', 'schools:delete'],
     schoolIds: ['00000000-0000-0000-0000-000000000001'],
     isPlatformAdmin: true,
     role: 'PLATFORM_ADMIN',
@@ -168,5 +168,71 @@ describe('SchoolsController (Issue #27, #29, #30)', () => {
     );
     expect(result).toBe(mockUpdated);
     expect(result.name).toBe('WAMDP Platform Administration (Updated)');
+  });
+
+  it('delegates school deactivation to IdentityAndAccessService with actor and audit context', async () => {
+    const mockDeactivated = new SchoolEntity({
+      id: '00000000-0000-0000-0000-000000000001',
+      name: 'WAMDP Platform Administration',
+      status: 'deactivated',
+      allowedDomains: '',
+      settings: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const deactivateSchoolMock = vi.fn().mockResolvedValue(mockDeactivated);
+    const mockIdentityService = {
+      deactivateSchool: deactivateSchoolMock,
+    } as unknown as IdentityAndAccessService;
+
+    const controller = new SchoolsController(mockIdentityService);
+    const schoolId = '00000000-0000-0000-0000-000000000001';
+
+    const result = await controller.deactivateSchool(schoolId, platformAdmin, fakeReq);
+
+    expect(deactivateSchoolMock).toHaveBeenCalledWith(
+      schoolId,
+      platformAdmin,
+      expect.objectContaining({
+        ip: '127.0.0.1',
+        userAgent: 'vitest-agent',
+      }),
+    );
+    expect(result).toBe(mockDeactivated);
+    expect(result.status).toBe('deactivated');
+  });
+
+  it('delegates school reactivation to IdentityAndAccessService with actor and audit context', async () => {
+    const mockReactivated = new SchoolEntity({
+      id: '00000000-0000-0000-0000-000000000001',
+      name: 'WAMDP Platform Administration',
+      status: 'active',
+      allowedDomains: '',
+      settings: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const reactivateSchoolMock = vi.fn().mockResolvedValue(mockReactivated);
+    const mockIdentityService = {
+      reactivateSchool: reactivateSchoolMock,
+    } as unknown as IdentityAndAccessService;
+
+    const controller = new SchoolsController(mockIdentityService);
+    const schoolId = '00000000-0000-0000-0000-000000000001';
+
+    const result = await controller.reactivateSchool(schoolId, platformAdmin, fakeReq);
+
+    expect(reactivateSchoolMock).toHaveBeenCalledWith(
+      schoolId,
+      platformAdmin,
+      expect.objectContaining({
+        ip: '127.0.0.1',
+        userAgent: 'vitest-agent',
+      }),
+    );
+    expect(result).toBe(mockReactivated);
+    expect(result.status).toBe('active');
   });
 });

@@ -139,6 +139,32 @@ export class IdentityAndAccessController {
     return this.identityService.updateSchool(id, dto, actor, auditContextFromRequest(req));
   }
 
+  @Patch('schools/:id/deactivate')
+  @RequirePermission('schools:delete')
+  @ApiOperation({ summary: 'Deactivate a school (platform admin)' })
+  @ApiParam({ name: 'id', description: 'School UUID' })
+  @ApiResponse({ status: 200, description: 'School deactivated', type: SchoolEntity })
+  async deactivateSchool(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<SchoolEntity> {
+    return this.identityService.deactivateSchool(id, actor, auditContextFromRequest(req));
+  }
+
+  @Patch('schools/:id/reactivate')
+  @RequirePermission('schools:delete')
+  @ApiOperation({ summary: 'Reactivate a school (platform admin)' })
+  @ApiParam({ name: 'id', description: 'School UUID' })
+  @ApiResponse({ status: 200, description: 'School reactivated', type: SchoolEntity })
+  async reactivateSchool(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<SchoolEntity> {
+    return this.identityService.reactivateSchool(id, actor, auditContextFromRequest(req));
+  }
+
   @Get('roles')
   @RequirePermission('users:assign_role')
   @ApiOperation({ summary: 'List available roles' })

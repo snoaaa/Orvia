@@ -78,7 +78,20 @@ export class SessionService {
 
     const session = await this.prisma.session.findUnique({
       where: { id: parsed.sessionId },
-      include: { user: { select: { id: true, status: true } } },
+      include: {
+        user: {
+          select: {
+            id: true,
+            status: true,
+            assignments: {
+              include: {
+                role: { select: { scope: true } },
+                school: { select: { id: true, status: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!session) return this.rejectRefresh('session_not_found', context);
 
@@ -95,6 +108,18 @@ export class SessionService {
     }
     if (session.user.status === 'SUSPENDED') {
       return this.rejectRefresh('user_suspended', context, failure, true);
+    }
+
+    const isPlatformAdmin = session.user.assignments?.some(
+      (a) => a.role?.scope === 'platform',
+    );
+    if (!isPlatformAdmin && (session.user.assignments?.length ?? 0) > 0) {
+      const isDeactivated = session.user.assignments.every(
+        (a) => a.school?.status === 'deactivated',
+      );
+      if (isDeactivated) {
+        return this.rejectRefresh('school_deactivated', context, failure, true);
+      }
     }
 
     // Compare-and-swap on the current hash, so two requests can never both rotate from the
@@ -244,7 +269,12 @@ export class SessionService {
       this.logger.error('Could not audit token_refresh_failure', error instanceof Error ? error.stack : error);
     }
     // One generic message for every token problem: do not tell an attacker why it failed.
-    if (forbidden) throw new ForbiddenException('Account suspended');
+    if (forbidden) {
+      if (reason === 'school_deactivated') {
+        throw new ForbiddenException('School is deactivated');
+      }
+      throw new ForbiddenException('Account suspended');
+    }
     throw new UnauthorizedException('Invalid refresh token');
   }
 

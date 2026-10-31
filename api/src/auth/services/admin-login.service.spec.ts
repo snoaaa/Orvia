@@ -451,4 +451,37 @@ describe('AdminLoginService (Unit Tests)', () => {
       }),
     );
   });
+
+  it('rejects school admin login when their school is deactivated and audits school_deactivated', async () => {
+    const hash = await bcrypt.hash('schoolAdminPassword!', 4);
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'deactivated-admin-id',
+      email: 'admin@deactivated.edu',
+      authProvider: 'local',
+      passwordHash: hash,
+      status: 'ACTIVE',
+      assignments: [
+        {
+          schoolId: 'deactivated-school-id',
+          role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+          school: { id: 'deactivated-school-id', name: 'Deactivated School', status: 'deactivated' },
+        },
+      ],
+    });
+
+    await expect(
+      service.login('admin@deactivated.edu', 'schoolAdminPassword!', fakeContext),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    expect(mockAudit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'login_failure',
+        details: expect.objectContaining({
+          email: 'admin@deactivated.edu',
+          reason: 'school_deactivated',
+          method: 'password',
+        }),
+      }),
+    );
+  });
 });
