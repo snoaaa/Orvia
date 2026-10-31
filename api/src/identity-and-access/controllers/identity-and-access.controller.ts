@@ -4,7 +4,7 @@ import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateRoleDto, CreateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import { PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
@@ -123,6 +123,20 @@ export class IdentityAndAccessController {
     @Req() req: Request,
   ): Promise<SchoolEntity> {
     return this.identityService.createSchool(dto, actor, auditContextFromRequest(req));
+  }
+
+  @Patch('schools/:id')
+  @RequirePermission('schools:update')
+  @ApiOperation({ summary: 'Update an existing school (platform admin or assigned school admin)' })
+  @ApiParam({ name: 'id', description: 'School UUID' })
+  @ApiResponse({ status: 200, description: 'School updated', type: SchoolEntity })
+  async updateSchool(
+    @Param('id') id: string,
+    @Body() dto: UpdateSchoolDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<SchoolEntity> {
+    return this.identityService.updateSchool(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Get('roles')

@@ -5,7 +5,7 @@ import { SchoolsController } from './schools.controller.js';
 import type { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 import { PaginatedSchoolsEntity, SchoolEntity } from '../entities/index.js';
 
-describe('SchoolsController (Issue #27 & #29)', () => {
+describe('SchoolsController (Issue #27, #29, #30)', () => {
   const platformAdmin: AuthenticatedUser = {
     id: 'platform-admin-id',
     email: 'admin@wamdp.platform',
@@ -17,10 +17,10 @@ describe('SchoolsController (Issue #27 & #29)', () => {
         scope: 'platform',
         schoolId: '00000000-0000-0000-0000-000000000001',
         groupId: null,
-        permissions: ['schools:create', 'schools:read'],
+        permissions: ['schools:create', 'schools:read', 'schools:update'],
       },
     ],
-    permissions: ['schools:create', 'schools:read'],
+    permissions: ['schools:create', 'schools:read', 'schools:update'],
     schoolIds: ['00000000-0000-0000-0000-000000000001'],
     isPlatformAdmin: true,
     role: 'PLATFORM_ADMIN',
@@ -130,5 +130,43 @@ describe('SchoolsController (Issue #27 & #29)', () => {
     expect(findSchoolByIdMock).toHaveBeenCalledWith(schoolId, platformAdmin);
     expect(result).toBe(mockSchool);
     expect(result.id).toBe(schoolId);
+  });
+
+  it('delegates updating school to IdentityAndAccessService with actor and audit context', async () => {
+    const mockUpdated = new SchoolEntity({
+      id: '00000000-0000-0000-0000-000000000001',
+      name: 'WAMDP Platform Administration (Updated)',
+      status: 'active',
+      allowedDomains: '',
+      settings: { maxUsers: 2000 },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const updateSchoolMock = vi.fn().mockResolvedValue(mockUpdated);
+    const mockIdentityService = {
+      updateSchool: updateSchoolMock,
+    } as unknown as IdentityAndAccessService;
+
+    const controller = new SchoolsController(mockIdentityService);
+    const schoolId = '00000000-0000-0000-0000-000000000001';
+    const dto = {
+      name: 'WAMDP Platform Administration (Updated)',
+      settings: { maxUsers: 2000 },
+    };
+
+    const result = await controller.updateSchool(schoolId, dto, platformAdmin, fakeReq);
+
+    expect(updateSchoolMock).toHaveBeenCalledWith(
+      schoolId,
+      dto,
+      platformAdmin,
+      expect.objectContaining({
+        ip: '127.0.0.1',
+        userAgent: 'vitest-agent',
+      }),
+    );
+    expect(result).toBe(mockUpdated);
+    expect(result.name).toBe('WAMDP Platform Administration (Updated)');
   });
 });
