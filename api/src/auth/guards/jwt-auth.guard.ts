@@ -49,6 +49,13 @@ export class JwtAuthGuard implements CanActivate {
     request.user = user;
     if (user.status === 'SUSPENDED') throw new ForbiddenException('Account suspended');
     if (user.status !== 'ACTIVE') throw new ForbiddenException('Account not activated');
+    if (
+      !user.isPlatformAdmin &&
+      user.assignments.length > 0 &&
+      user.assignments.every((a) => a.schoolStatus === 'deactivated')
+    ) {
+      throw new ForbiddenException('School is deactivated');
+    }
 
     return true;
   }

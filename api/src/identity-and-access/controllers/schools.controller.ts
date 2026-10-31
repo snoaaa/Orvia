@@ -112,4 +112,57 @@ export class SchoolsController {
   ): Promise<SchoolEntity> {
     return this.identityService.updateSchool(id, dto, actor, auditContextFromRequest(req));
   }
+
+  @Patch(':id/deactivate')
+  @RequirePermission('schools:delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Deactivate a school (Section 4.5)',
+    description:
+      'Deactivates an educational institution without deleting its data. ' +
+      'Users belonging to this school will be prevented from signing in and refreshing tokens. ' +
+      'Only platform administrators holding the schools:delete permission may deactivate schools.',
+  })
+  @ApiParam({ name: 'id', description: 'School UUID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'School deactivated successfully', type: SchoolEntity })
+  @ApiResponse({ status: 400, description: 'Invalid UUID format' })
+  @ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden: requires platform administrator privileges with schools:delete permission',
+  })
+  @ApiResponse({ status: 404, description: 'School not found' })
+  async deactivateSchool(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<SchoolEntity> {
+    return this.identityService.deactivateSchool(id, actor, auditContextFromRequest(req));
+  }
+
+  @Patch(':id/reactivate')
+  @RequirePermission('schools:delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reactivate a school (Section 4.5)',
+    description:
+      'Reactivates a previously deactivated educational institution, restoring user access. ' +
+      'Only platform administrators holding the schools:delete permission may reactivate schools.',
+  })
+  @ApiParam({ name: 'id', description: 'School UUID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'School reactivated successfully', type: SchoolEntity })
+  @ApiResponse({ status: 400, description: 'Invalid UUID format' })
+  @ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden: requires platform administrator privileges with schools:delete permission',
+  })
+  @ApiResponse({ status: 404, description: 'School not found' })
+  async reactivateSchool(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<SchoolEntity> {
+    return this.identityService.reactivateSchool(id, actor, auditContextFromRequest(req));
+  }
 }

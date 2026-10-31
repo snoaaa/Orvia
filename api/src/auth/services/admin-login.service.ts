@@ -98,6 +98,7 @@ export class AdminLoginService {
         assignments: {
           include: {
             role: { select: { name: true, scope: true } },
+            school: { select: { id: true, name: true, status: true } },
           },
         },
       },
@@ -147,6 +148,24 @@ export class AdminLoginService {
         user.id,
         context,
       );
+    }
+
+    // 6b. Case: School admin or user belonging to a deactivated school
+    const isPlatformAdmin = user.assignments.some(
+      (a) => a.role.scope === 'platform',
+    );
+    if (!isPlatformAdmin && user.assignments.length > 0) {
+      const isDeactivated = user.assignments.every(
+        (a) => a.school?.status === 'deactivated',
+      );
+      if (isDeactivated) {
+        return this.handleLoginFailure(
+          normalizedEmail,
+          'school_deactivated',
+          user.id,
+          context,
+        );
+      }
     }
 
     // 7. Success: clear failed attempts

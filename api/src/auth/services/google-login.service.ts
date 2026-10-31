@@ -89,7 +89,7 @@ export class GoogleLoginService {
         assignments: {
           include: {
             role: { select: { name: true, scope: true } },
-            school: { select: { id: true, name: true } },
+            school: { select: { id: true, name: true, status: true } },
           },
         },
       },
@@ -103,7 +103,7 @@ export class GoogleLoginService {
           assignments: {
             include: {
               role: { select: { name: true, scope: true } },
-              school: { select: { id: true, name: true } },
+              school: { select: { id: true, name: true, status: true } },
             },
           },
         },
@@ -132,6 +132,20 @@ export class GoogleLoginService {
     if (user.status === 'SUSPENDED') {
       await this.recordFailure(email, 'account_suspended', user.id, context);
       return this.deny();
+    }
+
+    // 5b. Reject accounts belonging to a deactivated school
+    const isPlatformUser = user.assignments.some(
+      (a) => a.role.scope === 'platform',
+    );
+    if (!isPlatformUser && user.assignments.length > 0) {
+      const isDeactivated = user.assignments.every(
+        (a) => a.school?.status === 'deactivated',
+      );
+      if (isDeactivated) {
+        await this.recordFailure(email, 'school_deactivated', user.id, context);
+        return this.deny();
+      }
     }
 
     // 6. Enforce per-school institutional domain restrictions (Issue #11)

@@ -14,6 +14,7 @@ export class AuthUserService {
         assignments: {
           orderBy: { createdAt: 'asc' },
           include: {
+            school: { select: { id: true, status: true } },
             role: { include: { rolePermissions: { include: { permission: { select: { code: true } } } } } },
           },
         },
@@ -25,6 +26,7 @@ export class AuthUserService {
       role: a.role.name,
       scope: a.role.scope,
       schoolId: a.schoolId,
+      schoolStatus: a.school?.status ?? null,
       groupId: a.groupId,
       permissions: a.role.rolePermissions.map((rp) => rp.permission.code),
     }));

@@ -291,6 +291,33 @@ describe('GoogleLoginService (Unit Tests)', () => {
         }),
       );
     });
+
+    it('rejects user whose school is deactivated (audits school_deactivated)', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        ...studentUser,
+        assignments: [
+          {
+            schoolId: 'deactivated-school-1',
+            role: { name: 'STUDENT', scope: 'group' },
+            school: { id: 'deactivated-school-1', name: 'Deactivated School', status: 'deactivated' },
+          },
+        ],
+      });
+
+      await expect(service.login('valid-token', fakeContext)).rejects.toBeInstanceOf(UnauthorizedException);
+
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: 'authentication',
+          action: 'login_failure',
+          details: expect.objectContaining({
+            email: 'student@school.edu',
+            reason: 'school_deactivated',
+            method: 'google',
+          }),
+        }),
+      );
+    });
   });
 
   describe('Real Token Verification Logic (verifyGoogleToken)', () => {

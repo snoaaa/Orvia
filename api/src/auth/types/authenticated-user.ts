@@ -6,6 +6,7 @@ export interface AuthRoleAssignment {
   /** 'platform' roles apply to every school; 'school' / 'group' roles only to `schoolId`. */
   scope: string;
   schoolId: string;
+  schoolStatus?: string | null;
   groupId: string | null;
   permissions: string[];
 }

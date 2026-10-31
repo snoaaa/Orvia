@@ -382,6 +382,74 @@ export class IdentityAndAccessService {
   }
 
   /**
+   * Deactivate a school without deleting its data (Issue #31).
+   *
+   * Enforces:
+   *  - Platform administrator restriction (actor must hold schools:delete platform-wide).
+   *  - School administrators and other roles are forbidden (throws 403 Forbidden).
+   *  - Soft status transition to 'deactivated': preserves all data (domains, users, groups, spaces).
+   *  - Idempotent: succeeds even if school is already deactivated.
+   */
+  async deactivateSchool(
+    id: string,
+    actor?: AuthenticatedUser,
+    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SchoolEntity> {
+    if (actor && schoolsWithPermission(actor, 'schools:delete') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may deactivate schools');
+    }
+
+    const school = await this.prisma.school.findUnique({
+      where: { id },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID '${id}' not found`);
+    }
+
+    const updated = await this.prisma.school.update({
+      where: { id },
+      data: { status: 'deactivated' },
+      include: { domains: true },
+    });
+
+    return SchoolMapper.toEntity(updated);
+  }
+
+  /**
+   * Reactivate a school (Issue #31).
+   *
+   * Enforces:
+   *  - Platform administrator restriction (actor must hold schools:delete platform-wide).
+   *  - School administrators and other roles are forbidden (throws 403 Forbidden).
+   *  - Soft status transition to 'active': restores sign-in and refresh access for users.
+   *  - Idempotent: succeeds even if school is already active.
+   */
+  async reactivateSchool(
+    id: string,
+    actor?: AuthenticatedUser,
+    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SchoolEntity> {
+    if (actor && schoolsWithPermission(actor, 'schools:delete') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may reactivate schools');
+    }
+
+    const school = await this.prisma.school.findUnique({
+      where: { id },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID '${id}' not found`);
+    }
+
+    const updated = await this.prisma.school.update({
+      where: { id },
+      data: { status: 'active' },
+      include: { domains: true },
+    });
+
+    return SchoolMapper.toEntity(updated);
+  }
+
+  /**
    * Register/create a new school (Issue #27).
    *
    * Enforces:
