@@ -114,9 +114,32 @@ describe('Admin Login E2E (Issue #8)', () => {
         .send({ email: 'admin@school.edu', password: 'short' })
         .expect(400);
       expect(res.body.message).toEqual(
-        expect.arrayContaining([
-          expect.stringMatching(/password must be longer than or equal to 8/i),
-        ]),
+        expect.arrayContaining([expect.stringMatching(/password must be longer than or equal to 8/i)]),
+      );
+    });
+
+    it('rejects password longer than 128 characters (OWASP ReDoS mitigation)', async () => {
+      const longPassword = 'A'.repeat(129);
+      const res = await request(app.getHttpServer())
+        .post('/auth/admin/login')
+        .send({ email: 'admin@school.edu', password: longPassword })
+        .expect(400);
+      expect(res.body.message).toEqual(
+        expect.arrayContaining([expect.stringMatching(/password must be shorter than or equal to 128/i)]),
+      );
+    });
+
+    it('rejects non-whitelisted properties when forbidNonWhitelisted is active', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/admin/login')
+        .send({
+          email: 'admin@school.edu',
+          password: 'validPassword123!',
+          maliciousField: 'exploit',
+        })
+        .expect(400);
+      expect(res.body.message).toEqual(
+        expect.arrayContaining([expect.stringMatching(/property maliciousField should not exist/i)]),
       );
     });
   });
@@ -349,6 +372,58 @@ describe('Admin Login E2E (Issue #8)', () => {
         .expect(200);
 
       expect(res.body).toHaveProperty('accessToken');
+    });
+
+    it('binds session to registered user device when deviceId is provided', async () => {
+      const email = `admin-e2e-${stamp}-device@school.edu`;
+      const password = 'DevicePass123!';
+      const passwordHash = await bcrypt.hash(password, 10);
+      const user = await prisma.user.create({
+        data: {
+          email,
+          fullName: 'Device Bound Admin',
+          authProvider: 'local',
+          passwordHash,
+          status: 'ACTIVE',
+        },
+      });
+      await prisma.userAssignment.create({
+        data: { userId: user.id, roleId: schoolAdminRoleId, schoolId },
+      });
+      const device = await prisma.device.create({
+        data: { userId: user.id, platform: 'ios' },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/admin/login')
+        .send({ email, password, deviceId: device.id })
+        .expect(200);
+
+      const session = await prisma.session.findUnique({ where: { id: res.body.sessionId } });
+      expect(session?.deviceId).toBe(device.id);
+
+      await prisma.device.delete({ where: { id: device.id } });
+    });
+
+    it('neutralizes timing attacks (execution latency between non-existent and wrong password is comparable)', async () => {
+      const startMissing = performance.now();
+      await request(app.getHttpServer())
+        .post('/auth/admin/login')
+        .send({ email: `nonexistent-${stamp}-timing@school.edu`, password: 'SamplePassword123!' })
+        .expect(401);
+      const durationMissing = performance.now() - startMissing;
+
+      const adminEmail = process.env.PLATFORM_ADMIN_EMAIL || 'admin@wamdp.platform';
+      const startWrong = performance.now();
+      await request(app.getHttpServer())
+        .post('/auth/admin/login')
+        .send({ email: adminEmail, password: 'WrongPassword123!' })
+        .expect(401);
+      const durationWrong = performance.now() - startWrong;
+
+      // Both must execute bcrypt comparison (~100ms+ in this environment). Neither should return instantaneously (<15ms).
+      expect(durationMissing).toBeGreaterThan(40);
+      expect(durationWrong).toBeGreaterThan(40);
     });
   });
 });

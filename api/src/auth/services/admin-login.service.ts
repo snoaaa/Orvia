@@ -122,7 +122,8 @@ export class AdminLoginService {
     }
 
     // 7. Create stateful session with hashed refresh token rotation
-    const pair = await this.sessions.createSession(user.id, context, deviceId);
+    const effectiveDeviceId = deviceId ?? context.deviceId ?? null;
+    const pair = await this.sessions.createSession(user.id, context, effectiveDeviceId);
 
     // 8. Resolve primary admin assignment for audit trail
     const adminAssignment =

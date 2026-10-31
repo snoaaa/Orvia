@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   MinLength,
 } from 'class-validator';
 
@@ -17,22 +18,26 @@ export class AdminLoginDto {
   @ApiProperty({
     example: 'admin@wamdp.platform',
     description: 'Administrator email address',
+    maxLength: 254,
   })
   @Transform(({ value }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
   @IsEmail()
   @IsNotEmpty()
+  @MaxLength(254)
   email: string;
 
   @ApiProperty({
     example: 'wamdp_admin_2026!',
-    description: 'Administrator password (minimum 8 characters)',
+    description: 'Administrator password (8 to 128 characters)',
     minLength: 8,
+    maxLength: 128,
   })
   @IsString()
   @IsNotEmpty()
   @MinLength(8)
+  @MaxLength(128)
   password: string;
 
   @ApiPropertyOptional({

@@ -218,7 +218,7 @@ describe('AdminLoginService (Unit Tests)', () => {
     expect(mockSessions.createSession).toHaveBeenCalledWith(
       'platform-admin-id',
       fakeContext,
-      undefined,
+      null,
     );
     expect(mockAudit.record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -309,6 +309,48 @@ describe('AdminLoginService (Unit Tests)', () => {
       data: { status: 'ACTIVE' },
     });
     expect(result).toBe(fakeTokenPair);
+  });
+
+  it('uses context.deviceId when deviceId is not explicitly passed in dto', async () => {
+    const hash = await bcrypt.hash('adminPass!', 4);
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'admin-1',
+      email: 'admin@school.edu',
+      authProvider: 'local',
+      passwordHash: hash,
+      status: 'ACTIVE',
+      assignments: [{ schoolId: 'school-1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+    });
+
+    const contextWithDevice = { ...fakeContext, deviceId: 'context-device-uuid' };
+    await service.login('admin@school.edu', 'adminPass!', contextWithDevice);
+
+    expect(mockSessions.createSession).toHaveBeenCalledWith(
+      'admin-1',
+      contextWithDevice,
+      'context-device-uuid',
+    );
+  });
+
+  it('prefers explicit dto deviceId over context.deviceId', async () => {
+    const hash = await bcrypt.hash('adminPass!', 4);
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'admin-1',
+      email: 'admin@school.edu',
+      authProvider: 'local',
+      passwordHash: hash,
+      status: 'ACTIVE',
+      assignments: [{ schoolId: 'school-1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+    });
+
+    const contextWithDevice = { ...fakeContext, deviceId: 'context-device-uuid' };
+    await service.login('admin@school.edu', 'adminPass!', contextWithDevice, 'explicit-device-uuid');
+
+    expect(mockSessions.createSession).toHaveBeenCalledWith(
+      'admin-1',
+      contextWithDevice,
+      'explicit-device-uuid',
+    );
   });
 
   it('normalizes email to trimmed lowercase before database lookup', async () => {
