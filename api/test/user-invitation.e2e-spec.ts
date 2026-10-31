@@ -1,5 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
@@ -13,6 +14,8 @@ import { PrismaService } from '../src/database/prisma.service.js';
  *  - 401 Unauthorized when unauthenticated.
  *  - 403 Forbidden when caller lacks `users:invite` permission.
  *  - 403 Forbidden when school admin attempts to invite into a school they do not manage.
+ *  - 403 Forbidden when school admin passes a non-existent school UUID.
+ *  - 404 Not Found when platform admin passes a non-existent school UUID.
  *  - 400 Bad Request when school admin omits `schoolId`.
  *  - 400 Bad Request when email domain violates target school's configured `school_domains`.
  *  - 201 Created when email domain matches target school's configured domains.
@@ -21,8 +24,11 @@ import { PrismaService } from '../src/database/prisma.service.js';
  *  - Successfully assigns custom valid school role (e.g. STAFF).
  *  - 403 Forbidden when school admin attempts to assign platform-scoped role (PLATFORM_ADMIN).
  *  - 409 Conflict on duplicate email registration (case-insensitive).
+ *  - 409 Conflict on inviting email matching existing ACTIVE or SUSPENDED user.
  *  - User is persisted with status INVITED, authProvider 'google', and null passwordHash.
  *  - User assignment is persisted linking user, school, and role atomically.
+ *  - Platform admin can invite platform-scoped user without schoolId.
+ *  - Normalizes whitespace-padded and mixed-case emails.
  *  - Tamper-evident audit event `identity_access/user_invited` is recorded in audit chain.
  */
 describe('User Invitation E2E (Issue #9)', () => {
@@ -198,6 +204,32 @@ describe('User Invitation E2E (Issue #9)', () => {
           schoolId: schoolBId,
         })
         .expect(403);
+    });
+
+    it('returns 403 Forbidden when school admin attempts to invite into non-existent schoolId', async () => {
+      const nonExistentUuid = randomUUID();
+      await request(app.getHttpServer())
+        .post('/identity/users/invite')
+        .set('Authorization', `Bearer ${schoolAdminAToken}`)
+        .send({
+          email: `non-existent-school-invite-e2e-${stamp}@school-a-${stamp}.edu`,
+          fullName: 'Non Existent School User',
+          schoolId: nonExistentUuid,
+        })
+        .expect(403);
+    });
+
+    it('returns 404 Not Found when platform admin attempts to invite into non-existent schoolId', async () => {
+      const nonExistentUuid = randomUUID();
+      await request(app.getHttpServer())
+        .post('/identity/users/invite')
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .send({
+          email: `padmin-non-existent-invite-e2e-${stamp}@school-a-${stamp}.edu`,
+          fullName: 'Non Existent School User',
+          schoolId: nonExistentUuid,
+        })
+        .expect(404);
     });
 
     it('returns 400 Bad Request when school admin provides no schoolId', async () => {
@@ -394,6 +426,51 @@ describe('User Invitation E2E (Issue #9)', () => {
       });
       expect(dbUser.assignments[0].roleId).toBe(staffRoleId);
     });
+
+    it('platform admin can invite a platform-scoped user without schoolId', async () => {
+      const email = `platform-user-invite-e2e-${stamp}@custom-global.gov`;
+      const res = await request(app.getHttpServer())
+        .post('/identity/users/invite')
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .send({
+          email,
+          fullName: 'Global Platform User',
+        })
+        .expect(201);
+
+      expect(res.body.status).toBe('INVITED');
+      expect(res.body.email).toBe(email);
+
+      const dbUser = await prisma.user.findUniqueOrThrow({
+        where: { id: res.body.id },
+        include: { assignments: true },
+      });
+      expect(dbUser.assignments).toHaveLength(0);
+    });
+
+    it('normalizes whitespace-padded and mixed-case email correctly', async () => {
+      const rawEmail = `  Spaces-Padded-Invite-E2E-${stamp}@school-a-${stamp}.edu  `;
+      const expectedNormalized = `spaces-padded-invite-e2e-${stamp}@school-a-${stamp}.edu`;
+
+      const res = await request(app.getHttpServer())
+        .post('/identity/users/invite')
+        .set('Authorization', `Bearer ${schoolAdminAToken}`)
+        .send({
+          email: rawEmail,
+          fullName: '   Padded Name   ',
+          schoolId: schoolAId,
+        })
+        .expect(201);
+
+      expect(res.body.email).toBe(expectedNormalized);
+      expect(res.body.fullName).toBe('Padded Name');
+
+      const dbUser = await prisma.user.findUniqueOrThrow({
+        where: { id: res.body.id },
+      });
+      expect(dbUser.email).toBe(expectedNormalized);
+      expect(dbUser.fullName).toBe('Padded Name');
+    });
   });
 
   describe('Duplicate Email Conflict (409 Conflict)', () => {
@@ -419,6 +496,52 @@ describe('User Invitation E2E (Issue #9)', () => {
         .send({
           email: upperEmail,
           fullName: 'Second Invitee',
+          schoolId: schoolAId,
+        })
+        .expect(409);
+
+      expect(res.body.message).toMatch(/already exists/i);
+    });
+
+    it('rejects invitation when email already belongs to an ACTIVE user', async () => {
+      const email = `existing-active-invite-e2e-${stamp}@school-a-${stamp}.edu`;
+      await prisma.user.create({
+        data: {
+          email,
+          fullName: 'Existing Active User',
+          status: 'ACTIVE',
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/identity/users/invite')
+        .set('Authorization', `Bearer ${schoolAdminAToken}`)
+        .send({
+          email,
+          fullName: 'Second Attempt',
+          schoolId: schoolAId,
+        })
+        .expect(409);
+
+      expect(res.body.message).toMatch(/already exists/i);
+    });
+
+    it('rejects invitation when email already belongs to a SUSPENDED user', async () => {
+      const email = `existing-suspended-invite-e2e-${stamp}@school-a-${stamp}.edu`;
+      await prisma.user.create({
+        data: {
+          email,
+          fullName: 'Existing Suspended User',
+          status: 'SUSPENDED',
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/identity/users/invite')
+        .set('Authorization', `Bearer ${schoolAdminAToken}`)
+        .send({
+          email,
+          fullName: 'Second Attempt',
           schoolId: schoolAId,
         })
         .expect(409);
