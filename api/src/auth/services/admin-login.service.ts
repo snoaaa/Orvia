@@ -1,4 +1,6 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import argon2 from 'argon2';
 import bcrypt from 'bcryptjs';
 import {
   AuditEvents,
@@ -116,8 +118,13 @@ export class AdminLoginService {
       );
     }
 
-    // 4. Case: Password mismatch
-    const passwordValid = await bcrypt.compare(password, user.passwordHash);
+    // 4. Case: Password mismatch (supports argon2 and bcrypt)
+    let passwordValid = false;
+    if (user.passwordHash.startsWith('$argon2')) {
+      passwordValid = await argon2.verify(user.passwordHash, password);
+    } else {
+      passwordValid = await bcrypt.compare(password, user.passwordHash);
+    }
     if (!passwordValid) {
       return this.handleLoginFailure(
         normalizedEmail,
@@ -288,6 +295,103 @@ export class AdminLoginService {
   /**
    * Resets lockout tracker state (used for testing and administrative unlock).
    */
+  /**
+   * Sets initial password for an invited administrator using a single-use expiring setup token (Issue #26).
+   */
+  async setupPassword(
+    rawToken: string,
+    newPassword: string,
+    context: AuditRequestContext,
+  ): Promise<{ message: string }> {
+    const trimmedToken = (rawToken || '').trim();
+    if (!trimmedToken) {
+      throw new BadRequestException('Setup token is required');
+    }
+
+    const tokenHash = createHash('sha256').update(trimmedToken).digest('hex');
+
+    const tokenRecord = await this.prisma.passwordSetupToken.findUnique({
+      where: { tokenHash },
+      include: {
+        user: {
+          include: {
+            assignments: {
+              include: {
+                role: { select: { name: true, scope: true } },
+                school: { select: { id: true, status: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!tokenRecord) {
+      throw new BadRequestException('Invalid or expired setup token');
+    }
+
+    if (tokenRecord.usedAt !== null) {
+      throw new BadRequestException('Setup token has already been used');
+    }
+
+    if (tokenRecord.expiresAt <= new Date()) {
+      throw new BadRequestException('Setup token has expired');
+    }
+
+    if (tokenRecord.user.status === 'SUSPENDED') {
+      throw new ForbiddenException('Account is suspended');
+    }
+
+    // Password validation rules (min length 8, max length 128)
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters long');
+    }
+
+    if (newPassword.length > 128) {
+      throw new BadRequestException('Password cannot exceed 128 characters');
+    }
+
+    // Hash password with argon2id
+    const passwordHash = await argon2.hash(newPassword);
+
+    // Atomically set password, change status to ACTIVE, authProvider to local, and mark token as used
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: tokenRecord.userId },
+        data: {
+          passwordHash,
+          authProvider: 'local',
+          status: 'ACTIVE',
+        },
+      });
+
+      await tx.passwordSetupToken.update({
+        where: { id: tokenRecord.id },
+        data: {
+          usedAt: new Date(),
+        },
+      });
+    });
+
+    // Tamper-evident audit logging (NEVER record or log the password or hash)
+    const primaryAssignment = tokenRecord.user.assignments[0];
+    await this.audit.record(
+      AuditEvents.passwordSetup(
+        {
+          userId: tokenRecord.userId,
+          email: tokenRecord.user.email,
+          role: primaryAssignment?.role?.name ?? null,
+          schoolId: primaryAssignment?.schoolId ?? null,
+        },
+        context,
+      ),
+    );
+
+    return {
+      message: 'Password set up successfully. Account is now active and ready for login.',
+    };
+  }
+
   resetLockout(email?: string): void {
     if (email) {
       this.attemptTracker.delete(email.trim().toLowerCase());

@@ -131,6 +131,20 @@ export const AuditEvents = {
     };
   },
 
+  passwordSetup(
+    p: { userId: string; email: string; role?: string | null; schoolId?: string | null },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.PASSWORD_SETUP,
+      actor: { userId: p.userId, role: p.role ?? null, schoolId: p.schoolId ?? null },
+      entity: { type: 'user', id: p.userId },
+      details: { email: p.email.trim().toLowerCase(), method: 'setup_token' },
+      context,
+    };
+  },
+
   accessDenied(
     p: { actor?: AuditActor | null; method: string; path: string; requiredPermission?: string; reason?: string },
     context: AuditRequestContext,

@@ -130,10 +130,16 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           if (where.name === 'PLATFORM_ADMIN') {
             return Promise.resolve({ id: 'role-platform-id', name: 'PLATFORM_ADMIN', scope: 'platform' });
           }
+          if (where.name === 'SCHOOL_ADMIN') {
+            return Promise.resolve({ id: 'role-school-admin-id', name: 'SCHOOL_ADMIN', scope: 'school' });
+          }
           return Promise.resolve(null);
         }),
       },
       userAssignment: {
+        create: vi.fn().mockResolvedValue({}),
+      },
+      passwordSetupToken: {
         create: vi.fn().mockResolvedValue({}),
       },
       $transaction: vi.fn().mockImplementation(async (callback: any) => {
@@ -149,6 +155,9 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             ),
           },
           userAssignment: {
+            create: vi.fn().mockResolvedValue({}),
+          },
+          passwordSetupToken: {
             create: vi.fn().mockResolvedValue({}),
           },
         };
@@ -223,6 +232,34 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       );
 
       expect(mockPrisma.role.findUnique).toHaveBeenCalledWith({ where: { name: 'TEACHER' } });
+    });
+
+    it('generates a setup token when inviting an administrator (Issue #26)', async () => {
+      const result = await service.inviteUser(
+        { email: 'newadmin@school1.edu', fullName: 'New Admin', schoolId: 'school-1', role: 'SCHOOL_ADMIN' },
+        schoolAdmin,
+        fakeContext,
+      );
+
+      expect(result).toBeDefined();
+      expect(result.authProvider).toBe('local');
+      expect(result.status).toBe('INVITED');
+      expect(result.setupToken).toBeDefined();
+      expect(result.setupToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.setupTokenExpiresAt).toBeInstanceOf(Date);
+    });
+
+    it('does not generate a setup token when inviting a student (authenticates with Google)', async () => {
+      const result = await service.inviteUser(
+        { email: 'newstudent@school1.edu', fullName: 'New Student', schoolId: 'school-1', role: 'STUDENT' },
+        schoolAdmin,
+        fakeContext,
+      );
+
+      expect(result).toBeDefined();
+      expect(result.authProvider).toBe('google');
+      expect(result.status).toBe('INVITED');
+      expect(result.setupToken).toBeUndefined();
     });
 
     it('rejects duplicate email with 409 Conflict', async () => {
