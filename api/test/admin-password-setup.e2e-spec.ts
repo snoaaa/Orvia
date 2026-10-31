@@ -329,6 +329,44 @@ describe('Admin Password Setup E2E (Issue #26)', () => {
 
       expect(res.body.message).toContain('Setup token has expired');
     });
+
+    it('rejects password longer than 128 characters with 400 Bad Request', async () => {
+      await request(app.getHttpServer())
+        .post('/auth/password/setup')
+        .send({
+          token: 'some-random-token',
+          newPassword: 'A'.repeat(129),
+        })
+        .expect(400);
+    });
+
+    it('enforces atomic single-use under concurrent setup requests (race condition protection)', async () => {
+      const email = `e2e-setup-${stamp}-concurrent@school.edu`;
+      const inviteRes = await request(app.getHttpServer())
+        .post('/identity/users/invite')
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .send({
+          email,
+          fullName: `Concurrent Admin ${stamp}`,
+          schoolId,
+          role: 'SCHOOL_ADMIN',
+        })
+        .expect(201);
+
+      const token = inviteRes.body.setupToken;
+
+      const [res1, res2] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/auth/password/setup')
+          .send({ token, newPassword: 'ConcurrentPassword123!' }),
+        request(app.getHttpServer())
+          .post('/auth/password/setup')
+          .send({ token, newPassword: 'ConcurrentPassword123!' }),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort((a, b) => a - b);
+      expect(statuses).toEqual([200, 400]);
+    });
   });
 });
 

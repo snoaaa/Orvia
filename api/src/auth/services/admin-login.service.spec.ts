@@ -33,6 +33,7 @@ describe('AdminLoginService (Unit Tests)', () => {
       passwordSetupToken: {
         findUnique: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       $transaction: vi.fn().mockImplementation((fn: any) => fn(mockPrisma)),
     };
@@ -531,9 +532,9 @@ describe('AdminLoginService (Unit Tests)', () => {
           }),
         }),
       );
-      expect(mockPrisma.passwordSetupToken.update).toHaveBeenCalledWith(
+      expect(mockPrisma.passwordSetupToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'token-uuid-1' },
+          where: { id: 'token-uuid-1', usedAt: null },
           data: expect.objectContaining({
             usedAt: expect.any(Date),
           }),

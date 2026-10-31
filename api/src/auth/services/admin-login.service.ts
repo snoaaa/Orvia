@@ -120,10 +120,14 @@ export class AdminLoginService {
 
     // 4. Case: Password mismatch (supports argon2 and bcrypt)
     let passwordValid = false;
-    if (user.passwordHash.startsWith('$argon2')) {
-      passwordValid = await argon2.verify(user.passwordHash, password);
-    } else {
-      passwordValid = await bcrypt.compare(password, user.passwordHash);
+    try {
+      if (user.passwordHash.startsWith('$argon2')) {
+        passwordValid = await argon2.verify(user.passwordHash, password);
+      } else {
+        passwordValid = await bcrypt.compare(password, user.passwordHash);
+      }
+    } catch {
+      passwordValid = false;
     }
     if (!passwordValid) {
       return this.handleLoginFailure(
@@ -356,19 +360,23 @@ export class AdminLoginService {
 
     // Atomically set password, change status to ACTIVE, authProvider to local, and mark token as used
     await this.prisma.$transaction(async (tx) => {
+      const updateResult = await tx.passwordSetupToken.updateMany({
+        where: { id: tokenRecord.id, usedAt: null },
+        data: {
+          usedAt: new Date(),
+        },
+      });
+
+      if (updateResult.count === 0) {
+        throw new BadRequestException('Setup token has already been used');
+      }
+
       await tx.user.update({
         where: { id: tokenRecord.userId },
         data: {
           passwordHash,
           authProvider: 'local',
           status: 'ACTIVE',
-        },
-      });
-
-      await tx.passwordSetupToken.update({
-        where: { id: tokenRecord.id },
-        data: {
-          usedAt: new Date(),
         },
       });
     });
