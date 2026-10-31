@@ -425,5 +425,52 @@ describe('Admin Login E2E (Issue #8)', () => {
       expect(durationMissing).toBeGreaterThan(40);
       expect(durationWrong).toBeGreaterThan(40);
     });
+
+    it('enforces brute-force lockout after 5 consecutive failures and records account_locked in audit trail', async () => {
+      const email = `admin-e2e-${stamp}-bruteforce@school.edu`;
+      const password = 'RealPassword123!';
+      const passwordHash = await bcrypt.hash(password, 10);
+      const user = await prisma.user.create({
+        data: {
+          email,
+          fullName: 'Brute Force Admin',
+          authProvider: 'local',
+          passwordHash,
+          status: 'ACTIVE',
+        },
+      });
+      await prisma.userAssignment.create({
+        data: { userId: user.id, roleId: schoolAdminRoleId, schoolId },
+      });
+
+      const bruteDevice = `e2e-brute-${stamp}`;
+
+      // 5 failed password attempts
+      for (let i = 1; i <= 5; i++) {
+        await request(app.getHttpServer())
+          .post('/auth/admin/login')
+          .set('x-device-id', bruteDevice)
+          .send({ email, password: 'WrongPassword999!' })
+          .expect(401);
+      }
+
+      // Verify that audit trail has an account_locked event tagged with this device
+      const lockoutEvent = await prisma.auditEvent.findFirst({
+        where: {
+          action: 'account_locked',
+          deviceId: bruteDevice,
+        },
+      });
+      expect(lockoutEvent).toBeDefined();
+      expect(lockoutEvent?.category).toBe('security');
+
+      // 6th attempt with REAL password is still rejected with generic 401 due to lockout
+      const lockedRes = await request(app.getHttpServer())
+        .post('/auth/admin/login')
+        .set('x-device-id', bruteDevice)
+        .send({ email, password })
+        .expect(401);
+      expect(lockedRes.body.message).toBe('Invalid credentials');
+    });
   });
 });

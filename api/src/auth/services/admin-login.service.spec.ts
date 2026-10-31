@@ -353,6 +353,91 @@ describe('AdminLoginService (Unit Tests)', () => {
     );
   });
 
+  it('locks account after 5 consecutive failed login attempts and audits account_locked', async () => {
+    const hash = await bcrypt.hash('CorrectPass123!', 4);
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'admin-lockout-test',
+      email: 'lockout@school.edu',
+      authProvider: 'local',
+      passwordHash: hash,
+      status: 'ACTIVE',
+      assignments: [{ schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+    });
+
+    service.resetLockout();
+
+    // 4 failed attempts
+    for (let i = 0; i < 4; i++) {
+      await expect(service.login('lockout@school.edu', 'wrong', fakeContext)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    }
+    expect(mockAudit.record).toHaveBeenCalledTimes(4);
+
+    // 5th failed attempt -> triggers account_locked
+    await expect(service.login('lockout@school.edu', 'wrong', fakeContext)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+
+    expect(mockAudit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'account_locked',
+        details: expect.objectContaining({
+          email: 'lockout@school.edu',
+          reason: 'too_many_failed_logins',
+          failedAttempts: 5,
+        }),
+      }),
+    );
+
+    // 6th attempt even with correct password -> blocked because account is locked
+    await expect(service.login('lockout@school.edu', 'CorrectPass123!', fakeContext)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+
+    expect(mockAudit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'login_failure',
+        details: expect.objectContaining({
+          email: 'lockout@school.edu',
+          reason: 'account_locked',
+        }),
+      }),
+    );
+  });
+
+  it('resets failed attempt counter after a successful login', async () => {
+    const hash = await bcrypt.hash('CorrectPass123!', 4);
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'admin-reset-test',
+      email: 'reset@school.edu',
+      authProvider: 'local',
+      passwordHash: hash,
+      status: 'ACTIVE',
+      assignments: [{ schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+    });
+
+    service.resetLockout();
+
+    // 2 failed attempts
+    await expect(service.login('reset@school.edu', 'wrong', fakeContext)).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.login('reset@school.edu', 'wrong', fakeContext)).rejects.toBeInstanceOf(UnauthorizedException);
+
+    // 1 successful login
+    await service.login('reset@school.edu', 'CorrectPass123!', fakeContext);
+
+    // Next 4 failed attempts should not lock because counter was reset
+    for (let i = 0; i < 4; i++) {
+      await expect(service.login('reset@school.edu', 'wrong', fakeContext)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    }
+
+    // Still not locked
+    const isSuccess = await service.login('reset@school.edu', 'CorrectPass123!', fakeContext);
+    expect(isSuccess).toBe(fakeTokenPair);
+  });
+
   it('normalizes email to trimmed lowercase before database lookup', async () => {
     mockPrisma.user.findUnique.mockResolvedValue(null);
 
