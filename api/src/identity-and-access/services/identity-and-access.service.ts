@@ -9,7 +9,7 @@ import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateRoleDto, CreateSchoolDto, CreateUserDto, UpdateUserDto } from '../dto/index.js';
+import type { CreateRoleDto, CreateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import {
   PermissionHolderEntity,
   PermissionOverviewEntity,
@@ -18,6 +18,7 @@ import {
   UserEntity,
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
+import { DomainValidationService } from './domain-validation.service.js';
 
 /** Role given to invited users when none is specified. */
 const DEFAULT_INVITE_ROLE = 'STUDENT';
@@ -28,6 +29,7 @@ export class IdentityAndAccessService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly sessions: SessionService,
+    private readonly domainValidation: DomainValidationService,
   ) {}
 
   /** Platform admins see everyone; others only users assigned to a school they can read users in. */
@@ -69,6 +71,10 @@ export class IdentityAndAccessService {
   ): Promise<UserEntity> {
     if (dto.schoolId) {
       assertSchoolAccess(actor, 'users:invite', dto.schoolId);
+      const domainValidation = await this.domainValidation.validateDomainForSchool(dto.email, dto.schoolId);
+      if (domainValidation.allowed === false) {
+        throw new BadRequestException(`Email domain '@${domainValidation.domain}' is not allowed for this school`);
+      }
     } else if (schoolsWithPermission(actor, 'users:invite') !== 'all') {
       throw new BadRequestException('schoolId is required: you can only invite users into your own school');
     }
@@ -114,6 +120,80 @@ export class IdentityAndAccessService {
     );
     return UserMapper.toEntity(created);
   }
+
+  /**
+   * Invites a new user into a school without a password (Issue #9).
+   *
+   * Enforces:
+   *  - Role & school access assertion (school admin can only invite into their assigned school).
+   *  - Domain validation against the school's configured domains in school_domains.
+   *    Schools with zero configured domains allow any email domain.
+   *  - Duplicate email rejection across the entire platform with 409 Conflict.
+   *  - Creates user with status INVITED, authProvider = 'google', and no password.
+   *  - Creates user_assignments record in a single atomic transaction.
+   *  - Records tamper-evident audit event identity_access/user_invited.
+   */
+  async inviteUser(
+    dto: InviteUserDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    if (dto.schoolId) {
+      assertSchoolAccess(actor, 'users:invite', dto.schoolId);
+      const domainValidation = await this.domainValidation.validateDomainForSchool(dto.email, dto.schoolId);
+      if (domainValidation.allowed === false) {
+        throw new BadRequestException(`Email domain '@${domainValidation.domain}' is not allowed for this school`);
+      }
+    } else if (schoolsWithPermission(actor, 'users:invite') !== 'all') {
+      throw new BadRequestException('schoolId is required: you can only invite users into your own school');
+    }
+
+    const role = dto.schoolId ? await this.resolveInviteRole(dto.schoolId, dto.role, actor) : null;
+    if (!dto.schoolId && dto.role) {
+      throw new BadRequestException('role requires schoolId');
+    }
+
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    const existing = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+    if (existing) {
+      throw new ConflictException(`User with email '${dto.email}' already exists`);
+    }
+
+    const id = randomUUID();
+    const created = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          id,
+          email: normalizedEmail,
+          fullName: dto.fullName.trim(),
+          authProvider: 'google',
+          passwordHash: null,
+          status: 'INVITED',
+        },
+      });
+      if (dto.schoolId && role) {
+        await tx.userAssignment.create({ data: { userId: user.id, schoolId: dto.schoolId, roleId: role.id } });
+      }
+      return user;
+    });
+
+    await this.audit.record(
+      AuditEvents.userInvited(
+        {
+          invitedUserId: created.id,
+          email: created.email,
+          schoolId: dto.schoolId ?? null,
+          invitedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    return UserMapper.toEntity(created);
+  }
+
 
   /**
    * Role given to an invited user in `schoolId` (default STUDENT, the least-privileged school
