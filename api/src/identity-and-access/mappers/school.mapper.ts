@@ -39,12 +39,18 @@ export class SchoolMapper {
   static fromDtoToCreateInput(dto: CreateSchoolDto, id: string): {
     id: string;
     name: string;
+    status: string;
+    allowedDomains: string;
+    settings: Record<string, unknown> | null;
     createdAt: Date;
     updatedAt: Date;
   } {
     return {
       id,
-      name: dto.name,
+      name: dto.name.trim(),
+      status: dto.status?.trim() || 'active',
+      allowedDomains: dto.allowedDomains ? dto.allowedDomains.trim() : '',
+      settings: (dto.settings as Record<string, unknown>) || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
