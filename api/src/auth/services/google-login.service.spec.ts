@@ -270,6 +270,27 @@ describe('GoogleLoginService (Unit Tests)', () => {
         }),
       );
     });
+
+    it('rejects user with no school assignments (audits domain_not_allowed)', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        ...studentUser,
+        assignments: [],
+      });
+      mockDomainValidation.validateDomainForUser.mockResolvedValue({
+        allowed: false,
+        matchedSchoolId: null,
+      });
+
+      await expect(service.login('valid-token', fakeContext)).rejects.toBeInstanceOf(UnauthorizedException);
+
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: 'authentication',
+          action: 'login_failure',
+          details: expect.objectContaining({ reason: 'domain_not_allowed' }),
+        }),
+      );
+    });
   });
 
   describe('Real Token Verification Logic (verifyGoogleToken)', () => {

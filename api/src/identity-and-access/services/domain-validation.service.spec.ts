@@ -12,6 +12,9 @@ describe('DomainValidationService (Unit Tests)', () => {
         findUnique: vi.fn(),
         findMany: vi.fn(),
       },
+      userAssignment: {
+        findMany: vi.fn(),
+      },
     };
     service = new DomainValidationService(mockPrisma);
   });
@@ -159,6 +162,17 @@ describe('DomainValidationService (Unit Tests)', () => {
       expect(res2.matchedSchoolId).toBe('s2');
     });
 
+    it('returns allowed: true when user belongs to an unrestricted school alongside a restricted school', async () => {
+      mockPrisma.school.findMany.mockResolvedValue([
+        { id: 's1', domains: [{ domain: 'school-a.edu' }] },
+        { id: 's2', domains: [] }, // unrestricted
+      ]);
+
+      const res = await service.validateDomainForUser('student@gmail.com', ['s1', 's2']);
+      expect(res.allowed).toBe(true);
+      expect(res.matchedSchoolId).toBe('s2');
+    });
+
     it('returns allowed: false when email domain does not match any restricted assigned school', async () => {
       mockPrisma.school.findMany.mockResolvedValue([
         { id: 's1', domains: [{ domain: 'school-a.edu' }] },
@@ -167,6 +181,21 @@ describe('DomainValidationService (Unit Tests)', () => {
       const res = await service.validateDomainForUser('intruder@gmail.com', ['s1']);
       expect(res.allowed).toBe(false);
       expect(res.matchedSchoolId).toBeNull();
+    });
+  });
+
+  describe('validateDomainForGoogleLogin (Issue #11)', () => {
+    it('resolves user school assignments and validates domain', async () => {
+      mockPrisma.userAssignment.findMany.mockResolvedValue([
+        { schoolId: 'school-a' },
+      ]);
+      mockPrisma.school.findMany.mockResolvedValue([
+        { id: 'school-a', domains: [{ domain: 'school-a.edu' }] },
+      ]);
+
+      const res = await service.validateDomainForGoogleLogin('user@school-a.edu', 'user-123');
+      expect(res.allowed).toBe(true);
+      expect(res.matchedSchoolId).toBe('school-a');
     });
   });
 });

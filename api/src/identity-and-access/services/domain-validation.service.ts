@@ -23,8 +23,8 @@ export interface DomainValidationResult {
  *
  * Design rules:
  *  - Per-school scoping: A school with zero configured domains does not restrict any domains.
- *  - If a school configures domains, only emails matching those domains are permitted.
- *  - Avoids global queries to prevent confused deputy bypasses.
+ *  - If a school configures domains, emails matching those domains (or their subdomains) are permitted.
+ *  - Prevents confused deputy bypasses by evaluating restrictions strictly against the relevant school(s).
  */
 @Injectable()
 export class DomainValidationService {
@@ -48,7 +48,7 @@ export class DomainValidationService {
    *
    * Rules:
    *  1. If the school has NO configured domains in `school_domains`, no restriction applies (`allowed: null`).
-   *  2. If the school has configured domains and `domain` matches one of them, it is allowed (`allowed: true`).
+   *  2. If the school has configured domains and `domain` matches one of them (or is a subdomain), it is allowed (`allowed: true`).
    *  3. If the school has configured domains and `domain` is not among them, it is rejected (`allowed: false`).
    *
    * @throws NotFoundException if schoolId does not exist.
@@ -99,8 +99,8 @@ export class DomainValidationService {
    * Rules:
    *  - Examines all schools the user is assigned to.
    *  - If all assigned schools have zero configured domains, login passes (`allowed: true`).
-   *  - If any assigned school has domain restrictions configured, the user's email domain MUST
-   *    match at least one of their assigned school's allowed domains.
+   *  - If assigned schools configure domains, the user's email domain MUST match at least one
+   *    of their assigned school's allowed domains (or subdomains), unless they also belong to an unrestricted school.
    */
   async validateDomainForUser(
     domainOrEmail: string,
@@ -141,7 +141,30 @@ export class DomainValidationService {
       return { allowed: true, matchedSchoolId: matchedSchool.id };
     }
 
+    // If user also belongs to an unrestricted school, pass through
+    const unrestrictedSchool = schoolsWithDomains.find((s) => s.domains.length === 0);
+    if (unrestrictedSchool) {
+      return { allowed: true, matchedSchoolId: unrestrictedSchool.id };
+    }
+
     return { allowed: false, matchedSchoolId: null };
   }
-}
 
+  /**
+   * Convenience method for Issue #11: Validates Google login email domain against the user's assigned school(s).
+   * Resolves the user's school assignments from the database and checks domain validity.
+   */
+  async validateDomainForGoogleLogin(
+    domainOrEmail: string,
+    userId: string,
+  ): Promise<{ allowed: boolean; matchedSchoolId?: string | null }> {
+    const assignments = await this.prisma.userAssignment.findMany({
+      where: { userId },
+      select: { schoolId: true },
+    });
+    return this.validateDomainForUser(
+      domainOrEmail,
+      assignments.map((a) => a.schoolId),
+    );
+  }
+}

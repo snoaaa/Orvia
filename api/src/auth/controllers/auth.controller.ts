@@ -3,9 +3,10 @@ import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@ne
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, Public } from '../decorators/auth.decorators.js';
-import { AdminLoginDto, RefreshTokenDto } from '../dto/index.js';
+import { AdminLoginDto, GoogleLoginDto, RefreshTokenDto } from '../dto/index.js';
 import { ActiveSessionEntity, TokenPairEntity } from '../entities/index.js';
 import { AdminLoginService } from '../services/admin-login.service.js';
+import { GoogleLoginService } from '../services/google-login.service.js';
 import { SessionService } from '../services/session.service.js';
 import type { AuthenticatedUser } from '../types/authenticated-user.js';
 
@@ -15,6 +16,7 @@ export class AuthController {
   constructor(
     private readonly sessions: SessionService,
     private readonly adminLoginService: AdminLoginService,
+    private readonly googleLoginService: GoogleLoginService,
   ) {}
 
   @Post('admin/login')
@@ -33,6 +35,27 @@ export class AuthController {
     return this.adminLoginService.login(
       dto.email,
       dto.password,
+      auditContextFromRequest(req),
+      dto.deviceId,
+    );
+  }
+
+  @Post('google')
+  @Public()
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Google OAuth 2.0 / OpenID Connect login',
+    description:
+      'Authenticates students and non-admin users via institutional Google OAuth. ' +
+      'Verifies Google ID token server-side, validates school domain restrictions, ' +
+      'links google_sub, and transitions invited users to active status.',
+  })
+  @ApiResponse({ status: 200, description: 'Authenticated successfully', type: TokenPairEntity })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Authentication failed' })
+  async googleLogin(@Body() dto: GoogleLoginDto, @Req() req: Request): Promise<TokenPairEntity> {
+    return this.googleLoginService.login(
+      dto.idToken,
       auditContextFromRequest(req),
       dto.deviceId,
     );
