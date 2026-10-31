@@ -11,6 +11,12 @@ export interface AuthConfig {
    */
   refreshReuseGraceSeconds: number;
   devTools: boolean;
+  /**
+   * Google OAuth 2.0 Client IDs (comma-separated in environment).
+   * The Google ID token's `aud` claim must match one of these.
+   * In production, at least one client ID is strictly required.
+   */
+  googleClientIds: string[];
 }
 
 const DEV_FALLBACK_SECRET = 'wamdp-dev-only-secret-change-me';
@@ -21,6 +27,17 @@ export const authConfig = (): { auth: AuthConfig } => {
   if (!secret && isProduction) {
     throw new Error('JWT_ACCESS_SECRET must be set in production.');
   }
+
+  const googleClientIdsRaw = process.env.GOOGLE_CLIENT_IDS || process.env.GOOGLE_CLIENT_ID || '';
+  const googleClientIds = googleClientIdsRaw
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+
+  if (isProduction && googleClientIds.length === 0) {
+    throw new Error('GOOGLE_CLIENT_IDS must be configured in production.');
+  }
+
   return {
     auth: {
       jwtAccessSecret: secret || DEV_FALLBACK_SECRET,
@@ -29,6 +46,7 @@ export const authConfig = (): { auth: AuthConfig } => {
       sessionRetentionDays: parseInt(process.env.SESSION_RETENTION_DAYS || '30', 10),
       refreshReuseGraceSeconds: parseInt(process.env.REFRESH_REUSE_GRACE_SECONDS || '10', 10),
       devTools: process.env.AUTH_DEV_TOOLS === 'true' && !isProduction,
+      googleClientIds,
     },
   };
 };
