@@ -136,12 +136,13 @@ export class GoogleLoginService {
 
     // 6. Enforce per-school institutional domain restrictions (Issue #11)
     const userSchoolIds = user.assignments.map((a) => a.schoolId);
-    if (userSchoolIds.length > 0) {
-      const domainCheck = await this.domainValidation.validateDomainForUser(email, userSchoolIds);
-      if (!domainCheck.allowed) {
-        await this.recordFailure(email, 'domain_not_allowed', user.id, context);
-        return this.deny();
-      }
+    const domainCheck = await this.domainValidation.validateDomainForUser(
+      email,
+      userSchoolIds,
+    );
+    if (!domainCheck.allowed) {
+      await this.recordFailure(email, 'domain_not_allowed', user.id, context);
+      return this.deny();
     }
 
     // 7. First login: link googleSub and transition status from INVITED to ACTIVE

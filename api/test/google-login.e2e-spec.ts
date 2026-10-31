@@ -1,12 +1,13 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import bcrypt from 'bcryptjs';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
 import { PrismaService } from '../src/database/prisma.service.js';
 
 /**
- * E2E test suite for Issue #10: Google OAuth 2.0 / OpenID Connect Login.
+ * E2E test suite for Issue #10 & Issue #11: Google OAuth 2.0 & School Domain Restrictions.
  *
  * Acceptance Criteria verified against MySQL:
  *  - 400 Bad Request on missing idToken.
@@ -16,19 +17,22 @@ import { PrismaService } from '../src/database/prisma.service.js';
  *  - Unknown user: rejects valid Google accounts not pre-registered in system (audits unknown_user).
  *  - Administrator accounts: rejects platform admins and school admins from Google login (audits not_admin).
  *  - Suspended accounts: rejects suspended users with generic 401 (audits account_suspended).
- *  - School domain restrictions (Issue #11): rejects students whose domain does not match assigned school (audits domain_not_allowed).
- *  - Departmental subdomains: allows students with subdomains of assigned school's configured domain.
- *  - Unrestricted schools: allows arbitrary email domains for schools with zero configured domains.
+ *  - Issue #11: Rejects user whose domain is not in school_domains.
+ *  - Issue #11: Rejects user whose domain belongs to a school they are NOT assigned to.
+ *  - Issue #11: A school with no configured domain does not restrict anything (open onboarding).
+ *  - Issue #11: Departmental subdomains permitted when institutional domain is configured.
+ *  - Issue #11: Admin accounts (email + password) are NOT affected by domain restrictions.
  *  - Device binding: binds deviceId to session when supplied.
  *  - Issued access token immediately authorizes protected endpoints (e.g. GET /auth/me).
  *  - Cryptographic audit trail: verifies login_success and login_failure events in hash chain.
  */
-describe('Google Login E2E (Issue #10 & #11)', () => {
+describe('Google Login & School Domain Restrictions E2E (Issue #10 & #11)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   const stamp = Date.now();
 
   let schoolAId: string;
+  let schoolCId: string;
   let unrestrictedSchoolId: string;
 
   let studentRoleId: string;
@@ -97,7 +101,19 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
     });
     schoolAId = schoolA.id;
 
-    // 2. Open / Unrestricted School (0 domains configured)
+    // 2. School C with domain: google-e2e-${stamp}-c.edu (for cross-school domain testing)
+    const schoolC = await prisma.school.create({
+      data: {
+        name: `Google Login School C ${stamp}`,
+        allowedDomains: `google-e2e-${stamp}-c.edu`,
+        domains: {
+          create: [{ domain: `google-e2e-${stamp}-c.edu` }],
+        },
+      },
+    });
+    schoolCId = schoolC.id;
+
+    // 3. Open / Unrestricted School (0 domains configured)
     const schoolOpen = await prisma.school.create({
       data: {
         name: `Google Login Open School ${stamp}`,
@@ -105,7 +121,7 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
     });
     unrestrictedSchoolId = schoolOpen.id;
 
-    // 3. Invited student in School A
+    // 4. Invited student in School A
     const invitedStudent = await prisma.user.create({
       data: {
         email: `invited-student-${stamp}@google-e2e-${stamp}-a.edu`,
@@ -119,7 +135,7 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
       data: { userId: invitedStudent.id, schoolId: schoolAId, roleId: studentRoleId },
     });
 
-    // 4. Returning student in School A with pre-existing googleSub
+    // 5. Returning student in School A with pre-existing googleSub
     const returningStudent = await prisma.user.create({
       data: {
         email: `returning-student-${stamp}@google-e2e-${stamp}-a.edu`,
@@ -134,7 +150,7 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
       data: { userId: returningStudent.id, schoolId: schoolAId, roleId: studentRoleId },
     });
 
-    // 5. Suspended student in School A
+    // 6. Suspended student in School A
     const suspendedStudent = await prisma.user.create({
       data: {
         email: `suspended-student-${stamp}@google-e2e-${stamp}-a.edu`,
@@ -148,21 +164,21 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
       data: { userId: suspendedStudent.id, schoolId: schoolAId, roleId: studentRoleId },
     });
 
-    // 6. School Admin in School A (must not log in via Google)
+    // 7. School Admin in School A (must not log in via Google)
     const schoolAdmin = await prisma.user.create({
       data: {
         email: `admin-${stamp}@google-e2e-${stamp}-a.edu`,
         fullName: 'School Admin',
         status: 'ACTIVE',
         authProvider: 'local',
-        passwordHash: '$2b$12$e8D/1m6Qz7Z9pE9D3hB.Ou',
+        passwordHash: await bcrypt.hash('SecurePassword123!', 12),
       },
     });
     await prisma.userAssignment.create({
       data: { userId: schoolAdmin.id, schoolId: schoolAId, roleId: schoolAdminRoleId },
     });
 
-    // 7. Student in Open School (allowed any email, e.g. gmail)
+    // 8. Student in Open School (allowed any email, e.g. gmail)
     const openSchoolStudent = await prisma.user.create({
       data: {
         email: `open-student-${stamp}@gmail.com`,
@@ -175,7 +191,7 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
       data: { userId: openSchoolStudent.id, schoolId: unrestrictedSchoolId, roleId: studentRoleId },
     });
 
-    // 8. Student in School A with departmental subdomain
+    // 9. Student in School A with departmental subdomain
     const subStudent = await prisma.user.create({
       data: {
         email: `sub-student-${stamp}@dept.google-e2e-${stamp}-a.edu`,
@@ -186,6 +202,49 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
     });
     await prisma.userAssignment.create({
       data: { userId: subStudent.id, schoolId: schoolAId, roleId: studentRoleId },
+    });
+
+    // 10. Student assigned to School A whose domain belongs to School C (cross-school mismatch)
+    const crossSchoolStudent = await prisma.user.create({
+      data: {
+        email: `cross-student-${stamp}@google-e2e-${stamp}-c.edu`,
+        fullName: 'Cross School Student',
+        status: 'INVITED',
+        authProvider: 'google',
+      },
+    });
+    await prisma.userAssignment.create({
+      data: { userId: crossSchoolStudent.id, schoolId: schoolAId, roleId: studentRoleId },
+    });
+
+    // 11. Dual assigned student: assigned to School A (restricted) and School Open (unrestricted)
+    const dualStudent = await prisma.user.create({
+      data: {
+        email: `dual-student-${stamp}@personal-mail.org`,
+        fullName: 'Dual School Student',
+        status: 'INVITED',
+        authProvider: 'google',
+      },
+    });
+    await prisma.userAssignment.create({
+      data: { userId: dualStudent.id, schoolId: schoolAId, roleId: studentRoleId },
+    });
+    await prisma.userAssignment.create({
+      data: { userId: dualStudent.id, schoolId: unrestrictedSchoolId, roleId: studentRoleId },
+    });
+
+    // 12. External Admin for School A with external domain (to test admin login is unaffected)
+    const externalAdmin = await prisma.user.create({
+      data: {
+        email: `external-admin-${stamp}@any-custom-domain.net`,
+        fullName: 'External Admin',
+        status: 'ACTIVE',
+        authProvider: 'local',
+        passwordHash: await bcrypt.hash('AdminExternal123!', 12),
+      },
+    });
+    await prisma.userAssignment.create({
+      data: { userId: externalAdmin.id, schoolId: schoolAId, roleId: schoolAdminRoleId },
     });
   });
 
@@ -202,7 +261,7 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
       where: { email: { contains: `-${stamp}@` } },
     });
 
-    const safeSchoolIds = [schoolAId, unrestrictedSchoolId].filter(Boolean);
+    const safeSchoolIds = [schoolAId, schoolCId, unrestrictedSchoolId].filter(Boolean);
     if (safeSchoolIds.length > 0) {
       await prisma.schoolDomain.deleteMany({
         where: { schoolId: { in: safeSchoolIds } },
@@ -398,12 +457,11 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
     });
   });
 
-  describe('School Domain Restrictions (Issue #11)', () => {
-    it('rejects user whose email domain is not allowed for their school', async () => {
-      // Create student assigned to School A, but whose email belongs to unauthorized domain
+  describe('School Domain Restrictions (Issue #11 Acceptance Criteria)', () => {
+    it('criterion 1: rejects user whose domain is not in school_domains (401)', async () => {
       const foreignStudent = await prisma.user.create({
         data: {
-          email: `foreign-domain-${stamp}@gmail.com`,
+          email: `foreign-domain-${stamp}@unknown-external-domain.com`,
           fullName: 'Foreign Domain Student',
           status: 'INVITED',
           authProvider: 'google',
@@ -416,7 +474,7 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
       const token = `foreign-token-${stamp}`;
       mockTokenMap.set(token, {
         sub: `sub-foreign-${stamp}`,
-        email: `foreign-domain-${stamp}@gmail.com`,
+        email: `foreign-domain-${stamp}@unknown-external-domain.com`,
         email_verified: true,
         iss: 'https://accounts.google.com',
         aud: 'test-aud',
@@ -431,7 +489,50 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
       expect(res.body.message).toMatch(/authentication failed/i);
     });
 
-    it('allows login when student email belongs to departmental subdomain of configured domain', async () => {
+    it('criterion 2: rejects user whose domain belongs to a school they are NOT assigned to (401)', async () => {
+      const email = `cross-student-${stamp}@google-e2e-${stamp}-c.edu`;
+      const token = `cross-token-${stamp}`;
+
+      mockTokenMap.set(token, {
+        sub: `sub-cross-${stamp}`,
+        email,
+        email_verified: true,
+        iss: 'https://accounts.google.com',
+        aud: 'test-aud',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+
+      // User belongs to School A, but email domain belongs to School C
+      const res = await request(app.getHttpServer())
+        .post('/auth/google')
+        .send({ idToken: token })
+        .expect(401);
+
+      expect(res.body.message).toMatch(/authentication failed/i);
+    });
+
+    it('criterion 3: a school with no configured domain does NOT restrict anything (open school)', async () => {
+      const email = `open-student-${stamp}@gmail.com`;
+      const token = `open-token-${stamp}`;
+
+      mockTokenMap.set(token, {
+        sub: `sub-open-${stamp}`,
+        email,
+        email_verified: true,
+        iss: 'https://accounts.google.com',
+        aud: 'test-aud',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/google')
+        .send({ idToken: token })
+        .expect(200);
+
+      expect(res.body).toHaveProperty('accessToken');
+    });
+
+    it('allows departmental subdomain matching parent school domain', async () => {
       const email = `sub-student-${stamp}@dept.google-e2e-${stamp}-a.edu`;
       const token = `subdomain-token-${stamp}`;
 
@@ -452,12 +553,12 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
       expect(res.body).toHaveProperty('accessToken');
     });
 
-    it('allows login with arbitrary email provider when school has zero configured domains', async () => {
-      const email = `open-student-${stamp}@gmail.com`;
-      const token = `open-token-${stamp}`;
+    it('allows dual-assigned student to access via their unrestricted school', async () => {
+      const email = `dual-student-${stamp}@personal-mail.org`;
+      const token = `dual-token-${stamp}`;
 
       mockTokenMap.set(token, {
-        sub: `sub-open-${stamp}`,
+        sub: `sub-dual-${stamp}`,
         email,
         email_verified: true,
         iss: 'https://accounts.google.com',
@@ -471,6 +572,22 @@ describe('Google Login E2E (Issue #10 & #11)', () => {
         .expect(200);
 
       expect(res.body).toHaveProperty('accessToken');
+    });
+
+    it('criterion 4: admin accounts (email + password) are NOT affected by domain restrictions', async () => {
+      const email = `external-admin-${stamp}@any-custom-domain.net`;
+
+      // School A only allows google-e2e-${stamp}-a.edu, but admin can log in with any domain
+      const res = await request(app.getHttpServer())
+        .post('/auth/admin/login')
+        .send({
+          email,
+          password: 'AdminExternal123!',
+        })
+        .expect(200);
+
+      expect(res.body).toHaveProperty('accessToken');
+      expect(res.body).toHaveProperty('refreshToken');
     });
   });
 
