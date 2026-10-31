@@ -140,3 +140,4 @@ export class DomainValidationService {
     return { allowed: false, matchedSchoolId: null };
   }
 }
+

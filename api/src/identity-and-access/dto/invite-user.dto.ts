@@ -61,3 +61,4 @@ export class InviteUserDto {
   @IsOptional()
   role?: string;
 }
+
