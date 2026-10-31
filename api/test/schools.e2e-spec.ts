@@ -6,7 +6,7 @@ import { AppModule } from '../src/app.module.js';
 import { TokenService } from '../src/auth/services/token.service.js';
 import { PrismaService } from '../src/database/prisma.service.js';
 
-describe('Schools (e2e) - Create a school (Issue #27)', () => {
+describe('Schools (e2e) - Create, List and View (Issues #27 & #29)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let tokens: TokenService;
@@ -17,6 +17,8 @@ describe('Schools (e2e) - Create a school (Issue #27)', () => {
   const testPrefix = `e2e-school-test-${Date.now()}`;
   let schoolAdminUserId: string;
   let studentUserId: string;
+  let tempSchoolId: string;
+  let anotherSchoolId: string;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -40,16 +42,26 @@ describe('Schools (e2e) - Create a school (Issue #27)', () => {
     const schoolAdminRole = await prisma.role.findUniqueOrThrow({ where: { name: 'SCHOOL_ADMIN' } });
     const studentRole = await prisma.role.findUniqueOrThrow({ where: { name: 'STUDENT' } });
 
-    // Seed temporary school for non-platform user assignments
+    // Seed temporary schools for testing scoping and listings
     const tempSchool = await prisma.school.create({
       data: {
-        name: `${testPrefix}-seed-school`,
+        name: `${testPrefix}-seed-school-assigned`,
         status: 'active',
         allowedDomains: '',
       },
     });
+    tempSchoolId = tempSchool.id;
 
-    // 3. School Admin user
+    const anotherSchool = await prisma.school.create({
+      data: {
+        name: `${testPrefix}-seed-school-unassigned`,
+        status: 'active',
+        allowedDomains: '',
+      },
+    });
+    anotherSchoolId = anotherSchool.id;
+
+    // 3. School Admin user (assigned only to tempSchoolId)
     const schoolAdminUser = await prisma.user.create({
       data: {
         email: `${testPrefix}-admin@school.local`,
@@ -57,7 +69,7 @@ describe('Schools (e2e) - Create a school (Issue #27)', () => {
         status: 'ACTIVE',
         assignments: {
           create: {
-            schoolId: tempSchool.id,
+            schoolId: tempSchoolId,
             roleId: schoolAdminRole.id,
           },
         },
@@ -74,7 +86,7 @@ describe('Schools (e2e) - Create a school (Issue #27)', () => {
         status: 'ACTIVE',
         assignments: {
           create: {
-            schoolId: tempSchool.id,
+            schoolId: tempSchoolId,
             roleId: studentRole.id,
           },
         },
@@ -104,7 +116,7 @@ describe('Schools (e2e) - Create a school (Issue #27)', () => {
     await app.close();
   });
 
-  describe('POST /schools - Acceptance criteria & authorization', () => {
+  describe('POST /schools (Issue #27)', () => {
     it('creates a school with status active when requested by platform admin', async () => {
       const schoolName = `${testPrefix}-Institute of Advanced AI`;
       const res = await request(app.getHttpServer())
@@ -121,7 +133,6 @@ describe('Schools (e2e) - Create a school (Issue #27)', () => {
       expect(res.body.status).toBe('active');
       expect(res.body.settings).toEqual({ maxUsers: 1200, offlineSyncEnabled: true });
 
-      // Verify persisted state in database
       const saved = await prisma.school.findUnique({
         where: { id: res.body.id },
       });
@@ -148,14 +159,12 @@ describe('Schools (e2e) - Create a school (Issue #27)', () => {
     it('rejects duplicate school name with clear 409 Conflict error', async () => {
       const duplicateName = `${testPrefix}-Unique Academy`;
 
-      // 1. First creation succeeds
       await request(app.getHttpServer())
         .post('/schools')
         .set('Authorization', `Bearer ${platformAdminToken}`)
         .send({ name: duplicateName })
         .expect(201);
 
-      // 2. Second creation with duplicate name fails with 409
       const res = await request(app.getHttpServer())
         .post('/schools')
         .set('Authorization', `Bearer ${platformAdminToken}`)
@@ -206,5 +215,124 @@ describe('Schools (e2e) - Create a school (Issue #27)', () => {
         .expect(400);
     });
   });
-});
 
+  describe('GET /schools (Issue #29 - Pagination, Filters & Scoping)', () => {
+    it('allows platform admin to list all schools with pagination metadata', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/schools?page=1&limit=2')
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .expect(200);
+
+      expect(res.body).toHaveProperty('data');
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.length).toBeLessThanOrEqual(2);
+      expect(res.body.page).toBe(1);
+      expect(res.body.limit).toBe(2);
+      expect(res.body).toHaveProperty('total');
+      expect(res.body.total).toBeGreaterThanOrEqual(2);
+      expect(res.body).toHaveProperty('totalPages');
+    });
+
+    it('allows filtering by status and searching by name', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/schools?status=active&search=${encodeURIComponent(`${testPrefix}-seed-school-assigned`)}`)
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .expect(200);
+
+      expect(res.body.data.length).toBe(1);
+      expect(res.body.data[0].id).toBe(tempSchoolId);
+      expect(res.body.data[0].status).toBe('active');
+    });
+
+    it('scopes results so a school admin only sees their own assigned school', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/schools')
+        .set('Authorization', `Bearer ${schoolAdminToken}`)
+        .expect(200);
+
+      expect(res.body.data.length).toBe(1);
+      expect(res.body.data[0].id).toBe(tempSchoolId);
+      expect(res.body.total).toBe(1);
+
+      // Verify the other test school is NOT included in the results
+      const ids = res.body.data.map((s: { id: string }) => s.id);
+      expect(ids).not.toContain(anotherSchoolId);
+    });
+
+    it('rejects student listing schools with 403 Forbidden', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/schools')
+        .set('Authorization', `Bearer ${studentToken}`)
+        .expect(403);
+
+      expect(res.body.message).toContain('schools:read');
+    });
+
+    it('rejects unauthenticated list request with 401 Unauthorized', async () => {
+      await request(app.getHttpServer())
+        .get('/schools')
+        .expect(401);
+    });
+  });
+
+  describe('GET /schools/:id (Issue #29 - View Single School & Scoping)', () => {
+    it('allows platform admin to read any school by ID', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/schools/${anotherSchoolId}`)
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .expect(200);
+
+      expect(res.body.id).toBe(anotherSchoolId);
+      expect(res.body.name).toBe(`${testPrefix}-seed-school-unassigned`);
+    });
+
+    it('allows school admin to read their own assigned school', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/schools/${tempSchoolId}`)
+        .set('Authorization', `Bearer ${schoolAdminToken}`)
+        .expect(200);
+
+      expect(res.body.id).toBe(tempSchoolId);
+      expect(res.body.name).toBe(`${testPrefix}-seed-school-assigned`);
+    });
+
+    it('rejects school admin reading another school with 403 Forbidden', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/schools/${anotherSchoolId}`)
+        .set('Authorization', `Bearer ${schoolAdminToken}`)
+        .expect(403);
+
+      expect(res.body.message).toContain('You do not have access to this school');
+    });
+
+    it('returns 404 Not Found for non-existent school ID when requested by platform admin', async () => {
+      const nonExistentUuid = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+      const res = await request(app.getHttpServer())
+        .get(`/schools/${nonExistentUuid}`)
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .expect(404);
+
+      expect(res.body.message).toContain(`School with ID '${nonExistentUuid}' not found`);
+    });
+
+    it('returns 400 Bad Request when ID is not a valid UUID', async () => {
+      await request(app.getHttpServer())
+        .get('/schools/not-a-uuid')
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .expect(400);
+    });
+
+    it('rejects student viewing school details with 403 Forbidden', async () => {
+      await request(app.getHttpServer())
+        .get(`/schools/${tempSchoolId}`)
+        .set('Authorization', `Bearer ${studentToken}`)
+        .expect(403);
+    });
+
+    it('rejects unauthenticated request to view school with 401 Unauthorized', async () => {
+      await request(app.getHttpServer())
+        .get(`/schools/${tempSchoolId}`)
+        .expect(401);
+    });
+  });
+});

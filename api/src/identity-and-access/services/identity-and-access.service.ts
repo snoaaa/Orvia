@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import type { UserStatus } from '@prisma/client';
+import type { Prisma, UserStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
@@ -9,8 +9,9 @@ import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateRoleDto, CreateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import type { CreateRoleDto, CreateSchoolDto, ListSchoolsQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import {
+  PaginatedSchoolsEntity,
   PermissionHolderEntity,
   PermissionOverviewEntity,
   RoleEntity,
@@ -258,14 +259,76 @@ export class IdentityAndAccessService {
     return UserMapper.toEntity(updated);
   }
 
-  async findAllSchools(actor: AuthenticatedUser): Promise<SchoolEntity[]> {
-    const id = schoolIdFilter(actor, 'schools:read');
-    const schools = await this.prisma.school.findMany({
-      where: id ? { id } : undefined,
-      include: { domains: true },
-      orderBy: { name: 'asc' },
+  /**
+   * List schools with pagination and status filter (Issue #29).
+   *
+   * Scoping:
+   *  - Platform administrators see all schools.
+   *  - School administrators only see their own assigned schools.
+   *  - Others cannot read schools (blocked by guard).
+   */
+  async findAllSchools(
+    actor: AuthenticatedUser,
+    query?: ListSchoolsQueryDto,
+  ): Promise<PaginatedSchoolsEntity> {
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
+    const skip = (page - 1) * limit;
+
+    const allowedSchools = schoolIdFilter(actor, 'schools:read');
+
+    const where: Prisma.SchoolWhereInput = {
+      ...(allowedSchools ? { id: allowedSchools } : {}),
+      ...(query?.status ? { status: query.status.trim() } : {}),
+      ...(query?.search
+        ? {
+            name: {
+              contains: query.search.trim(),
+            },
+          }
+        : {}),
+    };
+
+    const [total, schools] = await Promise.all([
+      this.prisma.school.count({ where }),
+      this.prisma.school.findMany({
+        where,
+        include: { domains: true },
+        orderBy: { name: 'asc' },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    return new PaginatedSchoolsEntity({
+      data: schools.map((s) => SchoolMapper.toEntity(s)),
+      total,
+      page,
+      limit,
+      totalPages,
     });
-    return schools.map((s) => SchoolMapper.toEntity(s));
+  }
+
+  /**
+   * Get a single school by ID (Issue #29).
+   *
+   * Scoping:
+   *  - Platform administrator may read any school.
+   *  - School administrator can only read their own school (throws 403 Forbidden).
+   *  - Throws 404 NotFoundException if the school does not exist.
+   */
+  async findSchoolById(id: string, actor: AuthenticatedUser): Promise<SchoolEntity> {
+    assertSchoolAccess(actor, 'schools:read', id);
+    const school = await this.prisma.school.findUnique({
+      where: { id },
+      include: { domains: true },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID '${id}' not found`);
+    }
+    return SchoolMapper.toEntity(school);
   }
 
   /**

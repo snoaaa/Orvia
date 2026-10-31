@@ -1,17 +1,17 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateSchoolDto } from '../dto/index.js';
-import { SchoolEntity } from '../entities/index.js';
+import { CreateSchoolDto, ListSchoolsQueryDto } from '../dto/index.js';
+import { PaginatedSchoolsEntity, SchoolEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
 @ApiTags('Schools')
 @ApiBearerAuth('bearer-jwt')
 @ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })
-@ApiResponse({ status: 403, description: 'Missing permission: only platform administrators can create schools' })
+@ApiResponse({ status: 403, description: 'Missing required permission or unauthorized for school' })
 @Controller('schools')
 export class SchoolsController {
   constructor(private readonly identityService: IdentityAndAccessService) {}
@@ -46,5 +46,45 @@ export class SchoolsController {
   ): Promise<SchoolEntity> {
     return this.identityService.createSchool(dto, actor, auditContextFromRequest(req));
   }
-}
 
+  @Get()
+  @RequirePermission('schools:read')
+  @ApiOperation({
+    summary: 'List schools with pagination and status filter (Section 4.5)',
+    description:
+      'Retrieves educational institutions (Issue #29). ' +
+      'Platform administrators see all schools; school administrators only see their own assigned school(s). ' +
+      'Supports pagination (page, limit) and filtering by status and name search.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of schools retrieved',
+    type: PaginatedSchoolsEntity,
+  })
+  async getSchools(
+    @Query() query: ListSchoolsQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedSchoolsEntity> {
+    return this.identityService.findAllSchools(actor, query);
+  }
+
+  @Get(':id')
+  @RequirePermission('schools:read')
+  @ApiOperation({
+    summary: 'Get school by ID (Section 4.5)',
+    description:
+      'Retrieves details for a specific school (Issue #29). ' +
+      'Platform administrators can read any school; school administrators can only read their own assigned school ' +
+      '(returns 403 if attempting to access another school).',
+  })
+  @ApiParam({ name: 'id', description: 'School UUID' })
+  @ApiResponse({ status: 200, description: 'School retrieved successfully', type: SchoolEntity })
+  @ApiResponse({ status: 403, description: 'Forbidden: school admin cannot read another school' })
+  @ApiResponse({ status: 404, description: 'School not found' })
+  async getSchoolById(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SchoolEntity> {
+    return this.identityService.findSchoolById(id, actor);
+  }
+}
