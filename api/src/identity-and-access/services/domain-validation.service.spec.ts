@@ -21,6 +21,10 @@ describe('DomainValidationService (Unit Tests)', () => {
       expect(service.extractDomain('student@harvard.edu')).toBe('harvard.edu');
       expect(service.extractDomain('  User@School.ORG  ')).toBe('school.org');
       expect(service.extractDomain('first.last+tag@sub.domain.edu')).toBe('sub.domain.edu');
+      expect(service.extractDomain('student@polytechnique.cm')).toBe('polytechnique.cm');
+      expect(service.extractDomain('researcher@cl.cam.ac.uk')).toBe('cl.cam.ac.uk');
+      expect(service.extractDomain('eleve@ens-lyon.fr')).toBe('ens-lyon.fr');
+      expect(service.extractDomain('admin@tech.academy')).toBe('tech.academy');
     });
 
     it('returns null for invalid emails or emails without top-level domains', () => {
@@ -59,6 +63,54 @@ describe('DomainValidationService (Unit Tests)', () => {
       expect(res.domain).toBe('cs.stanford.edu');
     });
 
+    it('supports international ccTLDs and arbitrary TLDs (e.g. .cm, .fr, .ac.uk, .academy)', async () => {
+      mockPrisma.school.findUnique.mockResolvedValue({
+        id: 'school-intl',
+        name: 'Ecole Polytechnique de Yaounde',
+        domains: [{ domain: 'polytechnique.cm' }],
+      });
+
+      const res = await service.validateDomainForSchool('etudiant@polytechnique.cm', 'school-intl');
+      expect(res.allowed).toBe(true);
+      expect(res.domain).toBe('polytechnique.cm');
+    });
+
+    it('allows departmental subdomains when the parent institutional domain is configured', async () => {
+      mockPrisma.school.findUnique.mockResolvedValue({
+        id: 'school-univ',
+        name: 'University of Cambridge',
+        domains: [{ domain: 'cam.ac.uk' }],
+      });
+
+      const res = await service.validateDomainForSchool('student@cl.cam.ac.uk', 'school-univ');
+      expect(res.allowed).toBe(true);
+      expect(res.domain).toBe('cl.cam.ac.uk');
+    });
+
+    it('prevents domain suffix spoofing (e.g. evilcam.ac.uk is NOT cam.ac.uk)', async () => {
+      mockPrisma.school.findUnique.mockResolvedValue({
+        id: 'school-univ',
+        name: 'University of Cambridge',
+        domains: [{ domain: 'cam.ac.uk' }],
+      });
+
+      const res = await service.validateDomainForSchool('attacker@evilcam.ac.uk', 'school-univ');
+      expect(res.allowed).toBe(false);
+      expect(res.domain).toBe('evilcam.ac.uk');
+    });
+
+    it('prevents attacker prefix spoofing (e.g. cam.ac.uk.attacker.com is rejected)', async () => {
+      mockPrisma.school.findUnique.mockResolvedValue({
+        id: 'school-univ',
+        name: 'University of Cambridge',
+        domains: [{ domain: 'cam.ac.uk' }],
+      });
+
+      const res = await service.validateDomainForSchool('attacker@cam.ac.uk.attacker.com', 'school-univ');
+      expect(res.allowed).toBe(false);
+      expect(res.domain).toBe('cam.ac.uk.attacker.com');
+    });
+
     it('returns allowed: false when email does not match any configured school domain', async () => {
       mockPrisma.school.findUnique.mockResolvedValue({
         id: 'school-2',
@@ -92,15 +144,19 @@ describe('DomainValidationService (Unit Tests)', () => {
       expect(res.allowed).toBe(true);
     });
 
-    it('returns allowed: true when email domain matches one restricted assigned school', async () => {
+    it('returns allowed: true when email domain matches one restricted assigned school (including subdomains)', async () => {
       mockPrisma.school.findMany.mockResolvedValue([
         { id: 's1', domains: [{ domain: 'school-a.edu' }] },
-        { id: 's2', domains: [{ domain: 'school-b.edu' }] },
+        { id: 's2', domains: [{ domain: 'school-b.cm' }] },
       ]);
 
-      const res = await service.validateDomainForUser('student@school-a.edu', ['s1', 's2']);
-      expect(res.allowed).toBe(true);
-      expect(res.matchedSchoolId).toBe('s1');
+      const res1 = await service.validateDomainForUser('student@dept.school-a.edu', ['s1', 's2']);
+      expect(res1.allowed).toBe(true);
+      expect(res1.matchedSchoolId).toBe('s1');
+
+      const res2 = await service.validateDomainForUser('student@school-b.cm', ['s1', 's2']);
+      expect(res2.allowed).toBe(true);
+      expect(res2.matchedSchoolId).toBe('s2');
     });
 
     it('returns allowed: false when email domain does not match any restricted assigned school', async () => {
@@ -114,4 +170,3 @@ describe('DomainValidationService (Unit Tests)', () => {
     });
   });
 });
-

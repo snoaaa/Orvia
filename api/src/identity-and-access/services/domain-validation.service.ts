@@ -81,9 +81,10 @@ export class DomainValidationService {
       return { allowed: null, schoolId, domain };
     }
 
-    const isMatch = school.domains.some(
-      (d) => d.domain.trim().toLowerCase() === domain,
-    );
+    const isMatch = school.domains.some((d) => {
+      const allowed = d.domain.trim().toLowerCase();
+      return domain === allowed || domain.endsWith(`.${allowed}`);
+    });
 
     return {
       allowed: isMatch,
@@ -130,7 +131,10 @@ export class DomainValidationService {
 
     // Must match at least one restricted school's configured domain
     const matchedSchool = restrictedSchools.find((s) =>
-      s.domains.some((d) => d.domain.trim().toLowerCase() === domain),
+      s.domains.some((d) => {
+        const allowed = d.domain.trim().toLowerCase();
+        return domain === allowed || domain.endsWith(`.${allowed}`);
+      }),
     );
 
     if (matchedSchool) {
