@@ -222,6 +222,14 @@ describe('Schools (e2e) - Create, List and View (Issues #27 & #29)', () => {
         .send({ name: '' })
         .expect(400);
     });
+
+    it('rejects school name exceeding 191 characters with 400 Bad Request', async () => {
+      await request(app.getHttpServer())
+        .post('/schools')
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .send({ name: 'A'.repeat(192) })
+        .expect(400);
+    });
   });
 
   describe('GET /schools (Issue #29 - Pagination, Filters & Scoping)', () => {
@@ -280,6 +288,23 @@ describe('Schools (e2e) - Create, List and View (Issues #27 & #29)', () => {
       await request(app.getHttpServer())
         .get('/schools')
         .expect(401);
+    });
+
+    it('handles SQL injection payloads safely in search query', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/schools?search=${encodeURIComponent("' OR '1'='1")}`)
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .expect(200);
+
+      expect(res.body).toHaveProperty('data');
+      expect(Array.isArray(res.body.data)).toBe(true);
+    });
+
+    it('rejects limit exceeding 100 with 400 Bad Request to prevent denial of service', async () => {
+      await request(app.getHttpServer())
+        .get('/schools?limit=5000')
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .expect(400);
     });
   });
 
@@ -414,6 +439,16 @@ describe('Schools (e2e) - Create, List and View (Issues #27 & #29)', () => {
         .set('Authorization', `Bearer ${schoolAdminToken}`)
         .send({ name: '' })
         .expect(400);
+    });
+
+    it('rejects non-object in settings with 400 Bad Request', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/schools/${tempSchoolId}`)
+        .set('Authorization', `Bearer ${platformAdminToken}`)
+        .send({ settings: 12345 })
+        .expect(400);
+
+      expect(JSON.stringify(res.body.message)).toContain('settings must be an object');
     });
 
     it('rejects duplicate school name when updated to an existing school name with 409 Conflict', async () => {

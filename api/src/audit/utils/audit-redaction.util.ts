@@ -5,7 +5,7 @@ const SECRET_KEY_PATTERN =
   /password|passwd|passphrase|^pass$|^pwd$|secret|token|authorization|cookie|api[-_]?key|private[-_]?key|credential|(^|[-_])otp($|[-_])|code[-_]?verifier|signature/i;
 
 /** Values that look like a secret even under an innocent key (JWTs, bearer headers). */
-const SECRET_VALUE_PATTERNS = [/^eyJ[\w-]+\.[\w-]+\.[\w-]*$/, /^bearer\s+\S+/i, /^\$2[aby]\$\d{2}\$/];
+const SECRET_VALUE_PATTERNS = [/^eyJ[\w-]+\.[\w-]+\.[\w-]*$/, /^bearer\s+\S+/i, /^\$2[aby]\$\d{2}\$/, /^\$argon2/];
 
 const MAX_DEPTH = 8;
 

@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@ne
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, Public } from '../decorators/auth.decorators.js';
-import { AdminLoginDto, GoogleLoginDto, RefreshTokenDto } from '../dto/index.js';
+import { AdminLoginDto, GoogleLoginDto, RefreshTokenDto, SetupPasswordDto } from '../dto/index.js';
 import { ActiveSessionEntity, TokenPairEntity } from '../entities/index.js';
 import { AdminLoginService } from '../services/admin-login.service.js';
 import { GoogleLoginService } from '../services/google-login.service.js';
@@ -37,6 +37,31 @@ export class AuthController {
       dto.password,
       auditContextFromRequest(req),
       dto.deviceId,
+    );
+  }
+
+  @Post('password/setup')
+  @Public()
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Set initial password for an invited administrator (Issue #26)',
+    description:
+      'Validates a single-use expiring setup token, hashes the new password with argon2, ' +
+      'sets the administrator account status to ACTIVE, and marks the token as consumed. ' +
+      'The password is never returned or logged.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Password set up successfully. Account is now active and ready for login.',
+  })
+  @ApiResponse({ status: 400, description: 'Validation failed, token expired, or token already used' })
+  @ApiResponse({ status: 403, description: 'Account is suspended' })
+  @ApiResponse({ status: 404, description: 'User or token not found' })
+  async setupPassword(@Body() dto: SetupPasswordDto, @Req() req: Request): Promise<{ message: string }> {
+    return this.adminLoginService.setupPassword(
+      dto.token,
+      dto.newPassword,
+      auditContextFromRequest(req),
     );
   }
 

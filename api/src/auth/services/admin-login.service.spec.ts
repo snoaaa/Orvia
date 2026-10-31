@@ -1,4 +1,5 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import argon2 from 'argon2';
 import bcrypt from 'bcryptjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminLoginService } from './admin-login.service.js';
@@ -29,6 +30,12 @@ describe('AdminLoginService (Unit Tests)', () => {
         findUnique: vi.fn(),
         update: vi.fn(),
       },
+      passwordSetupToken: {
+        findUnique: vi.fn(),
+        update: vi.fn(),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      $transaction: vi.fn().mockImplementation((fn: any) => fn(mockPrisma)),
     };
     mockSessions = {
       createSession: vi.fn().mockResolvedValue(fakeTokenPair),
@@ -483,5 +490,144 @@ describe('AdminLoginService (Unit Tests)', () => {
         }),
       }),
     );
+  });
+
+  describe('setupPassword - Acceptance criteria (Issue #26)', () => {
+    const validRawToken = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    const futureDate = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const pastDate = new Date(Date.now() - 60 * 1000);
+
+    const mockTokenRecord = {
+      id: 'token-uuid-1',
+      userId: 'admin-user-1',
+      tokenHash: 'some-sha256-hash',
+      expiresAt: futureDate,
+      usedAt: null,
+      user: {
+        id: 'admin-user-1',
+        email: 'invited-admin@school.edu',
+        status: 'INVITED',
+        assignments: [
+          {
+            role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+            schoolId: 'school-1',
+          },
+        ],
+      },
+    };
+
+    it('sets initial password with argon2, activates account, marks token as used, and audits event', async () => {
+      mockPrisma.passwordSetupToken.findUnique.mockResolvedValue(mockTokenRecord);
+
+      const res = await service.setupPassword(validRawToken, 'NewStrongAdminPass123!', fakeContext);
+
+      expect(res.message).toContain('Password set up successfully');
+      expect(mockPrisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'admin-user-1' },
+          data: expect.objectContaining({
+            authProvider: 'local',
+            status: 'ACTIVE',
+            passwordHash: expect.stringMatching(/^\$argon2id\$/),
+          }),
+        }),
+      );
+      expect(mockPrisma.passwordSetupToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'token-uuid-1', usedAt: null },
+          data: expect.objectContaining({
+            usedAt: expect.any(Date),
+          }),
+        }),
+      );
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'password_setup',
+          actor: expect.objectContaining({
+            userId: 'admin-user-1',
+            role: 'SCHOOL_ADMIN',
+          }),
+          entity: { type: 'user', id: 'admin-user-1' },
+          details: expect.objectContaining({
+            email: 'invited-admin@school.edu',
+            method: 'setup_token',
+          }),
+        }),
+      );
+    });
+
+    it('rejects invalid or unknown setup token with 400 BadRequestException', async () => {
+      mockPrisma.passwordSetupToken.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.setupPassword('unknown-token', 'StrongPass123!', fakeContext),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects an already used setup token with 400 BadRequestException', async () => {
+      mockPrisma.passwordSetupToken.findUnique.mockResolvedValue({
+        ...mockTokenRecord,
+        usedAt: new Date(Date.now() - 3600_000),
+      });
+
+      await expect(
+        service.setupPassword(validRawToken, 'StrongPass123!', fakeContext),
+      ).rejects.toThrow('Setup token has already been used');
+    });
+
+    it('rejects an expired setup token with 400 BadRequestException', async () => {
+      mockPrisma.passwordSetupToken.findUnique.mockResolvedValue({
+        ...mockTokenRecord,
+        expiresAt: pastDate,
+      });
+
+      await expect(
+        service.setupPassword(validRawToken, 'StrongPass123!', fakeContext),
+      ).rejects.toThrow('Setup token has expired');
+    });
+
+    it('rejects password shorter than 8 characters with 400 BadRequestException', async () => {
+      mockPrisma.passwordSetupToken.findUnique.mockResolvedValue(mockTokenRecord);
+
+      await expect(
+        service.setupPassword(validRawToken, 'short', fakeContext),
+      ).rejects.toThrow('Password must be at least 8 characters long');
+    });
+
+    it('rejects setup when user account is suspended with 403 ForbiddenException', async () => {
+      mockPrisma.passwordSetupToken.findUnique.mockResolvedValue({
+        ...mockTokenRecord,
+        user: {
+          ...mockTokenRecord.user,
+          status: 'SUSPENDED',
+        },
+      });
+
+      await expect(
+        service.setupPassword(validRawToken, 'StrongPass123!', fakeContext),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('authenticates active admin with password hashed via argon2', async () => {
+      const argonHash = await argon2.hash('MyArgon2Password123!');
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'argon-admin-id',
+        email: 'argon.admin@school.edu',
+        authProvider: 'local',
+        passwordHash: argonHash,
+        status: 'ACTIVE',
+        assignments: [
+          {
+            schoolId: 'school-1',
+            role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+          },
+        ],
+      });
+
+      const result = await service.login('argon.admin@school.edu', 'MyArgon2Password123!', fakeContext);
+
+      expect(result).toBe(fakeTokenPair);
+      expect(mockSessions.createSession).toHaveBeenCalledWith('argon-admin-id', fakeContext, null);
+    });
   });
 });

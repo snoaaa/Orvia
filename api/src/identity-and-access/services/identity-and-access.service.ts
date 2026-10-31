@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Prisma, UserStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
@@ -98,6 +98,14 @@ export class IdentityAndAccessService {
       passwordHash = await bcrypt.hash(dto.password, 12);
     }
 
+    const isAdmin = role?.name === 'PLATFORM_ADMIN' || role?.name === 'SCHOOL_ADMIN';
+    let setupToken: string | null = null;
+    let setupTokenExpiresAt: Date | null = null;
+    if (isAdmin && !passwordHash) {
+      setupToken = randomBytes(32).toString('hex');
+      setupTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    }
+
     const data = UserMapper.fromDtoToCreateInput(dto, id, passwordHash);
     // User and school assignment together: an invited user must never exist without the
     // school they were invited into, or their school admin could not see them.
@@ -105,6 +113,16 @@ export class IdentityAndAccessService {
       const user = await tx.user.create({ data });
       if (dto.schoolId && role) {
         await tx.userAssignment.create({ data: { userId: user.id, schoolId: dto.schoolId, roleId: role.id } });
+      }
+      if (isAdmin && setupToken && setupTokenExpiresAt) {
+        const tokenHash = createHash('sha256').update(setupToken).digest('hex');
+        await tx.passwordSetupToken.create({
+          data: {
+            userId: user.id,
+            tokenHash,
+            expiresAt: setupTokenExpiresAt,
+          },
+        });
       }
       return user;
     });
@@ -163,19 +181,38 @@ export class IdentityAndAccessService {
     }
 
     const id = randomUUID();
+    const isAdmin = role?.name === 'PLATFORM_ADMIN' || role?.name === 'SCHOOL_ADMIN';
+    const authProvider = isAdmin ? 'local' : 'google';
+    let setupToken: string | null = null;
+    let setupTokenExpiresAt: Date | null = null;
+    if (isAdmin) {
+      setupToken = randomBytes(32).toString('hex');
+      setupTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    }
+
     const created = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
           id,
           email: normalizedEmail,
           fullName: dto.fullName.trim(),
-          authProvider: 'google',
+          authProvider,
           passwordHash: null,
           status: 'INVITED',
         },
       });
       if (dto.schoolId && role) {
         await tx.userAssignment.create({ data: { userId: user.id, schoolId: dto.schoolId, roleId: role.id } });
+      }
+      if (isAdmin && setupToken && setupTokenExpiresAt) {
+        const tokenHash = createHash('sha256').update(setupToken).digest('hex');
+        await tx.passwordSetupToken.create({
+          data: {
+            userId: user.id,
+            tokenHash,
+            expiresAt: setupTokenExpiresAt,
+          },
+        });
       }
       return user;
     });
@@ -192,7 +229,12 @@ export class IdentityAndAccessService {
       ),
     );
 
-    return UserMapper.toEntity(created);
+    const entity = UserMapper.toEntity(created);
+    if (isAdmin && setupToken) {
+      entity.setupToken = setupToken;
+      entity.setupTokenExpiresAt = setupTokenExpiresAt;
+    }
+    return entity;
   }
 
 

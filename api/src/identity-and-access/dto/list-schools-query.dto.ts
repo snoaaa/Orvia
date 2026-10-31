@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class ListSchoolsQueryDto {
   @ApiPropertyOptional({ example: 1, default: 1, description: 'Page number (minimum 1)' })
@@ -20,11 +20,13 @@ export class ListSchoolsQueryDto {
 
   @ApiPropertyOptional({ example: 'active', description: 'Filter schools by status (e.g. active, inactive)' })
   @IsString()
+  @MaxLength(50)
   @IsOptional()
   status?: string;
 
   @ApiPropertyOptional({ example: 'Polytechnic', description: 'Search schools by name' })
   @IsString()
+  @MaxLength(100)
   @IsOptional()
   search?: string;
 }
