@@ -3,15 +3,40 @@ import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@ne
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, Public } from '../decorators/auth.decorators.js';
-import { RefreshTokenDto } from '../dto/index.js';
+import { AdminLoginDto, RefreshTokenDto } from '../dto/index.js';
 import { ActiveSessionEntity, TokenPairEntity } from '../entities/index.js';
+import { AdminLoginService } from '../services/admin-login.service.js';
 import { SessionService } from '../services/session.service.js';
 import type { AuthenticatedUser } from '../types/authenticated-user.js';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly sessions: SessionService) {}
+  constructor(
+    private readonly sessions: SessionService,
+    private readonly adminLoginService: AdminLoginService,
+  ) {}
+
+  @Post('admin/login')
+  @Public()
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Administrator login (email and password)',
+    description:
+      'Authenticates platform and school administrators. Rejects non-admin users, suspended accounts, ' +
+      'and invalid credentials with a uniform generic error.',
+  })
+  @ApiResponse({ status: 200, description: 'Authenticated successfully', type: TokenPairEntity })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  async adminLogin(@Body() dto: AdminLoginDto, @Req() req: Request): Promise<TokenPairEntity> {
+    return this.adminLoginService.login(
+      dto.email,
+      dto.password,
+      auditContextFromRequest(req),
+      dto.deviceId,
+    );
+  }
 
   @Get('me')
   @ApiBearerAuth('bearer-jwt')

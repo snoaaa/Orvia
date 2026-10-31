@@ -8,6 +8,7 @@ import { AuthController } from './controllers/auth.controller.js';
 import { UserSessionsController } from './controllers/user-sessions.controller.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
+import { AdminLoginService } from './services/admin-login.service.js';
 import { AuthUserService } from './services/auth-user.service.js';
 import { SessionCleanupService } from './services/session-cleanup.service.js';
 import { SessionService } from './services/session.service.js';
@@ -36,9 +37,10 @@ import { TokenService } from './services/token.service.js';
     AuthUserService,
     SessionService,
     SessionCleanupService,
+    AdminLoginService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
-  exports: [TokenService, AuthUserService, SessionService],
+  exports: [TokenService, AuthUserService, SessionService, AdminLoginService],
 })
 export class AuthModule {}
