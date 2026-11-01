@@ -1,7 +1,69 @@
 @import '../../../../../../scss/settings/color-variables.scss';
 
+// Glacial Indifference — login typography
+@font-face {
+  font-family: 'Glacial Indifference';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/assets/fonts/Glacial/GlacialIndifference-Regular.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'Glacial Indifference';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/assets/fonts/Glacial/GlacialIndifference-Bold.otf') format('opentype');
+}
+
 .auth-main {
   position: relative;
+  font-family: 'Glacial Indifference', sans-serif;
+
+  // form controls and buttons do not inherit the page font by default
+  input,
+  button,
+  select,
+  textarea,
+  .form-control,
+  .btn {
+    font-family: inherit;
+  }
+
+  .auth-header img {
+    height: 35px;
+    width: auto;
+  }
+
+  // primary blue replaced with black
+  --bs-primary-rgb: 0, 0, 0;
+
+  .btn-primary {
+    --bs-btn-bg: #000;
+    --bs-btn-border-color: #000;
+    --bs-btn-hover-bg: #1a1a1a;
+    --bs-btn-hover-border-color: #1a1a1a;
+    --bs-btn-active-bg: #1a1a1a;
+    --bs-btn-active-border-color: #1a1a1a;
+    --bs-btn-disabled-bg: #000;
+    --bs-btn-disabled-border-color: #000;
+    --bs-btn-focus-shadow-rgb: 0, 0, 0;
+  }
+
+  .form-check .form-check-input.input-primary:checked {
+    background-color: #000;
+    border-color: #000;
+  }
+
+  .form-check .form-check-input.input-primary:focus {
+    border-color: #000;
+    box-shadow: 0 0 0 0.2rem rgba(0, 0, 0, 0.15);
+  }
+
+  .form-control:focus {
+    border-color: #000;
+  }
 
   .auth-wrapper {
     height: 100%;
@@ -42,7 +104,7 @@
 
       .auth-form {
         flex-direction: column;
-        background: url("/assets/images/authentication/img-auth-bg.svg");
+        background: url("/assets/images/logo.png");
         min-height: 100vh;
         padding: 24px;
         background-repeat: no-repeat;
