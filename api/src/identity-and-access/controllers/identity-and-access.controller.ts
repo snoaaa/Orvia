@@ -4,8 +4,8 @@ import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
-import { PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
+import { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import { PaginatedSchoolsEntity, PaginatedUsersEntity, PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
 @ApiTags('Identity and Access')
@@ -18,10 +18,20 @@ export class IdentityAndAccessController {
 
   @Get('users')
   @RequirePermission('users:read')
-  @ApiOperation({ summary: 'List users (school admins only see users of their schools)' })
-  @ApiResponse({ status: 200, description: 'List of users retrieved', type: [UserEntity] })
-  async getUsers(@CurrentUser() actor: AuthenticatedUser): Promise<UserEntity[]> {
-    return this.identityService.findAllUsers(actor);
+  @ApiOperation({
+    summary: 'List users, paginated (school admins only see users of their schools)',
+    description:
+      'Same page/limit contract as GET /schools: page defaults to 1, limit to 10 and is capped at 100. ' +
+      'Returns { data, total, page, limit, totalPages }.',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiResponse({ status: 200, description: 'Paginated list of users retrieved', type: PaginatedUsersEntity })
+  async getUsers(
+    @Query() query: ListUsersQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedUsersEntity> {
+    return this.identityService.findAllUsers(actor, query);
   }
 
   @Get('users/:id')
@@ -92,11 +102,22 @@ export class IdentityAndAccessController {
 
   @Get('schools')
   @RequirePermission('schools:read')
-  @ApiOperation({ summary: 'List schools (school admins only see their own)' })
-  @ApiResponse({ status: 200, description: 'List of schools', type: [SchoolEntity] })
-  async getSchools(@CurrentUser() actor: AuthenticatedUser): Promise<SchoolEntity[]> {
-    const paginated = await this.identityService.findAllSchools(actor, { limit: 100 });
-    return paginated.data;
+  @ApiOperation({
+    summary: 'List schools, paginated (school admins only see their own)',
+    description:
+      'Same contract as GET /schools: page defaults to 1, limit to 10 and is capped at 100. ' +
+      'Returns { data, total, page, limit, totalPages }.',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiQuery({ name: 'status', required: false, description: 'Filter by status (e.g. active, deactivated)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Search schools by name' })
+  @ApiResponse({ status: 200, description: 'Paginated list of schools retrieved', type: PaginatedSchoolsEntity })
+  async getSchools(
+    @Query() query: ListSchoolsQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedSchoolsEntity> {
+    return this.identityService.findAllSchools(actor, query);
   }
 
   @Get('schools/:id')

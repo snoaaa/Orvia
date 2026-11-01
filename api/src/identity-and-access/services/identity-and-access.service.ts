@@ -9,9 +9,10 @@ import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import type { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import {
   PaginatedSchoolsEntity,
+  PaginatedUsersEntity,
   PermissionHolderEntity,
   PermissionOverviewEntity,
   RoleEntity,
@@ -33,14 +34,44 @@ export class IdentityAndAccessService {
     private readonly domainValidation: DomainValidationService,
   ) {}
 
-  /** Platform admins see everyone; others only users assigned to a school they can read users in. */
-  async findAllUsers(actor: AuthenticatedUser): Promise<UserEntity[]> {
+  /**
+   * Platform admins see everyone; others only users assigned to a school they can read users in.
+   *
+   * Paginated with the same `page`/`limit` contract as `findAllSchools` (`limit` capped at 100),
+   * so `/identity/users` never returns an unbounded result set. Ordered by `created_at DESC`
+   * with `id` as a tie-breaker, which keeps pages stable when two users share a timestamp and
+   * matches the `users_created_at_id_idx` index.
+   */
+  async findAllUsers(
+    actor: AuthenticatedUser,
+    query?: ListUsersQueryDto,
+  ): Promise<PaginatedUsersEntity> {
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
+    const skip = (page - 1) * limit;
+
     const schoolId = schoolIdFilter(actor, 'users:read');
-    const users = await this.prisma.user.findMany({
-      where: schoolId ? { assignments: { some: { schoolId } } } : undefined,
-      orderBy: { createdAt: 'desc' },
+    const where: Prisma.UserWhereInput = schoolId ? { assignments: { some: { schoolId } } } : {};
+
+    const [total, users] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    return new PaginatedUsersEntity({
+      data: users.map((u) => UserMapper.toEntity(u)),
+      total,
+      page,
+      limit,
+      totalPages,
     });
-    return users.map((u) => UserMapper.toEntity(u));
   }
 
   async findUserById(id: string, actor: AuthenticatedUser): Promise<UserEntity> {
