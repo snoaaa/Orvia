@@ -18,6 +18,7 @@ import {
   UserEntity,
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
+import { DomainValidationService } from './domain-validation.service.js';
 
 /** Role given to invited users when none is specified. */
 const DEFAULT_INVITE_ROLE = 'STUDENT';
@@ -28,6 +29,7 @@ export class IdentityAndAccessService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly sessions: SessionService,
+    private readonly domainValidation: DomainValidationService,
   ) {}
 
   /** Platform admins see everyone; others only users assigned to a school they can read users in. */
@@ -83,6 +85,19 @@ export class IdentityAndAccessService {
     });
     if (existing) {
       throw new ConflictException(`User with email '${dto.email}' already exists`);
+    }
+
+    if (dto.schoolId) {
+      const emailDomain = this.domainValidation.extractDomain(normalizedEmail);
+      if (emailDomain) {
+        const domainResult = await this.domainValidation.validateDomainForSchool(emailDomain, dto.schoolId);
+        if (domainResult.allowed === false) {
+          throw new BadRequestException(
+            `The email domain '${emailDomain}' is not in the allowed domains for this school. ` +
+              `Check the school's configured domains in school_domains.`,
+          );
+        }
+      }
     }
 
     const id = randomUUID();

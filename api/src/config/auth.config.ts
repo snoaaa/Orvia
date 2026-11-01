@@ -34,6 +34,17 @@ export const authConfig = (): { auth: AuthConfig } => {
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
 
+  // SECURITY (Issue #10): In production, at least one Google Client ID MUST be configured.
+  // Leaving GOOGLE_CLIENT_IDS empty would cause the audience check in verifyGoogleToken to
+  // accept any valid Google ID token minted for ANY app — a Confused Deputy vulnerability.
+  if (isProduction && googleClientIds.length === 0) {
+    throw new Error(
+      'GOOGLE_CLIENT_IDS must be set in production. ' +
+      'Leaving it empty would accept any Google ID token from any OAuth app, ' +
+      'creating a Confused Deputy security vulnerability.',
+    );
+  }
+
   return {
     auth: {
       jwtAccessSecret: secret || DEV_FALLBACK_SECRET,

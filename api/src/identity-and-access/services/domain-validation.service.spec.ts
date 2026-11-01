@@ -15,7 +15,7 @@ describe('DomainValidationService', () => {
         findUnique: vi.fn(),
       },
       userAssignment: {
-        findFirst: vi.fn(),
+        findMany: vi.fn(),
       },
     };
     service = new DomainValidationService(mockPrisma);
@@ -66,27 +66,71 @@ describe('DomainValidationService', () => {
   });
 
   // ── validateDomainForGoogleLogin (Issue #11) ──────────────────────────────
+  //
+  // FIXED: The old implementation did a global school_domains lookup, which meant
+  // that if @gmail.com was not registered by ANY school, it returned allowed=null
+  // ("no restriction"), bypassing domain enforcement entirely.
+  //
+  // The correct behavior: check the user's ASSIGNED schools. If ANY of those schools
+  // has configured domains, the user's email domain MUST match.
 
   describe('validateDomainForGoogleLogin', () => {
-    it('returns allowed=null when no school has this domain (no restriction)', async () => {
-      mockPrisma.schoolDomain.findUnique.mockResolvedValue(null);
-      const result = await service.validateDomainForGoogleLogin('unknown.edu', 'user-id');
+    it('returns allowed=null when user has no school assignments (no restriction)', async () => {
+      mockPrisma.userAssignment.findMany.mockResolvedValue([]);
+      const result = await service.validateDomainForGoogleLogin('gmail.com', 'user-id');
       expect(result.allowed).toBeNull();
     });
 
-    it('returns allowed=true when domain matches and user is assigned to that school', async () => {
-      mockPrisma.schoolDomain.findUnique.mockResolvedValue({ domain: 'school.edu', schoolId: 's1' });
-      mockPrisma.userAssignment.findFirst.mockResolvedValue({ id: 'a1' });
-      const result = await service.validateDomainForGoogleLogin('school.edu', 'user-1');
-      expect(result.allowed).toBe(true);
+    it('returns allowed=null when all of the user\'s schools have no configured domains', async () => {
+      mockPrisma.userAssignment.findMany.mockResolvedValue([
+        { schoolId: 's1', school: { domains: [] } },
+        { schoolId: 's2', school: { domains: [] } },
+      ]);
+      const result = await service.validateDomainForGoogleLogin('gmail.com', 'user-id');
+      expect(result.allowed).toBeNull();
+    });
+
+    it('returns allowed=false when user\'s school has domains configured and email does NOT match — CRITICAL BUG FIX', async () => {
+      // This is the exact scenario that was broken: School A restricts to @school-a.edu,
+      // user tries to log in with @gmail.com. The old code returned allowed=null because
+      // @gmail.com is not in school_domains globally. The correct answer is allowed=false.
+      mockPrisma.userAssignment.findMany.mockResolvedValue([
+        { schoolId: 's1', school: { domains: [{ domain: 'school-a.edu' }] } },
+      ]);
+      const result = await service.validateDomainForGoogleLogin('gmail.com', 'user-id');
+      expect(result.allowed).toBe(false);
       expect(result.schoolId).toBe('s1');
     });
 
-    it('returns allowed=false when domain matches but user is NOT assigned to that school', async () => {
-      mockPrisma.schoolDomain.findUnique.mockResolvedValue({ domain: 'school.edu', schoolId: 's1' });
-      mockPrisma.userAssignment.findFirst.mockResolvedValue(null);
-      const result = await service.validateDomainForGoogleLogin('school.edu', 'user-2');
+    it('returns allowed=true when domain matches user\'s school domains', async () => {
+      mockPrisma.userAssignment.findMany.mockResolvedValue([
+        { schoolId: 's1', school: { domains: [{ domain: 'school.edu' }] } },
+      ]);
+      const result = await service.validateDomainForGoogleLogin('school.edu', 'user-1');
+      expect(result.allowed).toBe(true);
+      expect(result.domain).toBe('school.edu');
+    });
+
+    it('returns allowed=false when user is assigned to multiple schools and one restricts their domain', async () => {
+      // School A: no domain restriction; School B: restricts to @school-b.edu
+      // User has @gmail.com → School B denies → result is false
+      mockPrisma.userAssignment.findMany.mockResolvedValue([
+        { schoolId: 's1', school: { domains: [] } },
+        { schoolId: 's2', school: { domains: [{ domain: 'school-b.edu' }] } },
+      ]);
+      const result = await service.validateDomainForGoogleLogin('gmail.com', 'user-2');
       expect(result.allowed).toBe(false);
+      expect(result.schoolId).toBe('s2');
+    });
+
+    it('returns allowed=true when user matches all restricting schools', async () => {
+      // Both schools restrict to the same domain; user matches both.
+      mockPrisma.userAssignment.findMany.mockResolvedValue([
+        { schoolId: 's1', school: { domains: [{ domain: 'school.edu' }] } },
+        { schoolId: 's2', school: { domains: [{ domain: 'school.edu' }] } },
+      ]);
+      const result = await service.validateDomainForGoogleLogin('school.edu', 'user-3');
+      expect(result.allowed).toBe(true);
     });
   });
 });

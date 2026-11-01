@@ -14,6 +14,9 @@ import { SessionService, type TokenPair } from './session.service.js';
  *  - Only users with a platform-scoped or school-scoped admin role are allowed.
  *  - Suspended accounts → 401 with a generic error (no hint about suspension).
  *  - Wrong credentials → same generic 401 (no field-level hints for attackers).
+ *  - Timing-safe: bcrypt.compare always runs, even when the email doesn't exist,
+ *    to prevent user-enumeration via response-time differences.
+ *  - INVITED accounts transition to ACTIVE on first successful login.
  *  - All failures and successes are audited.
  *
  * Note: domain restrictions (Issue #11) do NOT apply to admin accounts.
@@ -21,6 +24,15 @@ import { SessionService, type TokenPair } from './session.service.js';
 @Injectable()
 export class AdminLoginService {
   private readonly logger = new Logger(AdminLoginService.name);
+
+  /**
+   * Pre-computed bcrypt hash used as a dummy comparison target when the user does
+   * not exist or is not a password-based account. This ensures bcrypt.compare always
+   * runs and the response time does not reveal whether an email is registered.
+   * (Cost factor 10 matches the minimum we accept for real hashes.)
+   */
+  private static readonly DUMMY_HASH =
+    '$2b$10$D92KgaVpmdy2b87Os1Yr6um6TTYmihCn145pcNbE7eQASgOD7M5vK';
 
   constructor(
     private readonly prisma: PrismaService,
@@ -49,22 +61,18 @@ export class AdminLoginService {
       },
     });
 
-    // Case 1: user not found — same generic error as wrong password (no enumeration).
-    if (!user) {
-      await this.recordFailure(normalizedEmail, 'invalid_credentials', null, context);
-      return this.deny();
-    }
+    // Determine which hash to compare against. When the user doesn't exist or is
+    // not a local-auth account, we use a dummy hash so bcrypt.compare() always
+    // runs and the response time cannot be used to enumerate valid emails.
+    const isPasswordAccount = !!user && user.authProvider === 'local' && !!user.passwordHash;
+    const hashToCompare = isPasswordAccount ? user.passwordHash! : AdminLoginService.DUMMY_HASH;
 
-    // Case 2: account is not a local-auth (password) account.
-    if (user.authProvider !== 'local' || !user.passwordHash) {
-      await this.recordFailure(normalizedEmail, 'invalid_credentials', user.id, context);
-      return this.deny();
-    }
+    // Always run bcrypt compare — even for non-existent/non-password users.
+    const passwordValid = await bcrypt.compare(password, hashToCompare);
 
-    // Case 3: password mismatch — constant-time comparison via bcrypt.
-    const passwordValid = await bcrypt.compare(password, user.passwordHash);
-    if (!passwordValid) {
-      await this.recordFailure(normalizedEmail, 'invalid_credentials', user.id, context);
+    // Reject if user not found, not a password account, or wrong password.
+    if (!user || !isPasswordAccount || !passwordValid) {
+      await this.recordFailure(normalizedEmail, 'invalid_credentials', user?.id ?? null, context);
       return this.deny();
     }
 
@@ -81,6 +89,17 @@ export class AdminLoginService {
     if (!isAdmin) {
       await this.recordFailure(normalizedEmail, 'not_admin', user.id, context);
       return this.deny();
+    }
+
+    // Case 6: INVITED status — transition to ACTIVE on first successful login.
+    // Without this, the JWT guard (which requires status === 'ACTIVE') would reject
+    // every subsequent authenticated request the user makes after logging in.
+    if (user.status === 'INVITED') {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { status: 'ACTIVE' },
+      });
+      this.logger.log(`Admin account ${user.email} transitioned from INVITED to ACTIVE on first login`);
     }
 
     // All checks passed → create session.

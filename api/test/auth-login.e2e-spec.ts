@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
+import { vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { TokenService } from '../src/auth/services/token.service.js';
 import { PrismaService } from '../src/database/prisma.service.js';
@@ -23,8 +24,12 @@ describe('Auth & Invitation E2E (Issues #8, #9, #10, #11)', () => {
   // Test data references
   let testSchoolId: string;
   let testSchoolIdWithDomain: string;
+  let originalGoogleClientIds: string | undefined;
 
   beforeAll(async () => {
+    originalGoogleClientIds = process.env.GOOGLE_CLIENT_IDS;
+    process.env.GOOGLE_CLIENT_IDS = 'test-client-id';
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -59,6 +64,11 @@ describe('Auth & Invitation E2E (Issues #8, #9, #10, #11)', () => {
     await prisma.user.deleteMany({ where: { email: { contains: `auth-e2e-${stamp}` } } });
     await prisma.school.deleteMany({ where: { name: { contains: `E2E Auth School` } } });
     await app.close();
+    if (originalGoogleClientIds === undefined) {
+      delete process.env.GOOGLE_CLIENT_IDS;
+    } else {
+      process.env.GOOGLE_CLIENT_IDS = originalGoogleClientIds;
+    }
   });
 
   // ── Issue #8: Admin login ─────────────────────────────────────────────────
@@ -259,9 +269,9 @@ describe('Auth & Invitation E2E (Issues #8, #9, #10, #11)', () => {
   });
 
   // ── Issues #10 + #11: Google login with domain restriction ────────────────
-  // Note: actual Google token verification is not testable in integration tests.
-  // These tests are intentionally minimal and use the real endpoint to verify
-  // request parsing, 400 validation, and generic error shapes.
+  // Note: actual Google token verification requires a real Google token.
+  // The mock-backed tests below spy on global fetch to return a simulated Google
+  // tokeninfo response so we can test the service logic end-to-end.
 
   describe('POST /auth/google (Issues #10 & #11)', () => {
     it('returns 400 for a missing idToken field', async () => {
@@ -275,6 +285,191 @@ describe('Auth & Invitation E2E (Issues #8, #9, #10, #11)', () => {
         .expect(401);
       // Generic message — must NOT reveal specifics.
       expect(res.body.message).toMatch(/authentication failed/i);
+    });
+
+    it('first-time Google login: transitions INVITED user to ACTIVE and links googleSub', async () => {
+      // Create an INVITED user pre-assigned to a school with no domain restriction.
+      const invitedUser = await prisma.user.create({
+        data: {
+          email: `auth-e2e-${stamp}-google-first@school.edu`,
+          fullName: 'Google First Login',
+          authProvider: 'google',
+          status: 'INVITED',
+        },
+      });
+      const studentRole = await prisma.role.findUniqueOrThrow({ where: { name: 'STUDENT' } });
+      await prisma.userAssignment.create({
+        data: { userId: invitedUser.id, roleId: studentRole.id, schoolId: testSchoolId },
+      });
+
+      // Mock Google's tokeninfo endpoint to return a valid payload for this user.
+      const googleSub = `google-sub-${stamp}-first`;
+      const mockPayload = {
+        sub: googleSub,
+        email: `auth-e2e-${stamp}-google-first@school.edu`,
+        email_verified: true,
+        iss: 'accounts.google.com',
+        aud: 'test-client-id',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        iat: Math.floor(Date.now() / 1000),
+      };
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockPayload,
+        text: async () => JSON.stringify(mockPayload),
+      } as Response);
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/google')
+        .send({ idToken: 'fake-first-login-token' })
+        .expect(200);
+
+      fetchSpy.mockRestore();
+
+      expect(res.body).toHaveProperty('accessToken');
+      expect(res.body).toHaveProperty('refreshToken');
+      expect(res.body.tokenType).toBe('Bearer');
+
+      // Verify the user was activated and google_sub was linked.
+      const updatedUser = await prisma.user.findUniqueOrThrow({ where: { id: invitedUser.id } });
+      expect(updatedUser.status).toBe('ACTIVE');
+      expect(updatedUser.googleSub).toBe(googleSub);
+      expect(updatedUser.authProvider).toBe('google');
+
+      // Verify a session was created.
+      const session = await prisma.session.findUnique({ where: { id: res.body.sessionId } });
+      expect(session).toBeDefined();
+    });
+
+    it('returning Google login via googleSub: returns tokens without re-linking', async () => {
+      const googleSub = `google-sub-${stamp}-returning`;
+      // Create a fully ACTIVE user already linked to a google_sub.
+      const returningUser = await prisma.user.create({
+        data: {
+          email: `auth-e2e-${stamp}-google-return@school.edu`,
+          fullName: 'Returning Google User',
+          authProvider: 'google',
+          googleSub,
+          status: 'ACTIVE',
+        },
+      });
+      const studentRole = await prisma.role.findUniqueOrThrow({ where: { name: 'STUDENT' } });
+      await prisma.userAssignment.create({
+        data: { userId: returningUser.id, roleId: studentRole.id, schoolId: testSchoolId },
+      });
+
+      const mockPayload = {
+        sub: googleSub, // Lookup by google_sub matches this user directly.
+        email: 'completely-different@email.com', // Email doesn't matter for returning users.
+        email_verified: true,
+        iss: 'accounts.google.com',
+        aud: 'test-client-id',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        iat: Math.floor(Date.now() / 1000),
+      };
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockPayload,
+        text: async () => JSON.stringify(mockPayload),
+      } as Response);
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/google')
+        .send({ idToken: 'fake-returning-token' })
+        .expect(200);
+
+      fetchSpy.mockRestore();
+
+      expect(res.body).toHaveProperty('accessToken');
+      // User's googleSub and status should remain unchanged.
+      const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: returningUser.id } });
+      expect(unchanged.googleSub).toBe(googleSub);
+      expect(unchanged.status).toBe('ACTIVE');
+    });
+
+    it('rejects Google login when user\'s school has domains and email does NOT match — Issue #11', async () => {
+      // testSchoolIdWithDomain restricts to auth-e2e-${stamp}.edu
+      const invitedUser = await prisma.user.create({
+        data: {
+          email: `auth-e2e-${stamp}-domain-mismatch@gmail.com`,
+          fullName: 'Domain Mismatch User',
+          authProvider: 'google',
+          status: 'INVITED',
+        },
+      });
+      const studentRole = await prisma.role.findUniqueOrThrow({ where: { name: 'STUDENT' } });
+      await prisma.userAssignment.create({
+        data: { userId: invitedUser.id, roleId: studentRole.id, schoolId: testSchoolIdWithDomain },
+      });
+
+      const mockPayload = {
+        sub: `google-sub-${stamp}-domain-mismatch`,
+        email: `auth-e2e-${stamp}-domain-mismatch@gmail.com`,
+        email_verified: true,
+        iss: 'accounts.google.com',
+        aud: 'test-client-id',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        iat: Math.floor(Date.now() / 1000),
+      };
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockPayload,
+        text: async () => JSON.stringify(mockPayload),
+      } as Response);
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/google')
+        .send({ idToken: 'fake-domain-mismatch-token' })
+        .expect(401);
+
+      fetchSpy.mockRestore();
+
+      // Must return a generic error, not a specific domain message.
+      expect(res.body.message).toMatch(/authentication failed/i);
+
+      // User must NOT have been activated (domain check must happen before ACTIVE transition).
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: invitedUser.id } });
+      expect(user.status).toBe('INVITED');
+      expect(user.googleSub).toBeNull();
+    });
+
+    it('rejects Google login for an admin account (SCHOOL_ADMIN role) — Issues #10/#11', async () => {
+      // Create a SCHOOL_ADMIN user (even without a passwordHash — role check must catch them).
+      const adminUser = await prisma.user.create({
+        data: {
+          email: `auth-e2e-${stamp}-google-admin@school.edu`,
+          fullName: 'Admin No Password',
+          authProvider: 'local',
+          passwordHash: null,
+          status: 'ACTIVE',
+        },
+      });
+      const adminRole = await prisma.role.findUniqueOrThrow({ where: { name: 'SCHOOL_ADMIN' } });
+      await prisma.userAssignment.create({
+        data: { userId: adminUser.id, roleId: adminRole.id, schoolId: testSchoolId },
+      });
+
+      const mockPayload = {
+        sub: `google-sub-${stamp}-admin`,
+        email: `auth-e2e-${stamp}-google-admin@school.edu`,
+        email_verified: true,
+        iss: 'accounts.google.com',
+        aud: 'test-client-id',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        iat: Math.floor(Date.now() / 1000),
+      };
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockPayload,
+        text: async () => JSON.stringify(mockPayload),
+      } as Response);
+
+      await request(app.getHttpServer())
+        .post('/auth/google')
+        .send({ idToken: 'fake-admin-google-token' })
+        .expect(401);
+
+      fetchSpy.mockRestore();
     });
   });
 });

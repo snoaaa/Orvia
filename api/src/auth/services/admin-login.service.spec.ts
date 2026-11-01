@@ -1,4 +1,5 @@
 import { UnauthorizedException } from '@nestjs/common';
+import bcrypt from 'bcryptjs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AdminLoginService } from '../../../src/auth/services/admin-login.service.js';
 
@@ -152,5 +153,41 @@ describe('AdminLoginService', () => {
     expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { email: 'admin@school.edu' } }),
     );
+  });
+
+  it('transitions INVITED admin to ACTIVE on first successful login', async () => {
+    const bcrypt = await import('bcryptjs');
+    const hash = await bcrypt.hash('password123!', 4);
+    const mockUpdate = vi.fn().mockResolvedValue(undefined);
+    mockPrisma.user.update = mockUpdate;
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'u6',
+      email: 'invited-admin@school.edu',
+      authProvider: 'local',
+      passwordHash: hash,
+      status: 'INVITED',
+      assignments: [{ schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+    });
+    // Login should succeed and trigger a status update to ACTIVE.
+    const result = await service.login('invited-admin@school.edu', 'password123!', fakeContext);
+    expect(result.accessToken).toBe('at.fake');
+    // Verify the status was updated to ACTIVE.
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'u6' },
+        data: { status: 'ACTIVE' },
+      }),
+    );
+  });
+
+  it('runs bcrypt against a dummy hash when the user does not exist', async () => {
+    const compareSpy = vi.spyOn(bcrypt, 'compare');
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    await expect(service.login('ghost@nowhere.com', 'anypassword', fakeContext)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(compareSpy).toHaveBeenCalledOnce();
+      expect(compareSpy.mock.calls[0][1]).toMatch(/^\$2b\$10\$[./A-Za-z0-9]{53}$/);
+    compareSpy.mockRestore();
   });
 });

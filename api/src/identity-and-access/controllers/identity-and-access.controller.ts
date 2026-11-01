@@ -7,7 +7,6 @@ import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { CreateRoleDto, CreateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import { PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
-import { InviteUserService } from '../services/invite-user.service.js';
 
 @ApiTags('Identity and Access')
 @ApiBearerAuth('bearer-jwt')
@@ -15,10 +14,7 @@ import { InviteUserService } from '../services/invite-user.service.js';
 @ApiResponse({ status: 403, description: 'Missing permission, suspended account, or another school' })
 @Controller('identity')
 export class IdentityAndAccessController {
-  constructor(
-    private readonly identityService: IdentityAndAccessService,
-    private readonly inviteService: InviteUserService,
-  ) {}
+  constructor(private readonly identityService: IdentityAndAccessService) {}
 
   @Get('users')
   @RequirePermission('users:read')
@@ -67,7 +63,17 @@ export class IdentityAndAccessController {
     @CurrentUser() actor: AuthenticatedUser,
     @Req() req: Request,
   ): Promise<UserEntity> {
-    return this.inviteService.invite(dto, actor, auditContextFromRequest(req));
+    return this.identityService.createUser(
+      {
+        email: dto.email,
+        fullName: dto.fullName,
+        schoolId: dto.schoolId,
+        role: dto.role,
+        authProvider: 'google',
+      },
+      actor,
+      auditContextFromRequest(req),
+    );
   }
 
   @Post('users')

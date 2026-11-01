@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import type { AuthConfig } from '../config/index.js';
-import { DomainValidationService } from '../identity-and-access/services/domain-validation.service.js';
+import { IdentityAndAccessModule } from '../identity-and-access/identity-and-access.module.js';
 import { AuthDevController } from './controllers/auth-dev.controller.js';
 import { AuthController } from './controllers/auth.controller.js';
 import { UserSessionsController } from './controllers/user-sessions.controller.js';
@@ -20,6 +20,10 @@ import { TokenService } from './services/token.service.js';
  * Authentication and authorization (#13). Both guards are global: every route requires a
  * valid token unless marked @Public(), then @RequirePermission() is enforced.
  * Order matters: JwtAuthGuard sets request.user before PermissionsGuard reads it.
+ *
+ * DomainValidationService is NOT registered here — it lives in IdentityAndAccessModule
+ * (which exports it). AuthModule imports IdentityAndAccessModule to consume it,
+ * avoiding the duplicate registration that the previous implementation had.
  */
 @Global()
 @Module({
@@ -32,6 +36,9 @@ import { TokenService } from './services/token.service.js';
         verifyOptions: { algorithms: ['HS256'] },
       }),
     }),
+    // Import IdentityAndAccessModule to consume DomainValidationService (exported there).
+    // This eliminates the duplicate registration that existed in the previous version.
+    IdentityAndAccessModule,
   ],
   controllers: [AuthController, UserSessionsController, AuthDevController],
   providers: [
@@ -41,12 +48,9 @@ import { TokenService } from './services/token.service.js';
     SessionCleanupService,
     AdminLoginService,
     GoogleLoginService,
-    // DomainValidationService is defined in identity-and-access but needed here for Google login.
-    // We register it directly here so AuthModule stays self-contained without a circular dep.
-    DomainValidationService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
-  exports: [TokenService, AuthUserService, SessionService, DomainValidationService],
+  exports: [TokenService, AuthUserService, SessionService],
 })
 export class AuthModule {}

@@ -1,6 +1,5 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash } from 'node:crypto';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import type { AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
@@ -30,6 +29,9 @@ const GOOGLE_TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
 
 /** Accepted issuers for Google ID tokens. */
 const VALID_ISSUERS = new Set(['accounts.google.com', 'https://accounts.google.com']);
+
+/** Timeout in milliseconds for the Google tokeninfo fetch call. */
+const GOOGLE_FETCH_TIMEOUT_MS = 5000;
 
 /**
  * Handles Google OAuth 2.0 / OpenID Connect login (Issue #10).
@@ -96,9 +98,14 @@ export class GoogleLoginService {
       return this.deny();
     }
 
-    // ── Step 5: Reject admin (local-only) accounts ───────────────────────────
+    // ── Step 5: Reject admin accounts by ROLE (not by authProvider/passwordHash) ─────
     // Admin accounts use email + password exclusively; they must not use Google OAuth.
-    if (user.authProvider === 'local' && user.passwordHash) {
+    // We check by role rather than by authProvider because an admin without a password
+    // hash yet (e.g. newly created) would otherwise pass the old authProvider check.
+    const isAdmin = user.assignments.some(
+      (a) => a.role.scope === 'platform' || a.role.name === 'SCHOOL_ADMIN',
+    );
+    if (isAdmin) {
       await this.recordFailure(email, 'invalid_google_token', user.id, context);
       return this.deny();
     }
@@ -110,18 +117,19 @@ export class GoogleLoginService {
     }
 
     // ── Step 7: Domain restriction (Issue #11) ───────────────────────────────
-    // Only applied to non-admin accounts; admin (local) accounts are explicitly excluded.
-    // Rule: if the domain is not registered in school_domains for any school, no restriction.
+    // Checked per-school: for each school the user is assigned to, if that school
+    // has configured domains, the user's email domain must match one of them.
+    // This is NOT a global lookup — an unknown domain does NOT mean "no restriction".
     const emailDomain = this.domainValidation.extractDomain(email);
     if (emailDomain) {
       const domainResult = await this.domainValidation.validateDomainForGoogleLogin(emailDomain, user.id);
       if (domainResult.allowed === false) {
-        // Domain is configured for a school but user is not assigned there.
+        // Domain restriction: user's school requires a different domain.
         await this.recordFailure(email, 'domain_not_allowed', user.id, context);
         return this.deny();
       }
-      // domainResult.allowed === null → no domain config → no restriction (pass through).
-      // domainResult.allowed === true → user is assigned to the domain's school → proceed.
+      // domainResult.allowed === null → no school configured any domains → no restriction.
+      // domainResult.allowed === true → user's email domain matches their school's list.
     }
 
     // ── Step 8: First login — link google_sub and activate account ───────────
@@ -160,13 +168,18 @@ export class GoogleLoginService {
   /**
    * Verifies a Google ID token using Google's tokeninfo endpoint.
    *
+   * A 5-second AbortSignal timeout is applied so that a slow or hanging Google
+   * endpoint does not stall the request indefinitely.
+   *
    * For production use you may want to replace this with the `google-auth-library`
    * for local public-key verification (avoids a network round-trip). The tokeninfo
    * endpoint is reliable for low-traffic scenarios and needs no key-rotation logic.
    */
   private async verifyGoogleToken(idToken: string): Promise<GoogleTokenPayload> {
     const url = `${GOOGLE_TOKENINFO_URL}?id_token=${encodeURIComponent(idToken)}`;
-    const response = await fetch(url);
+
+    // Add a timeout so a hanging Google endpoint never stalls a request indefinitely.
+    const response = await fetch(url, { signal: AbortSignal.timeout(GOOGLE_FETCH_TIMEOUT_MS) });
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
@@ -181,11 +194,12 @@ export class GoogleLoginService {
     }
 
     // Validate audience (our client ID must be in aud).
+    // SECURITY: In production, auth.config.ts guarantees googleClientIds.length > 0.
+    // We NEVER skip audience validation, even in development — if no client IDs are
+    // configured in dev, all tokens are simply rejected (avoid Confused Deputy attacks).
     const configuredClientIds = this.config.getOrThrow<AuthConfig>('auth').googleClientIds;
     const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-    const audienceValid =
-      configuredClientIds.length === 0 || // Dev mode: skip audience check if no client IDs configured.
-      audiences.some((a) => configuredClientIds.includes(a));
+    const audienceValid = audiences.some((a) => configuredClientIds.includes(a));
     if (!audienceValid) {
       throw new Error(`Token audience ${JSON.stringify(audiences)} does not match configured client IDs`);
     }

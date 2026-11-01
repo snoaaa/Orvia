@@ -50,7 +50,7 @@ describe('GoogleLoginService', () => {
       record: vi.fn().mockResolvedValue(undefined),
     };
     mockConfig = {
-      getOrThrow: vi.fn().mockReturnValue({ googleClientIds: [] }), // empty = dev mode (no audience check)
+      getOrThrow: vi.fn().mockReturnValue({ googleClientIds: ['test-client-id'] }),
     };
     mockDomainValidation = {
       extractDomain: vi.fn().mockReturnValue('school.edu'),
@@ -77,6 +77,12 @@ describe('GoogleLoginService', () => {
     await expect(service.login('bad-token', fakeContext)).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
+  it('rejects a token when no Google client IDs are configured', async () => {
+    mockConfig.getOrThrow.mockReturnValue({ googleClientIds: [] });
+    await expect(service.login('id-token', fakeContext)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
   it('throws 401 when email is not verified by Google', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -99,7 +105,7 @@ describe('GoogleLoginService', () => {
       authProvider: 'local',
       passwordHash: '$2b$12$xxx',
       status: 'ACTIVE',
-      assignments: [],
+      assignments: [{ schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
     });
     await expect(service.login('id-token', fakeContext)).rejects.toBeInstanceOf(UnauthorizedException);
   });
