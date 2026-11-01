@@ -3,15 +3,88 @@ import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@ne
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, Public } from '../decorators/auth.decorators.js';
-import { RefreshTokenDto } from '../dto/index.js';
+import { AdminLoginDto, GoogleLoginDto, RefreshTokenDto, SetupPasswordDto } from '../dto/index.js';
 import { ActiveSessionEntity, TokenPairEntity } from '../entities/index.js';
+import { AdminLoginService } from '../services/admin-login.service.js';
+import { GoogleLoginService } from '../services/google-login.service.js';
 import { SessionService } from '../services/session.service.js';
 import type { AuthenticatedUser } from '../types/authenticated-user.js';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly sessions: SessionService) {}
+  constructor(
+    private readonly sessions: SessionService,
+    private readonly adminLoginService: AdminLoginService,
+    private readonly googleLoginService: GoogleLoginService,
+  ) {}
+
+  @Post('admin/login')
+  @Public()
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Administrator login (email and password)',
+    description:
+      'Authenticates platform and school administrators. Rejects non-admin users, suspended accounts, ' +
+      'and invalid credentials with a uniform generic error.',
+  })
+  @ApiResponse({ status: 200, description: 'Authenticated successfully', type: TokenPairEntity })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  async adminLogin(@Body() dto: AdminLoginDto, @Req() req: Request): Promise<TokenPairEntity> {
+    return this.adminLoginService.login(
+      dto.email,
+      dto.password,
+      auditContextFromRequest(req),
+      dto.deviceId,
+    );
+  }
+
+  @Post('password/setup')
+  @Public()
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Set initial password for an invited administrator (Issue #26)',
+    description:
+      'Validates a single-use expiring setup token, hashes the new password with argon2, ' +
+      'sets the administrator account status to ACTIVE, and marks the token as consumed. ' +
+      'The password is never returned or logged.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Password set up successfully. Account is now active and ready for login.',
+  })
+  @ApiResponse({ status: 400, description: 'Validation failed, token expired, or token already used' })
+  @ApiResponse({ status: 403, description: 'Account is suspended' })
+  @ApiResponse({ status: 404, description: 'User or token not found' })
+  async setupPassword(@Body() dto: SetupPasswordDto, @Req() req: Request): Promise<{ message: string }> {
+    return this.adminLoginService.setupPassword(
+      dto.token,
+      dto.newPassword,
+      auditContextFromRequest(req),
+    );
+  }
+
+  @Post('google')
+  @Public()
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Google OAuth 2.0 / OpenID Connect login',
+    description:
+      'Authenticates students and non-admin users via institutional Google OAuth. ' +
+      'Verifies Google ID token server-side, validates school domain restrictions, ' +
+      'links google_sub, and transitions invited users to active status.',
+  })
+  @ApiResponse({ status: 200, description: 'Authenticated successfully', type: TokenPairEntity })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Authentication failed' })
+  async googleLogin(@Body() dto: GoogleLoginDto, @Req() req: Request): Promise<TokenPairEntity> {
+    return this.googleLoginService.login(
+      dto.idToken,
+      auditContextFromRequest(req),
+      dto.deviceId,
+    );
+  }
 
   @Get('me')
   @ApiBearerAuth('bearer-jwt')
@@ -34,7 +107,7 @@ export class AuthController {
   })
   @ApiResponse({ status: 200, description: 'New access and refresh tokens', type: TokenPairEntity })
   @ApiResponse({ status: 401, description: 'Invalid, expired, revoked or reused refresh token' })
-  @ApiResponse({ status: 403, description: 'Account suspended' })
+  @ApiResponse({ status: 403, description: 'Account suspended or school deactivated' })
   async refresh(@Body() dto: RefreshTokenDto, @Req() req: Request): Promise<TokenPairEntity> {
     return this.sessions.refresh(dto.refreshToken, auditContextFromRequest(req));
   }

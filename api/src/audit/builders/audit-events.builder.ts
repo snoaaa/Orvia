@@ -20,6 +20,7 @@ export type LoginFailureReason =
   | 'invalid_credentials'
   | 'account_suspended'
   | 'account_locked'
+  | 'school_deactivated'
   | 'not_admin'
   | 'invalid_google_token'
   | 'domain_not_allowed'
@@ -31,6 +32,7 @@ export type TokenRefreshFailureReason =
   | 'revoked'
   | 'reused'
   | 'user_suspended'
+  | 'school_deactivated'
   | 'session_not_found';
 
 export type SessionRevocationReason = 'admin_action' | 'user_suspended' | 'token_reuse' | 'user_request';
@@ -125,6 +127,20 @@ export const AuditEvents = {
       actor: p.invitedBy ?? anonymous,
       entity: { type: 'user', id: p.invitedUserId },
       details: { email: p.email.trim().toLowerCase(), schoolId: p.schoolId ?? null },
+      context,
+    };
+  },
+
+  passwordSetup(
+    p: { userId: string; email: string; role?: string | null; schoolId?: string | null },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.PASSWORD_SETUP,
+      actor: { userId: p.userId, role: p.role ?? null, schoolId: p.schoolId ?? null },
+      entity: { type: 'user', id: p.userId },
+      details: { email: p.email.trim().toLowerCase(), method: 'setup_token' },
       context,
     };
   },
