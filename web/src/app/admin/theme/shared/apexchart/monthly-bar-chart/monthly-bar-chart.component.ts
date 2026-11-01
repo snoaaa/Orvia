@@ -21,6 +21,7 @@ export class MonthlyBarChartComponent implements OnInit {
       chart: {
         height: 450,
         type: 'area',
+        fontFamily: "'Glacial Indifference', sans-serif",
         toolbar: {
           show: false
         },
@@ -29,7 +30,7 @@ export class MonthlyBarChartComponent implements OnInit {
       dataLabels: {
         enabled: false
       },
-      colors: ['#1677ff', '#0050b3'],
+      colors: ['#000000', '#8c8c8c'],
       series: [
         {
           name: 'Page Views',

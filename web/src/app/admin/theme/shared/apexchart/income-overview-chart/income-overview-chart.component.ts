@@ -22,6 +22,7 @@ export class IncomeOverviewChartComponent {
       chart: {
         type: 'bar',
         height: 365,
+        fontFamily: "'Glacial Indifference', sans-serif",
         toolbar: {
           show: false
         },
@@ -62,7 +63,7 @@ export class IncomeOverviewChartComponent {
       yaxis: {
         show: false
       },
-      colors: ['#5cdbd3'],
+      colors: ['#8c8c8c'],
       grid: {
         show: false
       },

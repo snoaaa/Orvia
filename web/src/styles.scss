@@ -36,3 +36,33 @@ File: style.css
 @import 'scss/themes/layouts/footer/footer.scss';
 
 @import 'scss/themes/preset-style.scss';
+
+// ==========================================
+// Glacial Indifference — admin area typography
+// ==========================================
+@font-face {
+  font-family: 'Glacial Indifference';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/assets/fonts/Glacial/GlacialIndifference-Regular.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'Glacial Indifference';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/assets/fonts/Glacial/GlacialIndifference-Bold.otf') format('opentype');
+}
+
+app-admin {
+  font-family: 'Glacial Indifference', sans-serif;
+}
+
+app-admin input,
+app-admin button,
+app-admin select,
+app-admin textarea {
+  font-family: inherit;
+}

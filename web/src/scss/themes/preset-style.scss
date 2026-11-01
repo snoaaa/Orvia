@@ -50,6 +50,7 @@
             > a {
               background: rgba(var(--bs-primary-rgb), 0.1);
               color: var(--bs-blue);
+              font-weight: 700;
 
               &:before {
                 background: var(--bs-blue);
@@ -70,6 +71,7 @@
             &.active {
               > a {
                 color: var(--bs-blue);
+                font-weight: 700;
 
                 .coded-micon {
                   color: var(--bs-blue);

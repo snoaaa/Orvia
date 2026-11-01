@@ -22,6 +22,7 @@ export class AnalyticsChartComponent {
       chart: {
         type: 'line',
         height: 340,
+        fontFamily: "'Glacial Indifference', sans-serif",
         toolbar: {
           show: false
         },
@@ -33,7 +34,7 @@ export class AnalyticsChartComponent {
           borderRadius: 4
         }
       },
-      colors: ['#FFB814'],
+      colors: ['#000000'],
       stroke: {
         curve: 'smooth',
         width: 1.5

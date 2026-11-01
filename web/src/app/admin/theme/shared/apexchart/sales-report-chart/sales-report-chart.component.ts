@@ -20,6 +20,7 @@ export class SalesReportChartComponent {
       chart: {
         type: 'bar',
         height: 430,
+        fontFamily: "'Glacial Indifference', sans-serif",
         toolbar: {
           show: false
         },
@@ -43,7 +44,7 @@ export class SalesReportChartComponent {
         position: 'top',
         horizontalAlign: 'right',
         show: true,
-        fontFamily: `'Public Sans', sans-serif`,
+        fontFamily: `'Glacial Indifference', sans-serif`,
         offsetX: 10,
         offsetY: 10,
         labels: {
@@ -75,7 +76,7 @@ export class SalesReportChartComponent {
       tooltip: {
         theme: 'light'
       },
-      colors: ['#faad14', '#1677ff'],
+      colors: ['#000000', '#bfbfbf'],
       grid: {
         borderColor: '#f5f5f5'
       }
