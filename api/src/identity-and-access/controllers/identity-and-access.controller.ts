@@ -19,13 +19,19 @@ export class IdentityAndAccessController {
   @Get('users')
   @RequirePermission('users:read')
   @ApiOperation({
-    summary: 'List users, paginated (school admins only see users of their schools)',
+    summary: 'List users, paginated and filterable (school admins only see users of their schools)',
     description:
       'Same page/limit contract as GET /schools: page defaults to 1, limit to 10 and is capped at 100. ' +
-      'Returns { data, total, page, limit, totalPages }.',
+      'Filters: status (INVITED/ACTIVE/SUSPENDED), search (email or full name) and sortBy/sortOrder. ' +
+      'Returns { data, total, page, limit, totalPages } — `total` is the count after filtering, ' +
+      'so one call per status gives the dashboard counters.',
   })
   @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
   @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiQuery({ name: 'status', required: false, enum: ['INVITED', 'ACTIVE', 'SUSPENDED'], description: 'Filter by account status' })
+  @ApiQuery({ name: 'search', required: false, description: 'Match on email or full name' })
+  @ApiQuery({ name: 'sortBy', required: false, enum: ['createdAt', 'email', 'fullName', 'status'], description: 'Column to order by' })
+  @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'], description: 'Sort direction' })
   @ApiResponse({ status: 200, description: 'Paginated list of users retrieved', type: PaginatedUsersEntity })
   async getUsers(
     @Query() query: ListUsersQueryDto,

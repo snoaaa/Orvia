@@ -51,10 +51,9 @@ export class IdentityAndAccessService {
   /**
    * Platform admins see everyone; others only users assigned to a school they can read users in.
    *
-   * Paginated with the same `page`/`limit` contract as `findAllSchools` (`limit` capped at 100),
-   * so `/identity/users` never returns an unbounded result set. Ordered by `created_at DESC`
-   * with `id` as a tie-breaker, which keeps pages stable when two users share a timestamp and
-   * matches the `users_created_at_id_idx` index.
+   * Filters: `status` (INVITED/ACTIVE/SUSPENDED), `search` (email or full name contains) and
+   * `sortBy`/`sortOrder`. Paginated with the same `page`/`limit` contract as `findAllSchools`
+   * (`limit` capped at 100), ordered with `id` as the tie-breaker so pages stay stable.
    */
   async findAllUsers(
     actor: AuthenticatedUser,
@@ -65,13 +64,28 @@ export class IdentityAndAccessService {
     const skip = (page - 1) * limit;
 
     const schoolId = schoolIdFilter(actor, 'users:read');
-    const where: Prisma.UserWhereInput = schoolId ? { assignments: { some: { schoolId } } } : {};
+    const search = query?.search?.trim();
+    const where: Prisma.UserWhereInput = {
+      ...(schoolId ? { assignments: { some: { schoolId } } } : {}),
+      ...(query?.status ? { status: query.status as UserStatus } : {}),
+      ...(search
+        ? { OR: [{ email: { contains: search } }, { fullName: { contains: search } }] }
+        : {}),
+    };
+
+    const sortBy = query?.sortBy ?? 'createdAt';
+    const sortOrder = query?.sortOrder ?? (sortBy === 'createdAt' ? 'desc' : 'asc');
+    const orderBy: Prisma.UserOrderByWithRelationInput[] = [
+      { [sortBy]: sortOrder } as Prisma.UserOrderByWithRelationInput,
+      // Stable tie-breaker: without it, rows sharing the sort value could repeat or be skipped.
+      ...(sortBy === 'createdAt' ? [{ id: sortOrder } as Prisma.UserOrderByWithRelationInput] : [{ id: 'desc' } as Prisma.UserOrderByWithRelationInput]),
+    ];
 
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
       this.prisma.user.findMany({
         where,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy,
         skip,
         take: limit,
       }),
@@ -503,12 +517,15 @@ export class IdentityAndAccessService {
   }
 
   /**
-   * Update school parameters (name, settings) (Issue #30).
+   * Update school parameters (name, settings, allowed email domains) (Issue #30).
    *
    * Scoping:
    *  - Platform administrator may edit any school.
    *  - School administrator can only edit their own school (throws 403 Forbidden).
    *  - Rejects duplicate names across institutions with 409 Conflict.
+   *  - `allowedDomains` replaces the school's `school_domains` rows, which is what the email-domain
+   *    validation reads. An empty value clears them ("the school restricts nothing"); a domain
+   *    already used by another school answers 409.
    *  - Prisma @updatedAt automatically updates updated_at timestamp.
    */
   async updateSchool(
@@ -540,14 +557,46 @@ export class IdentityAndAccessService {
       }
     }
 
-    const updated = await this.prisma.school.update({
-      where: { id },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-        ...(dto.settings !== undefined ? { settings: dto.settings as object } : {}),
-      },
-      include: { domains: true },
-    });
+    // `undefined` = leave the domains untouched. `''` = clear them.
+    let domainList: string[] | null = null;
+    if (dto.allowedDomains !== undefined) {
+      domainList = [
+        ...new Set(
+          dto.allowedDomains
+            .split(',')
+            .map((domain) => domain.trim().toLowerCase())
+            .filter((domain) => domain.length > 0),
+        ),
+      ];
+      if (domainList.length > 0) {
+        const taken = await this.prisma.schoolDomain.findFirst({
+          where: { domain: { in: domainList }, schoolId: { not: id } },
+        });
+        if (taken) {
+          throw new ConflictException(`Domain '${taken.domain}' is already assigned to another school`);
+        }
+      }
+    }
+
+    const data = {
+      ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+      ...(dto.settings !== undefined ? { settings: dto.settings as object } : {}),
+      ...(domainList !== null ? { allowedDomains: domainList.join(',') } : {}),
+    };
+
+    // Only pay for a transaction when the domain rows actually change.
+    const updated =
+      domainList === null
+        ? await this.prisma.school.update({ where: { id }, data, include: { domains: true } })
+        : await this.prisma.$transaction(async (tx) => {
+            await tx.schoolDomain.deleteMany({ where: { schoolId: id } });
+            if (domainList.length > 0) {
+              await tx.schoolDomain.createMany({
+                data: domainList.map((domain) => ({ schoolId: id, domain })),
+              });
+            }
+            return tx.school.update({ where: { id }, data, include: { domains: true } });
+          });
 
     return SchoolMapper.toEntity(updated);
   }

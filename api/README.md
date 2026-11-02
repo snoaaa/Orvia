@@ -46,7 +46,7 @@ Key variables:
 - `DATABASE_ADMIN_URL`: MySQL connection of an **admin** (e.g. `mysql://root:password@localhost:3306/wamdp_db`), used only by `npm run db:migrate` / `npm run db:harden`
 - `PORT`: Server port (defaults to `3000` if omitted)
 - `PLATFORM_ADMIN_EMAIL`: Email for the initial platform administrator
-- `PLATFORM_ADMIN_PASSWORD`: Password for the initial administrator (hashed with bcrypt)
+- `PLATFORM_ADMIN_PASSWORD`: Password for the initial administrator (hashed with argon2id)
 - `SWAGGER_PROTECTED`: Set to `true` to require basic auth for Swagger docs
 - `JWT_ACCESS_SECRET`: Secret signing access tokens (required in production; a dev-only fallback is used otherwise)
 - `JWT_ACCESS_TTL_SECONDS`: Access token lifetime (default `900`)
@@ -210,13 +210,41 @@ student in B cannot read users of B). Helpers in `src/auth/utils/school-scope.ut
 | `schoolIdFilter(user, permission)` | In list queries: `undefined` (all) or `{ in: [...] }` |
 | `schoolsWithPermission(user, permission)` | `'all'` or the list of school ids (also for the RAG filters, 4.7) |
 
-Applied today to users, schools, spaces and documents. A school admin must pass one of their own
-`schoolId`s when inviting a user or creating a space.
+Applied today to users, schools, spaces, documents and the audit trail. A school admin must pass one of
+their own `schoolId`s when inviting a user or creating a space.
 
 **Inviting into a school** (`POST /identity/users` with `schoolId`): the new user is assigned to that
 school in the same transaction, with `role` (default `STUDENT`), so the inviting school admin sees
 them immediately. Any school/group role can be given; platform roles (`PLATFORM_ADMIN`) only by a
 platform admin (403 otherwise). Unknown role or `role` without `schoolId` → 400; unknown school → 404.
+
+**Changing a role** (`PATCH /identity/users/{id}/role`, `users:assign_role`) with
+`{ "role": "SCHOOL_ADMIN", "schoolId": "<uuid>" }` creates or replaces the user's assignment in that
+school; their other schools are untouched. Re-assigning the role already held is a no-op. Unknown
+role → 400, unknown user or school → 404, a platform-scoped role (or a target school outside the
+actor's own) without platform-wide `users:assign_role` → 403. Audited as `identity_access/role_assigned`
+with the previous role.
+
+**Email domains** are per school (`school_domains`). `POST /identity/schools` takes
+`allowedDomains: "polytechnic.edu,yahoo.org"`; `PATCH /identity/schools/{id}` replaces the list
+(an empty value clears it, which means the school restricts nothing; a domain already used by another
+school → 409). They gate invites (`validateDomainForSchool`) and Google sign-in
+(`validateDomainForUser`). `SchoolEntity` returns the rows as `domains: string[]` next to the legacy
+comma-separated `allowedDomains`.
+
+### Pagination contract
+
+Every list endpoint shares one contract: `page` (default `1`) and `limit` (default `10`, capped at
+`100`), returning `{ data, total, page, limit, totalPages }`. `total` is the count **after** filtering,
+so one call per filter also gives a counter (e.g. `GET /identity/users?status=INVITED&limit=1` →
+`.total` = pending invitations).
+
+| Endpoint | Filters / sorting |
+|---|---|
+| `GET /identity/users` | `status`, `search` (email or full name), `sortBy` (`createdAt`/`email`/`fullName`/`status`), `sortOrder` |
+| `GET /schools`, `GET /identity/schools` | `status`, `search` (name) |
+| `GET /documents` | newest first (`created_at DESC, id DESC`) |
+| `GET /identity/permissions`, `GET /audit/events` | **not paginated** — `permissions` returns the whole matrix, `audit` takes `limit` (≤500) |
 
 ### Permission overview
 
@@ -265,7 +293,7 @@ With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
   (`SELECT ... FOR UPDATE`) while appending, so concurrent events queue up instead of racing, even
   across several API instances; `prev_hash` is also unique, so the chain can never fork.
 - **No secrets:** `details` goes through `redactSecrets()`, which replaces passwords, tokens,
-  secrets, API keys, cookies, JWTs, bearer headers and bcrypt hashes with `[REDACTED]`. Do not
+  secrets, API keys, cookies, JWTs, bearer headers and legacy `$2b$` hashes with `[REDACTED]`. Do not
   pass them anyway.
 - **One row per event:** the global exception filter records `access_denied` for a 403 only if the
   request has not already recorded its own event (e.g. a `login_failure`).
@@ -282,8 +310,14 @@ With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
 | `authentication` | `token_refresh_failure` | Refresh token rejected (invalid, expired, revoked, reused, suspended user) | the user if known | `session` | `reason` — **never the token** |
 | `authentication` | `session_revoked` | A session is revoked (admin action, suspension, token reuse) | the admin, or anonymous if automatic | `session` | `ownerUserId`, `reason` |
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
+| `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `role`, `previousRole` |
 | `security` | `access_denied` | Any HTTP 403 | the user if authenticated | `route` (`METHOD /path`) | `reason`, `requiredPermission` |
 | `security` | `account_locked` | An account is locked (e.g. too many failed logins) | anonymous | `user` | `email`, `reason`, `failedAttempts`, `lockedUntil` |
+
+**Reading is school-scoped:** `GET /audit/events` returns every event to a platform administrator,
+but a school administrator only the events whose `school_id` is one of their own schools. Events
+without a school (platform actions, unknown-user login failures) stay invisible to them.
+`GET /audit/verify` and `npm run audit:verify` still check the **whole** chain regardless of the caller.
 
 Every event also stores `ip`, `device_id` (from the `X-Device-Id` header) and the user agent
 (in `details.userAgent`).

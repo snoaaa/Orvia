@@ -10,6 +10,15 @@ export class SchoolEntity {
   @ApiProperty({ example: 'polytechnic.edu,eng.polytechnic.edu', description: 'Comma-separated allowed domains' })
   allowedDomains: string;
 
+  @ApiProperty({
+    type: [String],
+    example: ['polytechnic.edu', 'yahoo.org'],
+    description:
+      'Allowed email domains as stored in school_domains (what the domain validation actually reads). ' +
+      'Empty = the school restricts nothing.',
+  })
+  domains: string[];
+
   @ApiProperty({ example: 'active', description: 'School status' })
   status: string;
 

@@ -1,8 +1,8 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
-import bcrypt from 'bcryptjs';
+import argon2 from 'argon2';
 import { AppModule } from '../src/app.module.js';
 import { SessionService } from '../src/auth/services/session.service.js';
 import { TokenService } from '../src/auth/services/token.service.js';
@@ -73,7 +73,7 @@ describe('Schools (e2e) - Create, List and View (Issues #27 & #29)', () => {
         email: `${testPrefix}-admin@school.local`,
         fullName: 'School Admin E2E',
         authProvider: 'local',
-        passwordHash: await bcrypt.hash(schoolAdminPass, 4),
+        passwordHash: await argon2.hash(schoolAdminPass, { timeCost: 1, memoryCost: 1024, parallelism: 1 }),
         status: 'ACTIVE',
         assignments: {
           create: {
@@ -513,7 +513,7 @@ describe('Schools (e2e) - Create, List and View (Issues #27 & #29)', () => {
           email: targetAdminEmail,
           fullName: 'Target Admin',
           authProvider: 'local',
-          passwordHash: await bcrypt.hash(targetAdminPass, 4),
+          passwordHash: await argon2.hash(targetAdminPass, { timeCost: 1, memoryCost: 1024, parallelism: 1 }),
           status: 'ACTIVE',
           assignments: {
             create: {
