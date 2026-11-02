@@ -4,8 +4,8 @@ import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, UpdateDocumentDto } from '../dto/index.js';
-import { DocumentEntity, PaginatedDocumentsEntity, SpaceEntity } from '../entities/index.js';
+import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto } from '../dto/index.js';
+import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity } from '../entities/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
 
 @Injectable()
@@ -93,10 +93,37 @@ export class DocumentsService {
     return DocumentMapper.toEntity(updated);
   }
 
-  async findAllSpaces(actor: AuthenticatedUser): Promise<SpaceEntity[]> {
+  /**
+   * Spaces of the caller's schools, paginated with the shared `page`/`limit` contract and ordered
+   * alphabetically (stable id tie-breaker). The table is small, so no extra index is needed.
+   */
+  async findAllSpaces(actor: AuthenticatedUser, query?: ListSpacesQueryDto): Promise<PaginatedSpacesEntity> {
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
+    const skip = (page - 1) * limit;
+
     const schoolId = schoolIdFilter(actor, 'spaces:read');
-    const spaces = await this.prisma.space.findMany({ where: schoolId ? { schoolId } : undefined });
-    return spaces.map((s) => SpaceMapper.toEntity(s));
+    const where: Prisma.SpaceWhereInput = schoolId ? { schoolId } : {};
+
+    const [total, spaces] = await Promise.all([
+      this.prisma.space.count({ where }),
+      this.prisma.space.findMany({
+        where,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    return new PaginatedSpacesEntity({
+      data: spaces.map((s) => SpaceMapper.toEntity(s)),
+      total,
+      page,
+      limit,
+      totalPages,
+    });
   }
 
   /** School-scoped users must create the space in one of their schools. */

@@ -34,7 +34,7 @@ export class AnalyticsChartComponent {
           borderRadius: 4
         }
       },
-      colors: ['#000000'],
+      colors: ['#475569'],
       stroke: {
         curve: 'smooth',
         width: 1.5

@@ -243,13 +243,32 @@ so one call per filter also gives a counter (e.g. `GET /identity/users?status=IN
 |---|---|
 | `GET /identity/users` | `status`, `search` (email or full name), `sortBy` (`createdAt`/`email`/`fullName`/`status`), `sortOrder` |
 | `GET /schools`, `GET /identity/schools` | `status`, `search` (name) |
-| `GET /documents` | newest first (`created_at DESC, id DESC`) |
-| `GET /identity/permissions`, `GET /audit/events` | **not paginated** — `permissions` returns the whole matrix, `audit` takes `limit` (≤500) |
+| `GET /documents` | newest first (`created_at DESC, id DESC`, indexed) |
+| `GET /documents/spaces` | alphabetical (`name`, then `id`) |
+| `GET /audit/events`, `GET /identity/permissions` | **not paginated** — `audit` takes `limit` (≤500); `permissions` returns the matrix with holder counts (see below) |
 
 ### Permission overview
 
-`GET /identity/permissions[?code=users:invite]` (`users:assign_role`) lists every permission, the
-roles granting it, and the users holding it. School admins only see holders in their own schools.
+`GET /identity/permissions` (`users:assign_role`) returns one row per permission with the roles that
+grant it and `holdersTotal` — a count of **distinct users** (per user and school), scoped to the
+caller's schools.
+
+`GET /identity/permissions?code=users:invite&limit=50` drills into one permission and adds `holders[]`,
+grouped per user and school: someone holding the permission through two roles, or in two schools,
+appears **once**, with every granting role in `roles[]`. The list is capped by `limit` (1–200,
+default 50), so the response stays small however many users the platform has.
+
+### Dashboard overview
+
+`GET /admin/overview?range=7d|30d|12m` (`users:read`) is the single call behind the admin dashboard:
+user/school/session/document counts, a zero-filled time series of successful logins, failed logins and
+new sessions (daily for `7d`/`30d`, monthly for `12m`), the 7 spaces with the most documents, and the
+10 most recent audit events.
+
+Each section is included only if the caller may read it — users (`users:read`), schools
+(`schools:read`), sessions (`users:suspend`), documents (`documents:read`), spaces (`spaces:read`),
+series and recent activity (`audit:read`) — and every number is scoped like the matching list endpoint,
+so a school admin gets their own school's numbers from the same URL.
 
 ### Dev-only routes (until #8 / #10 exist)
 

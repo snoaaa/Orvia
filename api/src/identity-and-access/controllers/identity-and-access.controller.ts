@@ -4,7 +4,7 @@ import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
 import { PaginatedSchoolsEntity, PaginatedUsersEntity, PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
@@ -237,15 +237,21 @@ export class IdentityAndAccessController {
   @Get('permissions')
   @RequirePermission('users:assign_role')
   @ApiOperation({
-    summary: 'All permissions, the roles granting them, and who holds them',
-    description: 'Platform admins see every holder; school admins only see holders in their own schools.',
+    summary: 'All permissions, the roles granting them, and how many users hold them',
+    description:
+      'Without `code`: one row per permission with its roles and a holder count (bounded, 42 rows today). ' +
+      'With `code`: that permission plus its holders, grouped per user and school (a person holding it ' +
+      'through several roles appears once, listing every role), capped by `limit`. ' +
+      'Platform admins see every holder; school admins only holders in their own schools.',
   })
-  @ApiQuery({ name: 'code', required: false, description: "Only this permission, e.g. 'users:invite'" })
+  @ApiQuery({ name: 'code', required: false, description: "Drill into one permission, e.g. 'users:invite'" })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max holders returned with `code` (1-200, default 50)' })
   @ApiResponse({ status: 200, description: 'Permission overview', type: [PermissionOverviewEntity] })
+  @ApiResponse({ status: 404, description: 'Unknown permission code' })
   async getPermissions(
+    @Query() query: QueryPermissionOverviewDto,
     @CurrentUser() actor: AuthenticatedUser,
-    @Query('code') code?: string,
   ): Promise<PermissionOverviewEntity[]> {
-    return this.identityService.findPermissionOverview(actor, code);
+    return this.identityService.findPermissionOverview(actor, query);
   }
 }

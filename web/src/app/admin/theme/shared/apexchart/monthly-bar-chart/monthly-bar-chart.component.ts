@@ -1,4 +1,4 @@
-﻿// angular import
+// angular import
 import { Component, OnInit, viewChild } from '@angular/core';
 
 // project import
@@ -30,7 +30,19 @@ export class MonthlyBarChartComponent implements OnInit {
       dataLabels: {
         enabled: false
       },
-      colors: ['#000000', '#8c8c8c'],
+      // Slate-blue primary with the shaded area under the line, neutral secondary as a dashed line.
+      colors: ['#475569', '#A1A1AA'],
+      fill: {
+        type: 'gradient',
+        gradient: {
+          inverseColors: false,
+          shade: 'light',
+          type: 'vertical',
+          opacityFrom: 0.65,
+          opacityTo: 0.5,
+          stops: [0, 100, 100]
+        }
+      },
       series: [
         {
           name: 'Successful logins',
@@ -43,7 +55,8 @@ export class MonthlyBarChartComponent implements OnInit {
       ],
       stroke: {
         curve: 'smooth',
-        width: 2
+        width: 2,
+        dashArray: [0, 6]
       },
       xaxis: {
         categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],

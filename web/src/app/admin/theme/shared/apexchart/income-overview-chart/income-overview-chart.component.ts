@@ -63,7 +63,7 @@ export class IncomeOverviewChartComponent {
       yaxis: {
         show: false
       },
-      colors: ['#8c8c8c'],
+      colors: ['#475569'],
       grid: {
         show: false
       },

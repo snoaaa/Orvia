@@ -76,7 +76,7 @@ export class SalesReportChartComponent {
       tooltip: {
         theme: 'light'
       },
-      colors: ['#000000', '#bfbfbf'],
+      colors: ['#475569', '#A1A1AA'],
       grid: {
         borderColor: '#f5f5f5'
       }

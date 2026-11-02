@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import type { Prisma, UserStatus } from '@prisma/client';
+import type { UserStatus } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import argon2 from 'argon2';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
@@ -10,7 +11,7 @@ import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { isAdminRole } from '../../auth/utils/admin-role.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import type { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
 import {
   PaginatedSchoolsEntity,
   PaginatedUsersEntity,
@@ -780,53 +781,109 @@ export class IdentityAndAccessService {
   }
 
   /**
-   * Every permission with the roles that grant it and the users holding it. Holders are
-   * limited to the schools where `actor` may assign roles (all schools for platform admins).
+   * Every permission with the roles that grant it, a holder count, and — when `code` is given — the
+   * holders of that permission grouped per user and school.
+   *
+   * Bounded by construction:
+   *  - the overview returns one row per permission (42 today) with only a **count** of holders;
+   *  - holders are fetched by a single grouped query for one permission at a time, capped by `limit`;
+   *  - a person holding the permission through several roles (or several schools) appears **once**,
+   *    with every granting role in `roles` — previously the same user was repeated per role.
    */
-  async findPermissionOverview(actor: AuthenticatedUser, code?: string): Promise<PermissionOverviewEntity[]> {
-    const schoolId = schoolIdFilter(actor, 'users:assign_role');
+  async findPermissionOverview(
+    actor: AuthenticatedUser,
+    query?: QueryPermissionOverviewDto,
+  ): Promise<PermissionOverviewEntity[]> {
+    const allowedSchools = schoolIdFilter(actor, 'users:assign_role');
+    const schoolIds = allowedSchools ? allowedSchools.in : null;
+    const code = query?.code?.trim();
+    const limit = Math.min(200, Math.max(1, query?.limit ?? 50));
+
     const permissions = await this.prisma.permission.findMany({
       where: code ? { code } : undefined,
       orderBy: { code: 'asc' },
-      include: {
-        rolePermissions: {
-          include: {
-            role: {
-              include: {
-                assignments: {
-                  where: schoolId ? { schoolId } : undefined,
-                  include: { user: true, school: { select: { name: true } } },
-                },
-              },
-            },
-          },
-        },
-      },
+      include: { rolePermissions: { select: { role: { select: { name: true } } } } },
     });
     if (code && permissions.length === 0) {
       throw new NotFoundException(`Permission '${code}' not found`);
     }
 
-    return permissions.map(
-      (p) =>
-        new PermissionOverviewEntity({
-          code: p.code,
-          description: p.description,
-          roles: p.rolePermissions.map((rp) => rp.role.name).sort(),
-          holders: p.rolePermissions.flatMap((rp) =>
-            rp.role.assignments.map(
-              (a) =>
-                new PermissionHolderEntity({
-                  userId: a.user.id,
-                  email: a.user.email,
-                  fullName: a.user.fullName,
-                  status: a.user.status,
-                  role: rp.role.name,
-                  schoolId: a.schoolId,
-                  schoolName: a.school.name,
-                }),
-            ),
-          ),
+    const counts = await this.countPermissionHolders(schoolIds);
+    const holders = code ? await this.findPermissionHolders(code, schoolIds, limit) : undefined;
+
+    return permissions.map((permission) => {
+      const entity = new PermissionOverviewEntity({
+        code: permission.code,
+        description: permission.description,
+        roles: permission.rolePermissions.map((rp) => rp.role.name).sort(),
+        holdersTotal: counts.get(permission.code) ?? 0,
+      });
+      if (holders) entity.holders = holders;
+      return entity;
+    });
+  }
+
+  /** Distinct (user, school) holders per permission code: one grouped query, one row per permission. */
+  private async countPermissionHolders(schoolIds: string[] | null): Promise<Map<string, number>> {
+    if (schoolIds && schoolIds.length === 0) return new Map();
+    const rows = await this.prisma.$queryRaw<Array<{ code: string; holders: bigint }>>`
+      SELECT p.code AS code, COUNT(DISTINCT CONCAT(ua.user_id, ':', ua.school_id)) AS holders
+      FROM permissions p
+      JOIN role_permissions rp ON rp.permission_id = p.id
+      JOIN user_assignments ua ON ua.role_id = rp.role_id
+      ${schoolIds ? Prisma.sql`WHERE ua.school_id IN (${Prisma.join(schoolIds)})` : Prisma.empty}
+      GROUP BY p.code
+    `;
+    return new Map(rows.map((row) => [row.code, Number(row.holders)]));
+  }
+
+  /** Holders of one permission, grouped per user and school, capped by `limit`. */
+  private async findPermissionHolders(
+    code: string,
+    schoolIds: string[] | null,
+    limit: number,
+  ): Promise<PermissionHolderEntity[]> {
+    if (schoolIds && schoolIds.length === 0) return [];
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        userId: string;
+        email: string;
+        fullName: string;
+        status: string;
+        schoolId: string;
+        schoolName: string;
+        roles: string | null;
+      }>
+    >`
+      SELECT ua.user_id AS userId,
+             u.email AS email,
+             u.full_name AS fullName,
+             u.status AS status,
+             ua.school_id AS schoolId,
+             s.name AS schoolName,
+             GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ',') AS roles
+      FROM user_assignments ua
+      JOIN users u ON u.id = ua.user_id
+      JOIN schools s ON s.id = ua.school_id
+      JOIN roles r ON r.id = ua.role_id
+      JOIN role_permissions rp ON rp.role_id = r.id
+      JOIN permissions p ON p.id = rp.permission_id
+      WHERE p.code = ${code}
+      ${schoolIds ? Prisma.sql`AND ua.school_id IN (${Prisma.join(schoolIds)})` : Prisma.empty}
+      GROUP BY ua.user_id, ua.school_id, u.email, u.full_name, u.status, s.name
+      ORDER BY u.email ASC
+      LIMIT ${limit}
+    `;
+    return rows.map(
+      (row) =>
+        new PermissionHolderEntity({
+          userId: row.userId,
+          email: row.email,
+          fullName: row.fullName,
+          status: row.status,
+          roles: row.roles ? row.roles.split(',') : [],
+          schoolId: row.schoolId,
+          schoolName: row.schoolName,
         }),
     );
   }
