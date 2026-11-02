@@ -1,15 +1,16 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Prisma, UserStatus } from '@prisma/client';
-import bcrypt from 'bcryptjs';
+import argon2 from 'argon2';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
+import { isAdminRole } from '../../auth/utils/admin-role.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import type { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import {
   PaginatedSchoolsEntity,
   PaginatedUsersEntity,
@@ -24,6 +25,19 @@ import { DomainValidationService } from './domain-validation.service.js';
 
 /** Role given to invited users when none is specified. */
 const DEFAULT_INVITE_ROLE = 'STUDENT';
+
+interface RoleWithPermissions {
+  scope: string;
+  rolePermissions?: ReadonlyArray<{ permission: { code: string } }>;
+}
+
+/** Admin-ness of a role row (see `auth/utils/admin-role.util.ts`); a missing include counts as none. */
+function roleGrantsAdmin(role: RoleWithPermissions): boolean {
+  return isAdminRole({
+    scope: role.scope,
+    permissions: role.rolePermissions?.map((rp) => rp.permission.code) ?? [],
+  });
+}
 
 @Injectable()
 export class IdentityAndAccessService {
@@ -126,10 +140,10 @@ export class IdentityAndAccessService {
     const id = randomUUID();
     let passwordHash: string | null = null;
     if (dto.password) {
-      passwordHash = await bcrypt.hash(dto.password, 12);
+      passwordHash = await argon2.hash(dto.password);
     }
 
-    const isAdmin = role?.name === 'PLATFORM_ADMIN' || role?.name === 'SCHOOL_ADMIN';
+    const isAdmin = role ? roleGrantsAdmin(role) : false;
     let setupToken: string | null = null;
     let setupTokenExpiresAt: Date | null = null;
     if (isAdmin && !passwordHash) {
@@ -212,7 +226,7 @@ export class IdentityAndAccessService {
     }
 
     const id = randomUUID();
-    const isAdmin = role?.name === 'PLATFORM_ADMIN' || role?.name === 'SCHOOL_ADMIN';
+    const isAdmin = role ? roleGrantsAdmin(role) : false;
     const authProvider = isAdmin ? 'local' : 'google';
     let setupToken: string | null = null;
     let setupTokenExpiresAt: Date | null = null;
@@ -280,7 +294,10 @@ export class IdentityAndAccessService {
       throw new NotFoundException(`School with ID ${schoolId} not found`);
     }
     const name = (roleName ?? DEFAULT_INVITE_ROLE).trim().toUpperCase();
-    const role = await this.prisma.role.findUnique({ where: { name } });
+    const role = await this.prisma.role.findUnique({
+      where: { name },
+      include: { rolePermissions: { select: { permission: { select: { code: true } } } } },
+    });
     if (!role) {
       throw new BadRequestException(`Unknown role '${name}'`);
     }
@@ -330,6 +347,87 @@ export class IdentityAndAccessService {
       );
     }
     return UserMapper.toEntity(updated);
+  }
+
+  /**
+   * Creates or replaces a user's role in one school (role reassignment).
+   *
+   * Enforces:
+   *  - `users:assign_role` in the target school (platform admins may act on any school).
+   *  - The school and the role must exist (404 / 400).
+   *  - A platform-scoped role can only be granted by someone who assigns roles platform-wide (403).
+   *  - Idempotent: re-assigning the role the user already holds changes nothing and records nothing.
+   *  - Tamper-evident audit event `identity_access/role_assigned` with the previous role.
+   *
+   * The user's other school assignments are untouched.
+   */
+  async assignRole(
+    userId: string,
+    dto: AssignRoleDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    const actorScope = schoolsWithPermission(actor, 'users:assign_role');
+    if (actorScope !== 'all') {
+      assertSchoolAccess(actor, 'users:assign_role', dto.schoolId);
+    }
+
+    const target = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { assignments: { include: { role: true } } },
+    });
+    if (!target) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    const school = await this.prisma.school.findUnique({
+      where: { id: dto.schoolId },
+      select: { id: true },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${dto.schoolId} not found`);
+    }
+
+    const roleName = dto.role.trim().toUpperCase();
+    const role = await this.prisma.role.findUnique({
+      where: { name: roleName },
+      include: { rolePermissions: { select: { permission: { select: { code: true } } } } },
+    });
+    if (!role) {
+      throw new BadRequestException(`Unknown role '${roleName}'`);
+    }
+    if (role.scope === 'platform' && actorScope !== 'all') {
+      throw new ForbiddenException(`Only a platform administrator can assign the ${role.name} role`);
+    }
+
+    const existing = target.assignments.find((a) => a.schoolId === dto.schoolId);
+    if (existing?.roleId === role.id) {
+      return UserMapper.toEntity(target);
+    }
+
+    if (existing) {
+      await this.prisma.userAssignment.update({ where: { id: existing.id }, data: { roleId: role.id } });
+    } else {
+      await this.prisma.userAssignment.create({
+        data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+      });
+    }
+
+    await this.audit.record(
+      AuditEvents.roleAssigned(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId: dto.schoolId,
+          role: role.name,
+          previousRole: existing?.role.name ?? null,
+          assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    return UserMapper.toEntity(target);
   }
 
   /**

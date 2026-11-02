@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
+import { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
 import { PaginatedSchoolsEntity, PaginatedUsersEntity, PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
@@ -98,6 +98,32 @@ export class IdentityAndAccessController {
     @Req() req: Request,
   ): Promise<UserEntity> {
     return this.identityService.updateUser(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Patch('users/:id/role')
+  @RequirePermission('users:assign_role')
+  @ApiOperation({
+    summary: "Create or replace a user's role in one school (role reassignment)",
+    description:
+      'School-scoped admins may only assign roles inside their own school(s); a platform-scoped role ' +
+      'requires platform-wide users:assign_role. Re-assigning the role already held is a no-op. ' +
+      'Records identity_access/role_assigned with the previous role.',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Role assigned', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'Unknown role' })
+  @ApiResponse({
+    status: 403,
+    description: 'Missing permission, another school, or a platform role without platform rights',
+  })
+  @ApiResponse({ status: 404, description: 'User or school not found' })
+  async assignRole(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AssignRoleDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.identityService.assignRole(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Get('schools')

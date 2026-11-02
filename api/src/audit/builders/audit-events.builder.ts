@@ -145,6 +145,36 @@ export const AuditEvents = {
     };
   },
 
+  /**
+   * A user's role in one school was created or changed. `previousRole` is null when the
+   * assignment did not exist before.
+   */
+  roleAssigned(
+    p: {
+      userId: string;
+      email: string;
+      schoolId: string;
+      role: string;
+      previousRole?: string | null;
+      assignedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ROLE_ASSIGNED,
+      actor: p.assignedBy ?? anonymous,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        email: p.email.trim().toLowerCase(),
+        schoolId: p.schoolId,
+        role: p.role,
+        previousRole: p.previousRole ?? null,
+      },
+      context,
+    };
+  },
+
   accessDenied(
     p: { actor?: AuditActor | null; method: string; path: string; requiredPermission?: string; reason?: string },
     context: AuditRequestContext,
