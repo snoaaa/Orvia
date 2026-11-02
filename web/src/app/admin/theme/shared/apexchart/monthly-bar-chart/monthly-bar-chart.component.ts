@@ -1,4 +1,4 @@
-// angular import
+﻿// angular import
 import { Component, OnInit, viewChild } from '@angular/core';
 
 // project import
@@ -33,12 +33,12 @@ export class MonthlyBarChartComponent implements OnInit {
       colors: ['#000000', '#8c8c8c'],
       series: [
         {
-          name: 'Page Views',
-          data: [0, 86, 28, 115, 48, 210, 136]
+          name: 'Successful logins',
+          data: [42, 51, 38, 64, 58, 21, 12]
         },
         {
-          name: 'Sessions',
-          data: [0, 43, 14, 56, 24, 105, 68]
+          name: 'Failed logins',
+          data: [3, 5, 2, 7, 4, 1, 0]
         }
       ],
       stroke: {
@@ -97,12 +97,15 @@ export class MonthlyBarChartComponent implements OnInit {
   toggleActive(value: string) {
     this.chartOptions.series = [
       {
-        name: 'Page Views',
-        data: value === 'month' ? [76, 85, 101, 98, 87, 105, 91, 114, 94, 86, 115, 35] : [31, 40, 28, 51, 42, 109, 100]
+        name: 'Successful logins',
+        data:
+          value === 'month'
+            ? [820, 910, 1040, 980, 1120, 760, 690, 1240, 1310, 1180, 1090, 640]
+            : [42, 51, 38, 64, 58, 21, 12]
       },
       {
-        name: 'Sessions',
-        data: value === 'month' ? [110, 60, 150, 35, 60, 36, 26, 45, 65, 52, 53, 41] : [11, 32, 45, 32, 34, 52, 41]
+        name: 'Failed logins',
+        data: value === 'month' ? [41, 38, 57, 44, 61, 33, 29, 52, 74, 66, 48, 31] : [3, 5, 2, 7, 4, 1, 0]
       }
     ];
     const xaxis = { ...this.chartOptions.xaxis };

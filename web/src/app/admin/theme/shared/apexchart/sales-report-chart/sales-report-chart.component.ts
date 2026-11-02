@@ -1,4 +1,4 @@
-// angular import
+﻿// angular import
 import { Component, viewChild } from '@angular/core';
 
 // project import
@@ -57,12 +57,12 @@ export class SalesReportChartComponent {
       },
       series: [
         {
-          name: 'Net Profit',
-          data: [180, 90, 135, 114, 120, 145]
+          name: 'Uploaded',
+          data: [64, 88, 102, 95, 121, 137]
         },
         {
-          name: 'Revenue',
-          data: [120, 45, 78, 150, 168, 99]
+          name: 'Processed',
+          data: [58, 81, 94, 90, 112, 128]
         }
       ],
       xaxis: {
