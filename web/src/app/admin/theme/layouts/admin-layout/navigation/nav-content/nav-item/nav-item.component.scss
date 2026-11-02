@@ -1,1 +1,25 @@
 // This file is intentionally left empty to allow customers to add custom CSS if needed.
+
+// Entries without a destination are labels, not links.
+.nav-link-static {
+  cursor: default;
+  display: flex;
+  align-items: center;
+}
+
+// The template only spaces the icon for `<a>` links (`.nav-link > .coded-micon`),
+// so the static label branch needs the gap itself.
+.nav-link-static .coded-micon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  margin-right: 12px;
+}
+
+// Tabler icon font sizing (the font ships with the template).
+.coded-micon .ti {
+  font-size: 18px;
+  line-height: 1;
+}
