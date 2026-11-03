@@ -1,6 +1,6 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+﻿import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import bcrypt from 'bcryptjs';
+import argon2 from 'argon2';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
@@ -171,7 +171,7 @@ describe('Google Login & School Domain Restrictions E2E (Issue #10 & #11)', () =
         fullName: 'School Admin',
         status: 'ACTIVE',
         authProvider: 'local',
-        passwordHash: await bcrypt.hash('SecurePassword123!', 12),
+        passwordHash: await argon2.hash('SecurePassword123!', { timeCost: 1, memoryCost: 1024, parallelism: 1 }),
       },
     });
     await prisma.userAssignment.create({
@@ -240,7 +240,7 @@ describe('Google Login & School Domain Restrictions E2E (Issue #10 & #11)', () =
         fullName: 'External Admin',
         status: 'ACTIVE',
         authProvider: 'local',
-        passwordHash: await bcrypt.hash('AdminExternal123!', 12),
+        passwordHash: await argon2.hash('AdminExternal123!', { timeCost: 1, memoryCost: 1024, parallelism: 1 }),
       },
     });
     await prisma.userAssignment.create({

@@ -1,4 +1,4 @@
-// angular import
+﻿// angular import
 import { Component, viewChild } from '@angular/core';
 
 // project import
@@ -22,6 +22,7 @@ export class IncomeOverviewChartComponent {
       chart: {
         type: 'bar',
         height: 365,
+        fontFamily: "'Glacial Indifference', sans-serif",
         toolbar: {
           show: false
         },
@@ -38,7 +39,7 @@ export class IncomeOverviewChartComponent {
       },
       series: [
         {
-          data: [80, 95, 70, 42, 65, 55, 78]
+          data: [512, 398, 341, 226, 154, 118, 93]
         }
       ],
       stroke: {
@@ -46,7 +47,7 @@ export class IncomeOverviewChartComponent {
         width: 2
       },
       xaxis: {
-        categories: ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'],
+        categories: ['Math', 'Physics', 'CS', 'Biology', 'History', 'Langues', 'Admin'],
         axisBorder: {
           show: false
         },
@@ -62,7 +63,7 @@ export class IncomeOverviewChartComponent {
       yaxis: {
         show: false
       },
-      colors: ['#5cdbd3'],
+      colors: ['#475569'],
       grid: {
         show: false
       },

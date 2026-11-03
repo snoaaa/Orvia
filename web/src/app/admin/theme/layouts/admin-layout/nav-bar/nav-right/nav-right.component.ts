@@ -1,4 +1,4 @@
-// angular import
+﻿// angular import
 import { Component, output, inject, input } from '@angular/core';
 import { RouterModule } from '@angular/router';
 
@@ -25,8 +25,7 @@ import {
   LockOutline,
   CommentOutline,
   UnorderedListOutline,
-  ArrowRightOutline,
-  GithubOutline
+  ArrowRightOutline
 } from '@ant-design/icons-angular/icons';
 
 @Component({
@@ -66,7 +65,6 @@ export class NavRightComponent {
         UnorderedListOutline,
         ArrowRightOutline,
         BellOutline,
-        GithubOutline,
         WalletOutline
       ]
     );

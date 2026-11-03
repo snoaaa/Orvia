@@ -1,9 +1,9 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateDocumentDto, CreateSpaceDto, UpdateDocumentDto } from '../dto/index.js';
-import { DocumentEntity, SpaceEntity } from '../entities/index.js';
+import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto } from '../dto/index.js';
+import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity } from '../entities/index.js';
 import { DocumentsService } from '../services/documents.service.js';
 
 @ApiTags('Documents')
@@ -16,18 +16,38 @@ export class DocumentsController {
 
   @Get()
   @RequirePermission('documents:read')
-  @ApiOperation({ summary: 'List documents of your schools' })
-  @ApiResponse({ status: 200, description: 'List of documents', type: [DocumentEntity] })
-  async getDocuments(@CurrentUser() actor: AuthenticatedUser): Promise<DocumentEntity[]> {
-    return this.documentsService.findAllDocuments(actor);
+  @ApiOperation({
+    summary: 'List documents of your schools, paginated, newest first',
+    description:
+      'Same page/limit contract as the other lists: page defaults to 1, limit to 10 and is capped at 100. ' +
+      'Returns { data, total, page, limit, totalPages }.',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiResponse({ status: 200, description: 'Paginated list of documents', type: PaginatedDocumentsEntity })
+  async getDocuments(
+    @Query() query: ListDocumentsQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedDocumentsEntity> {
+    return this.documentsService.findAllDocuments(actor, query);
   }
 
   @Get('spaces')
   @RequirePermission('spaces:read')
-  @ApiOperation({ summary: 'List document spaces of your schools' })
-  @ApiResponse({ status: 200, description: 'List of spaces', type: [SpaceEntity] })
-  async getSpaces(@CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity[]> {
-    return this.documentsService.findAllSpaces(actor);
+  @ApiOperation({
+    summary: 'List document spaces of your schools, paginated and alphabetical',
+    description:
+      'Same page/limit contract as the other lists: page defaults to 1, limit to 10 and is capped at 100. ' +
+      'Returns { data, total, page, limit, totalPages }.',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiResponse({ status: 200, description: 'Paginated list of spaces', type: PaginatedSpacesEntity })
+  async getSpaces(
+    @Query() query: ListSpacesQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedSpacesEntity> {
+    return this.documentsService.findAllSpaces(actor, query);
   }
 
   @Post('spaces')

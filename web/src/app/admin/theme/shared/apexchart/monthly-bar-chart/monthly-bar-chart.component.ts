@@ -21,6 +21,7 @@ export class MonthlyBarChartComponent implements OnInit {
       chart: {
         height: 450,
         type: 'area',
+        fontFamily: "'Glacial Indifference', sans-serif",
         toolbar: {
           show: false
         },
@@ -29,20 +30,33 @@ export class MonthlyBarChartComponent implements OnInit {
       dataLabels: {
         enabled: false
       },
-      colors: ['#1677ff', '#0050b3'],
+      // Slate-blue primary with the shaded area under the line, neutral secondary as a dashed line.
+      colors: ['#475569', '#A1A1AA'],
+      fill: {
+        type: 'gradient',
+        gradient: {
+          inverseColors: false,
+          shade: 'light',
+          type: 'vertical',
+          opacityFrom: 0.65,
+          opacityTo: 0.5,
+          stops: [0, 100, 100]
+        }
+      },
       series: [
         {
-          name: 'Page Views',
-          data: [0, 86, 28, 115, 48, 210, 136]
+          name: 'Successful logins',
+          data: [42, 51, 38, 64, 58, 21, 12]
         },
         {
-          name: 'Sessions',
-          data: [0, 43, 14, 56, 24, 105, 68]
+          name: 'Failed logins',
+          data: [3, 5, 2, 7, 4, 1, 0]
         }
       ],
       stroke: {
         curve: 'smooth',
-        width: 2
+        width: 2,
+        dashArray: [0, 6]
       },
       xaxis: {
         categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
@@ -96,12 +110,15 @@ export class MonthlyBarChartComponent implements OnInit {
   toggleActive(value: string) {
     this.chartOptions.series = [
       {
-        name: 'Page Views',
-        data: value === 'month' ? [76, 85, 101, 98, 87, 105, 91, 114, 94, 86, 115, 35] : [31, 40, 28, 51, 42, 109, 100]
+        name: 'Successful logins',
+        data:
+          value === 'month'
+            ? [820, 910, 1040, 980, 1120, 760, 690, 1240, 1310, 1180, 1090, 640]
+            : [42, 51, 38, 64, 58, 21, 12]
       },
       {
-        name: 'Sessions',
-        data: value === 'month' ? [110, 60, 150, 35, 60, 36, 26, 45, 65, 52, 53, 41] : [11, 32, 45, 32, 34, 52, 41]
+        name: 'Failed logins',
+        data: value === 'month' ? [41, 38, 57, 44, 61, 33, 29, 52, 74, 66, 48, 31] : [3, 5, 2, 7, 4, 1, 0]
       }
     ];
     const xaxis = { ...this.chartOptions.xaxis };
