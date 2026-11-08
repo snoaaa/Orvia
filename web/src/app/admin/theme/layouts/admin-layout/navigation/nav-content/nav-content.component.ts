@@ -4,24 +4,11 @@ import { CommonModule, Location, LocationStrategy } from '@angular/common';
 import { RouterModule } from '@angular/router';
 
 // project import
-import { NavigationItem, NavigationItems } from '../navigation';
+import { NavigationItem, NavigationItems, navigationFor, type AdminType, ADMIN_TYPE_STORAGE_KEY } from '../navigation';
 import { environment } from 'src/environments/environment';
 
 import { NavGroupComponent } from './nav-group/nav-group.component';
 
-// icon
-import { IconService } from '@ant-design/icons-angular';
-import {
-  DashboardOutline,
-  CreditCardOutline,
-  LoginOutline,
-  QuestionOutline,
-  ChromeOutline,
-  FontSizeOutline,
-  ProfileOutline,
-  BgColorsOutline,
-  AntDesignOutline
-} from '@ant-design/icons-angular/icons';
 import { NgScrollbarModule } from 'ngx-scrollbar';
 
 @Component({
@@ -33,7 +20,6 @@ import { NgScrollbarModule } from 'ngx-scrollbar';
 export class NavContentComponent implements OnInit {
   private location = inject(Location);
   private locationStrategy = inject(LocationStrategy);
-  private iconService = inject(IconService);
 
   // public props
   NavCollapsedMob = output();
@@ -49,20 +35,13 @@ export class NavContentComponent implements OnInit {
 
   // Constructor
   constructor() {
-    this.iconService.addIcon(
-      ...[
-        DashboardOutline,
-        CreditCardOutline,
-        FontSizeOutline,
-        LoginOutline,
-        ProfileOutline,
-        BgColorsOutline,
-        AntDesignOutline,
-        ChromeOutline,
-        QuestionOutline
-      ]
-    );
-    this.navigations = NavigationItems;
+    this.navigations = navigationFor(NavContentComponent.adminTypeFromStorage());
+  }
+
+  /** Reads the console type from local storage. Frontend-only until the auth session exists. */
+  private static adminTypeFromStorage(): AdminType {
+    const stored = (localStorage.getItem(ADMIN_TYPE_STORAGE_KEY) ?? '').trim().toLowerCase();
+    return stored === 'school' ? 'school' : 'platform';
   }
 
   // Life cycle events

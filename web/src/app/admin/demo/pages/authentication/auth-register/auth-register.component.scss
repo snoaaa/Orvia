@@ -42,7 +42,7 @@
 
       .auth-form {
         flex-direction: column;
-        background: url("/assets/images/authentication/img-auth-bg.svg");
+        background: url("/assets/images/logo.png");
         min-height: 100vh;
         padding: 24px;
         background-repeat: no-repeat;
@@ -94,6 +94,11 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+    }
+
+    .auth-header img {
+      height: 35px;
+      width: auto;
     }
   }
 }

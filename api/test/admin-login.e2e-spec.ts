@@ -1,6 +1,6 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+﻿import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import bcrypt from 'bcryptjs';
+import argon2 from 'argon2';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
@@ -158,7 +158,7 @@ describe('Admin Login E2E (Issue #8)', () => {
 
     it('returns generic 401 for existing admin with wrong password', async () => {
       const email = `admin-e2e-${stamp}-wrongpass@school.edu`;
-      const passwordHash = await bcrypt.hash('CorrectPass123!', 10);
+      const passwordHash = await argon2.hash('CorrectPass123!', { timeCost: 1, memoryCost: 1024, parallelism: 1 });
       const user = await prisma.user.create({
         data: {
           email,
@@ -182,7 +182,7 @@ describe('Admin Login E2E (Issue #8)', () => {
     it('returns generic 401 when account is SUSPENDED', async () => {
       const email = `admin-e2e-${stamp}-suspended@school.edu`;
       const password = 'SuspendedPass123!';
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await argon2.hash(password, { timeCost: 1, memoryCost: 1024, parallelism: 1 });
       const user = await prisma.user.create({
         data: {
           email,
@@ -206,7 +206,7 @@ describe('Admin Login E2E (Issue #8)', () => {
     it('returns generic 401 when user is not an administrator (e.g. STUDENT)', async () => {
       const email = `admin-e2e-${stamp}-student@school.edu`;
       const password = 'StudentPass123!';
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await argon2.hash(password, { timeCost: 1, memoryCost: 1024, parallelism: 1 });
       const user = await prisma.user.create({
         data: {
           email,
@@ -307,7 +307,7 @@ describe('Admin Login E2E (Issue #8)', () => {
     it('activates an INVITED school admin on first login so JwtAuthGuard does not block them', async () => {
       const email = `admin-e2e-${stamp}-invited@school.edu`;
       const password = 'FirstLoginPass123!';
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await argon2.hash(password, { timeCost: 1, memoryCost: 1024, parallelism: 1 });
       const user = await prisma.user.create({
         data: {
           email,
@@ -349,7 +349,7 @@ describe('Admin Login E2E (Issue #8)', () => {
     it('handles mixed-case and whitespace-padded email gracefully', async () => {
       const email = `admin-e2e-${stamp}-case@school.edu`;
       const password = 'MixedCasePass123!';
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await argon2.hash(password, { timeCost: 1, memoryCost: 1024, parallelism: 1 });
       const user = await prisma.user.create({
         data: {
           email,
@@ -377,7 +377,7 @@ describe('Admin Login E2E (Issue #8)', () => {
     it('binds session to registered user device when deviceId is provided', async () => {
       const email = `admin-e2e-${stamp}-device@school.edu`;
       const password = 'DevicePass123!';
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await argon2.hash(password, { timeCost: 1, memoryCost: 1024, parallelism: 1 });
       const user = await prisma.user.create({
         data: {
           email,
@@ -421,7 +421,7 @@ describe('Admin Login E2E (Issue #8)', () => {
         .expect(401);
       const durationWrong = performance.now() - startWrong;
 
-      // Both must execute bcrypt comparison (~100ms+ in this environment). Neither should return instantaneously (<15ms).
+      // Both must execute an argon2 verification (~50ms+ in this environment). Neither should return instantaneously (<15ms).
       expect(durationMissing).toBeGreaterThan(40);
       expect(durationWrong).toBeGreaterThan(40);
     });
@@ -429,7 +429,7 @@ describe('Admin Login E2E (Issue #8)', () => {
     it('enforces brute-force lockout after 5 consecutive failures and records account_locked in audit trail', async () => {
       const email = `admin-e2e-${stamp}-bruteforce@school.edu`;
       const password = 'RealPassword123!';
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await argon2.hash(password, { timeCost: 1, memoryCost: 1024, parallelism: 1 });
       const user = await prisma.user.create({
         data: {
           email,

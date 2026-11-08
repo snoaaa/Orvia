@@ -1,4 +1,4 @@
-// angular import
+﻿// angular import
 import { Component, viewChild } from '@angular/core';
 
 // project import
@@ -20,6 +20,7 @@ export class SalesReportChartComponent {
       chart: {
         type: 'bar',
         height: 430,
+        fontFamily: "'Glacial Indifference', sans-serif",
         toolbar: {
           show: false
         },
@@ -43,7 +44,7 @@ export class SalesReportChartComponent {
         position: 'top',
         horizontalAlign: 'right',
         show: true,
-        fontFamily: `'Public Sans', sans-serif`,
+        fontFamily: `'Glacial Indifference', sans-serif`,
         offsetX: 10,
         offsetY: 10,
         labels: {
@@ -56,12 +57,12 @@ export class SalesReportChartComponent {
       },
       series: [
         {
-          name: 'Net Profit',
-          data: [180, 90, 135, 114, 120, 145]
+          name: 'Uploaded',
+          data: [64, 88, 102, 95, 121, 137]
         },
         {
-          name: 'Revenue',
-          data: [120, 45, 78, 150, 168, 99]
+          name: 'Processed',
+          data: [58, 81, 94, 90, 112, 128]
         }
       ],
       xaxis: {
@@ -75,7 +76,7 @@ export class SalesReportChartComponent {
       tooltip: {
         theme: 'light'
       },
-      colors: ['#faad14', '#1677ff'],
+      colors: ['#475569', '#A1A1AA'],
       grid: {
         borderColor: '#f5f5f5'
       }

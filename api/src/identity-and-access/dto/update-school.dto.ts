@@ -19,5 +19,17 @@ export class UpdateSchoolDto {
   @IsObject({ message: 'settings must be an object' })
   @IsOptional()
   settings?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    example: 'polytechnic.edu,yahoo.org',
+    description:
+      'Replaces the allowed email domains (comma-separated, lowercased). Emails from these domains ' +
+      '(or their subdomains) may be invited and may sign in with Google. An empty value clears the ' +
+      'list, which means the school restricts nothing.',
+  })
+  @IsString()
+  @MaxLength(1000)
+  @IsOptional()
+  allowedDomains?: string;
 }
 

@@ -1,11 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, CreateUserDto, InviteUserDto, UpdateUserDto } from '../dto/index.js';
-import { PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
+import { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
+import { PaginatedSchoolsEntity, PaginatedUsersEntity, PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
 @ApiTags('Identity and Access')
@@ -18,10 +18,26 @@ export class IdentityAndAccessController {
 
   @Get('users')
   @RequirePermission('users:read')
-  @ApiOperation({ summary: 'List users (school admins only see users of their schools)' })
-  @ApiResponse({ status: 200, description: 'List of users retrieved', type: [UserEntity] })
-  async getUsers(@CurrentUser() actor: AuthenticatedUser): Promise<UserEntity[]> {
-    return this.identityService.findAllUsers(actor);
+  @ApiOperation({
+    summary: 'List users, paginated and filterable (school admins only see users of their schools)',
+    description:
+      'Same page/limit contract as GET /schools: page defaults to 1, limit to 10 and is capped at 100. ' +
+      'Filters: status (INVITED/ACTIVE/SUSPENDED), search (email or full name) and sortBy/sortOrder. ' +
+      'Returns { data, total, page, limit, totalPages } — `total` is the count after filtering, ' +
+      'so one call per status gives the dashboard counters.',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiQuery({ name: 'status', required: false, enum: ['INVITED', 'ACTIVE', 'SUSPENDED'], description: 'Filter by account status' })
+  @ApiQuery({ name: 'search', required: false, description: 'Match on email or full name' })
+  @ApiQuery({ name: 'sortBy', required: false, enum: ['createdAt', 'email', 'fullName', 'status'], description: 'Column to order by' })
+  @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'], description: 'Sort direction' })
+  @ApiResponse({ status: 200, description: 'Paginated list of users retrieved', type: PaginatedUsersEntity })
+  async getUsers(
+    @Query() query: ListUsersQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedUsersEntity> {
+    return this.identityService.findAllUsers(actor, query);
   }
 
   @Get('users/:id')
@@ -90,13 +106,50 @@ export class IdentityAndAccessController {
     return this.identityService.updateUser(id, dto, actor, auditContextFromRequest(req));
   }
 
+  @Patch('users/:id/role')
+  @RequirePermission('users:assign_role')
+  @ApiOperation({
+    summary: "Create or replace a user's role in one school (role reassignment)",
+    description:
+      'School-scoped admins may only assign roles inside their own school(s); a platform-scoped role ' +
+      'requires platform-wide users:assign_role. Re-assigning the role already held is a no-op. ' +
+      'Records identity_access/role_assigned with the previous role.',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Role assigned', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'Unknown role' })
+  @ApiResponse({
+    status: 403,
+    description: 'Missing permission, another school, or a platform role without platform rights',
+  })
+  @ApiResponse({ status: 404, description: 'User or school not found' })
+  async assignRole(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AssignRoleDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.identityService.assignRole(id, dto, actor, auditContextFromRequest(req));
+  }
+
   @Get('schools')
   @RequirePermission('schools:read')
-  @ApiOperation({ summary: 'List schools (school admins only see their own)' })
-  @ApiResponse({ status: 200, description: 'List of schools', type: [SchoolEntity] })
-  async getSchools(@CurrentUser() actor: AuthenticatedUser): Promise<SchoolEntity[]> {
-    const paginated = await this.identityService.findAllSchools(actor, { limit: 100 });
-    return paginated.data;
+  @ApiOperation({
+    summary: 'List schools, paginated (school admins only see their own)',
+    description:
+      'Same contract as GET /schools: page defaults to 1, limit to 10 and is capped at 100. ' +
+      'Returns { data, total, page, limit, totalPages }.',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiQuery({ name: 'status', required: false, description: 'Filter by status (e.g. active, deactivated)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Search schools by name' })
+  @ApiResponse({ status: 200, description: 'Paginated list of schools retrieved', type: PaginatedSchoolsEntity })
+  async getSchools(
+    @Query() query: ListSchoolsQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedSchoolsEntity> {
+    return this.identityService.findAllSchools(actor, query);
   }
 
   @Get('schools/:id')
@@ -184,15 +237,21 @@ export class IdentityAndAccessController {
   @Get('permissions')
   @RequirePermission('users:assign_role')
   @ApiOperation({
-    summary: 'All permissions, the roles granting them, and who holds them',
-    description: 'Platform admins see every holder; school admins only see holders in their own schools.',
+    summary: 'All permissions, the roles granting them, and how many users hold them',
+    description:
+      'Without `code`: one row per permission with its roles and a holder count (bounded, 42 rows today). ' +
+      'With `code`: that permission plus its holders, grouped per user and school (a person holding it ' +
+      'through several roles appears once, listing every role), capped by `limit`. ' +
+      'Platform admins see every holder; school admins only holders in their own schools.',
   })
-  @ApiQuery({ name: 'code', required: false, description: "Only this permission, e.g. 'users:invite'" })
+  @ApiQuery({ name: 'code', required: false, description: "Drill into one permission, e.g. 'users:invite'" })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max holders returned with `code` (1-200, default 50)' })
   @ApiResponse({ status: 200, description: 'Permission overview', type: [PermissionOverviewEntity] })
+  @ApiResponse({ status: 404, description: 'Unknown permission code' })
   async getPermissions(
+    @Query() query: QueryPermissionOverviewDto,
     @CurrentUser() actor: AuthenticatedUser,
-    @Query('code') code?: string,
   ): Promise<PermissionOverviewEntity[]> {
-    return this.identityService.findPermissionOverview(actor, code);
+    return this.identityService.findPermissionOverview(actor, query);
   }
 }

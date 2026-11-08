@@ -1,14 +1,21 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
-export const USER_SORT_FIELDS = ['createdAt', 'fullName', 'email', 'status'] as const;
+/** Columns the user list may be ordered by. */
+export const USER_SORT_FIELDS = ['createdAt', 'email', 'fullName', 'status'] as const;
 export type UserSortField = (typeof USER_SORT_FIELDS)[number];
 
-const upper = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
-const trimmed = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+/** Account statuses, matching the Prisma `UserStatus` enum. */
+export const USER_STATUSES = ['INVITED', 'ACTIVE', 'SUSPENDED'] as const;
 
-/** Query of GET /users (#38). Every filter is optional and they can be combined. */
+/**
+ * Query for the paginated user list: same `page`/`limit` contract as the other lists,
+ * plus optional `status` / `search` filters and `sortBy` / `sortOrder`.
+ *
+ * The filters exist so the admin console can compute its "active / invited / suspended"
+ * counters from `total` instead of downloading every user.
+ */
 export class ListUsersQueryDto {
   @ApiPropertyOptional({ example: 1, default: 1, description: 'Page number (minimum 1)' })
   @Type(() => Number)
@@ -25,47 +32,41 @@ export class ListUsersQueryDto {
   @IsOptional()
   limit?: number;
 
-  @ApiPropertyOptional({ example: 'jane', description: 'Part of the full name or email (case-insensitive)' })
-  @Transform(trimmed)
+  @ApiPropertyOptional({
+    enum: USER_STATUSES,
+    example: 'ACTIVE',
+    description: 'Only users with this account status',
+  })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+  @IsIn(USER_STATUSES)
+  @IsOptional()
+  status?: (typeof USER_STATUSES)[number];
+
+  @ApiPropertyOptional({
+    example: 'lycee',
+    description: 'Case-insensitive match on the email address or the full name',
+    maxLength: 100,
+  })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MaxLength(100)
   @IsOptional()
   search?: string;
 
-  @ApiPropertyOptional({ example: '123e4567-e89b-12d3-a456-426614174001', description: 'Only users assigned to this school' })
-  @IsUUID()
-  @IsOptional()
-  schoolId?: string;
-
-  @ApiPropertyOptional({ example: 'STAFF', description: 'Only users holding this role (in the filtered school, if any)' })
-  @Transform(upper)
-  @IsString()
-  @MaxLength(100)
-  @IsOptional()
-  role?: string;
-
   @ApiPropertyOptional({
-    example: '123e4567-e89b-12d3-a456-426614174002',
-    description: 'Only users in this group (assigned to it, or members of it)',
+    enum: USER_SORT_FIELDS,
+    default: 'createdAt',
+    description: 'Column to order by',
   })
-  @IsUUID()
-  @IsOptional()
-  groupId?: string;
-
-  @ApiPropertyOptional({ enum: ['INVITED', 'ACTIVE', 'SUSPENDED'], description: 'Account status' })
-  @Transform(upper)
-  @IsIn(['INVITED', 'ACTIVE', 'SUSPENDED'])
-  @IsOptional()
-  status?: 'INVITED' | 'ACTIVE' | 'SUSPENDED';
-
-  @ApiPropertyOptional({ enum: USER_SORT_FIELDS, default: 'createdAt', description: 'Sort field' })
   @IsIn(USER_SORT_FIELDS)
   @IsOptional()
   sortBy?: UserSortField;
 
-  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc', description: 'Sort direction' })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @ApiPropertyOptional({
+    enum: ['asc', 'desc'],
+    description: 'Sort direction; defaults to desc for createdAt and asc for the others',
+  })
   @IsIn(['asc', 'desc'])
   @IsOptional()
-  order?: 'asc' | 'desc';
+  sortOrder?: 'asc' | 'desc';
 }
