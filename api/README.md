@@ -282,6 +282,17 @@ With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
   `student.a@demo.test`, `suspended.a@demo.test` (SUSPENDED), `invited.a@demo.test` (INVITED),
   `admin.b@demo.test`, `student.b@demo.test`
 
+## Groups
+
+`src/identity-and-access/controllers/groups.controller.ts`, under the **Groups** tag in Swagger
+(Sections 4.5 and 4.7). Platform admins act on every school, school admins on their own school(s) only.
+
+### Create a group: `POST /groups` (#33, `groups:create`)
+
+Body: `schoolId`, `name` and optionally `type` (`class` by default, `department` or `team`). The name is
+unique within a school, ignoring case (409), enforced by a database index. Another school → 403,
+unknown school → 404, deactivated school → 400.
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of
