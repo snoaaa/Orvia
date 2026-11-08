@@ -176,17 +176,37 @@ describe('Users list (e2e)', () => {
 
   describe('pagination and sorting', () => {
     it('pages through the results without overlap', async () => {
-      const first = check(await list(platformAdminId, { limit: 3, page: 1, sortBy: 'fullName', order: 'asc' }), 200);
-      const third = check(await list(platformAdminId, { limit: 3, page: 3, sortBy: 'fullName', order: 'asc' }), 200);
+      const first = check(await list(platformAdminId, { limit: 3, page: 1, sortBy: 'fullName', sortOrder: 'asc' }), 200);
+      const third = check(await list(platformAdminId, { limit: 3, page: 3, sortBy: 'fullName', sortOrder: 'asc' }), 200);
       expect(first.body).toMatchObject({ total: 8, page: 1, limit: 3, totalPages: 3 });
       expect(names(first.body)).toEqual(['AdminA', 'Both', 'ManagerA']);
       expect(names(third.body)).toEqual(['StudentA', 'StaffB'].sort());
     });
 
     it('sorts by full name descending', async () => {
-      const res = check(await list(platformAdminId, { sortBy: 'fullName', order: 'desc' }), 200);
+      const res = check(await list(platformAdminId, { sortBy: 'fullName', sortOrder: 'desc' }), 200);
       const ordered = res.body.data.map((u: { fullName: string }) => u.fullName.replace(`${tag} `, ''));
       expect(ordered).toEqual(['StudentA', 'StaffB', 'StaffA', 'Orphan', 'MemberA', 'ManagerA', 'Both', 'AdminA']);
+    });
+
+    it('defaults to A-Z for text columns and newest first for createdAt', async () => {
+      const byName = check(await list(platformAdminId, { sortBy: 'fullName' }), 200);
+      expect(byName.body.data.map((u: { fullName: string }) => u.fullName.replace(`${tag} `, ''))).toEqual([
+        'AdminA', 'Both', 'ManagerA', 'MemberA', 'Orphan', 'StaffA', 'StaffB', 'StudentA',
+      ]);
+      const byDate = check(await list(platformAdminId), 200);
+      const dates = byDate.body.data.map((u: { createdAt: string }) => new Date(u.createdAt).getTime());
+      expect(dates).toEqual([...dates].sort((a, b) => b - a));
+    });
+
+    it('GET /identity/users answers with the same implementation and scoping', async () => {
+      const res = await http()
+        .get('/identity/users')
+        .query({ search: tag, limit: 100, sortBy: 'fullName', sortOrder: 'asc' })
+        .set('Authorization', await bearer(ids.AdminA));
+      check(res, 200);
+      expect(names(res.body)).toEqual(['AdminA', 'Both', 'ManagerA', 'MemberA', 'StaffA', 'StudentA']);
+      expect(res.body.data[0].assignments).toHaveLength(1);
     });
 
     it('rejects invalid pagination or sort parameters', async () => {

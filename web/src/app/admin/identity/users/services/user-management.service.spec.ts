@@ -80,7 +80,7 @@ describe('UserManagementService', () => {
       expect(user.fullName).toBe('Admin A');
     });
 
-    const req = httpMock.expectOne(`${environment.apiUrl}/identity/users/user-uuid-1`);
+    const req = httpMock.expectOne(`${environment.apiUrl}/users/user-uuid-1`);
     expect(req.request.method).toBe('GET');
     req.flush(mockUser);
   });

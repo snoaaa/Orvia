@@ -106,6 +106,16 @@ describe('User edit (e2e)', () => {
       expect(row.updatedAt.getTime()).toBeGreaterThan(past.getTime());
     });
 
+    it('does not write when nothing changes, so updated_at stays the same', async () => {
+      const current = await prisma.user.findUniqueOrThrow({ where: { id: ids.StudentB } });
+      const past = new Date(Date.now() - 60_000);
+      await prisma.user.update({ where: { id: ids.StudentB }, data: { updatedAt: past } });
+
+      check(await edit(platformAdminId, ids.StudentB, { fullName: current.fullName, email: current.email }), 200);
+      const row = await prisma.user.findUniqueOrThrow({ where: { id: ids.StudentB } });
+      expect(row.updatedAt.getTime()).toBe(past.getTime());
+    });
+
     it('never returns the password hash or tokens', async () => {
       const res = check(await edit(ids.AdminA, ids.StudentA, { fullName: 'Jane Doe' }), 200);
       const raw = JSON.stringify(res.body);

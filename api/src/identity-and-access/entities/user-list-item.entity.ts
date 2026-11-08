@@ -52,7 +52,7 @@ export class UserListItemEntity {
   }
 }
 
-export class PaginatedUserListEntity {
+export class PaginatedUsersEntity {
   @ApiProperty({ type: [UserListItemEntity], description: 'Users of the current page' })
   data: UserListItemEntity[];
 
@@ -68,7 +68,7 @@ export class PaginatedUserListEntity {
   @ApiProperty({ example: 5, description: 'Total number of pages' })
   totalPages: number;
 
-  constructor(partial: PaginatedUserListEntity) {
+  constructor(partial: PaginatedUsersEntity) {
     Object.assign(this, partial);
   }
 }
