@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
+import { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
 import { PaginatedSchoolsEntity, PaginatedUsersEntity, PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
@@ -220,18 +220,56 @@ export class IdentityAndAccessController {
 
   @Get('roles')
   @RequirePermission('users:assign_role')
-  @ApiOperation({ summary: 'List available roles' })
+  @ApiOperation({ summary: 'List available roles with permissions and assignment counts' })
   @ApiResponse({ status: 200, description: 'List of roles', type: [RoleEntity] })
   async getRoles(): Promise<RoleEntity[]> {
     return this.identityService.findAllRoles();
+  }
+
+  @Get('roles/:id')
+  @RequirePermission('users:assign_role')
+  @ApiOperation({ summary: 'Get role by ID or name with permissions' })
+  @ApiParam({ name: 'id', description: 'Role UUID or name' })
+  @ApiResponse({ status: 200, description: 'Role details', type: RoleEntity })
+  @ApiResponse({ status: 404, description: 'Role not found' })
+  async getRoleById(@Param('id') id: string): Promise<RoleEntity> {
+    return this.identityService.findRoleById(id);
   }
 
   @Post('roles')
   @RequirePermission('system:manage')
   @ApiOperation({ summary: 'Define a custom role (platform admin)' })
   @ApiResponse({ status: 201, description: 'Role created', type: RoleEntity })
+  @ApiResponse({ status: 400, description: 'Reserved base role name or invalid payload' })
+  @ApiResponse({ status: 409, description: 'Role already exists' })
   async createRole(@Body() dto: CreateRoleDto): Promise<RoleEntity> {
     return this.identityService.createRole(dto);
+  }
+
+  @Patch('roles/:id')
+  @RequirePermission('system:manage')
+  @ApiOperation({ summary: 'Update a custom role and its permissions (platform admin)' })
+  @ApiParam({ name: 'id', description: 'Role UUID or name' })
+  @ApiResponse({ status: 200, description: 'Role updated', type: RoleEntity })
+  @ApiResponse({ status: 400, description: 'Base roles cannot be edited or invalid payload' })
+  @ApiResponse({ status: 404, description: 'Role not found' })
+  @ApiResponse({ status: 409, description: 'Role name already taken' })
+  async updateRole(
+    @Param('id') id: string,
+    @Body() dto: UpdateRoleDto,
+  ): Promise<RoleEntity> {
+    return this.identityService.updateRole(id, dto);
+  }
+
+  @Delete('roles/:id')
+  @RequirePermission('system:manage')
+  @ApiOperation({ summary: 'Delete a custom role (blocked if base role or still assigned to users)' })
+  @ApiParam({ name: 'id', description: 'Role UUID or name' })
+  @ApiResponse({ status: 200, description: 'Role deleted' })
+  @ApiResponse({ status: 400, description: 'Cannot delete base role or role currently assigned to users' })
+  @ApiResponse({ status: 404, description: 'Role not found' })
+  async deleteRole(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
+    return this.identityService.deleteRole(id);
   }
 
   @Get('permissions')

@@ -3,6 +3,7 @@ import { Routes } from '@angular/router';
 // Project import
 import { AdminLayout } from './theme/layouts/admin-layout/admin-layout.component';
 import { GuestLayoutComponent } from './theme/layouts/guest-layout/guest-layout.component';
+import { platformAdminGuard } from './identity/roles/guards/platform-admin.guard';
 
 export const adminRoutes: Routes = [
   {
@@ -29,16 +30,28 @@ export const adminRoutes: Routes = [
           import('./identity/users/user-edit/user-edit.component').then((c) => c.UserEditComponent)
       },
       {
-        path: 'typography',
-        loadComponent: () => import('./demo/component/basic-component/typography/typography.component').then((c) => c.TypographyComponent)
+        path: 'roles',
+        canActivate: [platformAdminGuard],
+        loadComponent: () =>
+          import('./identity/roles/role-list/role-list.component').then((c) => c.RoleListComponent)
       },
       {
-        path: 'color',
-        loadComponent: () => import('./demo/component/basic-component/color/color.component').then((c) => c.ColorComponent)
+        path: 'roles/create',
+        canActivate: [platformAdminGuard],
+        loadComponent: () =>
+          import('./identity/roles/role-edit/role-edit.component').then((c) => c.RoleEditComponent)
       },
       {
-        path: 'sample-page',
-        loadComponent: () => import('./demo/others/sample-page/sample-page.component').then((c) => c.SamplePageComponent)
+        path: 'roles/:id',
+        canActivate: [platformAdminGuard],
+        loadComponent: () =>
+          import('./identity/roles/role-edit/role-edit.component').then((c) => c.RoleEditComponent)
+      },
+      {
+        path: 'roles/:id/edit',
+        canActivate: [platformAdminGuard],
+        loadComponent: () =>
+          import('./identity/roles/role-edit/role-edit.component').then((c) => c.RoleEditComponent)
       }
     ]
   },
