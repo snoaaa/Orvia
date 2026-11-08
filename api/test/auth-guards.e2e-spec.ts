@@ -1,4 +1,4 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import type { UserStatus } from '@prisma/client';
@@ -172,8 +172,8 @@ describe('Auth guards (e2e)', () => {
       expect(assignments[0]).toMatchObject({ schoolId: schoolIds.A, role: { name: 'STUDENT' } });
 
       await request(app.getHttpServer()).get(`/identity/users/${invited.body.id}`).set('Authorization', auth).expect(200);
-      const list = await request(app.getHttpServer()).get('/identity/users').set('Authorization', auth).expect(200);
-      expect(list.body.map((u: { id: string }) => u.id)).toContain(invited.body.id);
+      const list = await request(app.getHttpServer()).get('/identity/users?limit=100').set('Authorization', auth).expect(200);
+      expect(list.body.data.map((u: { id: string }) => u.id)).toContain(invited.body.id);
     });
 
     it('a school admin can invite with a school role but not with a platform role', async () => {
@@ -218,13 +218,13 @@ describe('Auth guards (e2e)', () => {
 
     it('a school admin only lists users and schools of their school', async () => {
       const auth = await bearer('adminA');
-      const users = await request(app.getHttpServer()).get('/identity/users').set('Authorization', auth).expect(200);
-      const ids = users.body.map((u: { id: string }) => u.id);
+      const users = await request(app.getHttpServer()).get('/identity/users?limit=100').set('Authorization', auth).expect(200);
+      const ids = users.body.data.map((u: { id: string }) => u.id);
       expect(ids).toContain(userIds.studentA);
       expect(ids).not.toContain(userIds.studentB);
 
-      const schools = await request(app.getHttpServer()).get('/identity/schools').set('Authorization', auth).expect(200);
-      expect(schools.body.map((s: { id: string }) => s.id)).toEqual([schoolIds.A]);
+      const schools = await request(app.getHttpServer()).get('/identity/schools?limit=100').set('Authorization', auth).expect(200);
+      expect(schools.body.data.map((s: { id: string }) => s.id)).toEqual([schoolIds.A]);
     });
 
     it('a school admin cannot create a space in another school', async () => {

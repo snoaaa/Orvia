@@ -1,8 +1,11 @@
-import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+﻿import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import argon2 from 'argon2';
-import bcrypt from 'bcryptjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminLoginService } from './admin-login.service.js';
+
+// argon2id with low cost: verification is what matters here, so tests stay fast.
+const hashPassword = (password: string) =>
+  argon2.hash(password, { timeCost: 1, memoryCost: 1024, parallelism: 1 });
 
 describe('AdminLoginService (Unit Tests)', () => {
   let service: AdminLoginService;
@@ -48,13 +51,13 @@ describe('AdminLoginService (Unit Tests)', () => {
 
   it('rejects unknown email with generic 401 and performs dummy compare against timing attacks', async () => {
     mockPrisma.user.findUnique.mockResolvedValue(null);
-    const bcryptCompareSpy = vi.spyOn(bcrypt, 'compare');
+    const argon2VerifySpy = vi.spyOn(argon2, 'verify');
 
     await expect(
       service.login('unknown@wamdp.platform', 'password123!', fakeContext),
     ).rejects.toBeInstanceOf(UnauthorizedException);
 
-    expect(bcryptCompareSpy).toHaveBeenCalled();
+    expect(argon2VerifySpy).toHaveBeenCalled();
     expect(mockSessions.createSession).not.toHaveBeenCalled();
     expect(mockAudit.record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -76,16 +79,16 @@ describe('AdminLoginService (Unit Tests)', () => {
       passwordHash: null,
       status: 'ACTIVE',
       assignments: [
-        { schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } },
+        { schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] } },
       ],
     });
-    const bcryptCompareSpy = vi.spyOn(bcrypt, 'compare');
+    const argon2VerifySpy = vi.spyOn(argon2, 'verify');
 
     await expect(
       service.login('admin@google.com', 'password123!', fakeContext),
     ).rejects.toBeInstanceOf(UnauthorizedException);
 
-    expect(bcryptCompareSpy).toHaveBeenCalled();
+    expect(argon2VerifySpy).toHaveBeenCalled();
     expect(mockSessions.createSession).not.toHaveBeenCalled();
     expect(mockAudit.record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -98,7 +101,7 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('rejects invalid password with generic 401', async () => {
-    const hash = await bcrypt.hash('correct-admin-password', 4);
+    const hash = await hashPassword('correct-admin-password');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'admin-id',
       email: 'admin@school.edu',
@@ -108,7 +111,7 @@ describe('AdminLoginService (Unit Tests)', () => {
       assignments: [
         {
           schoolId: 'school-1',
-          role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+          role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] },
         },
       ],
     });
@@ -130,7 +133,7 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('rejects suspended admin with generic 401 and audits account_suspended', async () => {
-    const hash = await bcrypt.hash('valid-admin-password', 4);
+    const hash = await hashPassword('valid-admin-password');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'suspended-admin-id',
       email: 'suspended@school.edu',
@@ -140,7 +143,7 @@ describe('AdminLoginService (Unit Tests)', () => {
       assignments: [
         {
           schoolId: 'school-1',
-          role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+          role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] },
         },
       ],
     });
@@ -166,7 +169,7 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('rejects non-admin user (e.g. STUDENT) with generic 401 and audits not_admin', async () => {
-    const hash = await bcrypt.hash('valid-student-password', 4);
+    const hash = await hashPassword('valid-student-password');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'student-id',
       email: 'student@school.edu',
@@ -199,7 +202,7 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('authenticates active PLATFORM_ADMIN and records login_success audit event', async () => {
-    const hash = await bcrypt.hash('platformAdminPassword!', 4);
+    const hash = await hashPassword('platformAdminPassword!');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'platform-admin-id',
       email: 'admin@wamdp.platform',
@@ -244,7 +247,7 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('authenticates active SCHOOL_ADMIN and passes optional deviceId', async () => {
-    const hash = await bcrypt.hash('schoolAdminPassword!', 4);
+    const hash = await hashPassword('schoolAdminPassword!');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'school-admin-id',
       email: 'admin@highschool.edu',
@@ -254,7 +257,7 @@ describe('AdminLoginService (Unit Tests)', () => {
       assignments: [
         {
           schoolId: 'school-high',
-          role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+          role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] },
         },
       ],
     });
@@ -286,7 +289,7 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('activates an INVITED admin account on first successful login', async () => {
-    const hash = await bcrypt.hash('invitedAdminPassword!', 4);
+    const hash = await hashPassword('invitedAdminPassword!');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'invited-admin-id',
       email: 'invited-admin@school.edu',
@@ -296,7 +299,7 @@ describe('AdminLoginService (Unit Tests)', () => {
       assignments: [
         {
           schoolId: 'school-1',
-          role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+          role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] },
         },
       ],
     });
@@ -319,14 +322,14 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('uses context.deviceId when deviceId is not explicitly passed in dto', async () => {
-    const hash = await bcrypt.hash('adminPass!', 4);
+    const hash = await hashPassword('adminPass!');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'admin-1',
       email: 'admin@school.edu',
       authProvider: 'local',
       passwordHash: hash,
       status: 'ACTIVE',
-      assignments: [{ schoolId: 'school-1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+      assignments: [{ schoolId: 'school-1', role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] } }],
     });
 
     const contextWithDevice = { ...fakeContext, deviceId: 'context-device-uuid' };
@@ -340,14 +343,14 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('prefers explicit dto deviceId over context.deviceId', async () => {
-    const hash = await bcrypt.hash('adminPass!', 4);
+    const hash = await hashPassword('adminPass!');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'admin-1',
       email: 'admin@school.edu',
       authProvider: 'local',
       passwordHash: hash,
       status: 'ACTIVE',
-      assignments: [{ schoolId: 'school-1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+      assignments: [{ schoolId: 'school-1', role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] } }],
     });
 
     const contextWithDevice = { ...fakeContext, deviceId: 'context-device-uuid' };
@@ -361,14 +364,14 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('locks account after 5 consecutive failed login attempts and audits account_locked', async () => {
-    const hash = await bcrypt.hash('CorrectPass123!', 4);
+    const hash = await hashPassword('CorrectPass123!');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'admin-lockout-test',
       email: 'lockout@school.edu',
       authProvider: 'local',
       passwordHash: hash,
       status: 'ACTIVE',
-      assignments: [{ schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+      assignments: [{ schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] } }],
     });
 
     service.resetLockout();
@@ -414,14 +417,14 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('resets failed attempt counter after a successful login', async () => {
-    const hash = await bcrypt.hash('CorrectPass123!', 4);
+    const hash = await hashPassword('CorrectPass123!');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'admin-reset-test',
       email: 'reset@school.edu',
       authProvider: 'local',
       passwordHash: hash,
       status: 'ACTIVE',
-      assignments: [{ schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school' } }],
+      assignments: [{ schoolId: 's1', role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] } }],
     });
 
     service.resetLockout();
@@ -460,7 +463,7 @@ describe('AdminLoginService (Unit Tests)', () => {
   });
 
   it('rejects school admin login when their school is deactivated and audits school_deactivated', async () => {
-    const hash = await bcrypt.hash('schoolAdminPassword!', 4);
+    const hash = await hashPassword('schoolAdminPassword!');
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'deactivated-admin-id',
       email: 'admin@deactivated.edu',
@@ -470,7 +473,7 @@ describe('AdminLoginService (Unit Tests)', () => {
       assignments: [
         {
           schoolId: 'deactivated-school-id',
-          role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+          role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] },
           school: { id: 'deactivated-school-id', name: 'Deactivated School', status: 'deactivated' },
         },
       ],
@@ -509,7 +512,7 @@ describe('AdminLoginService (Unit Tests)', () => {
         status: 'INVITED',
         assignments: [
           {
-            role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+            role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] },
             schoolId: 'school-1',
           },
         ],
@@ -619,7 +622,7 @@ describe('AdminLoginService (Unit Tests)', () => {
         assignments: [
           {
             schoolId: 'school-1',
-            role: { name: 'SCHOOL_ADMIN', scope: 'school' },
+            role: { name: 'SCHOOL_ADMIN', scope: 'school', rolePermissions: [{ permission: { code: 'users:assign_role' } }] },
           },
         ],
       });

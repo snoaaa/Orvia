@@ -1,4 +1,4 @@
-import { REDACTED, redactSecrets } from './audit-redaction.util.js';
+﻿import { REDACTED, redactSecrets } from './audit-redaction.util.js';
 
 describe('redactSecrets', () => {
   it('redacts secret keys at any depth, keeps the rest', () => {
@@ -16,7 +16,7 @@ describe('redactSecrets', () => {
     });
   });
 
-  it('redacts JWTs, bearer headers and bcrypt hashes under innocent keys', () => {
+  it('redacts JWTs, bearer headers and legacy \\$ hashes under innocent keys', () => {
     const out = redactSecrets({
       note: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln',
       header: 'Bearer abc.def',

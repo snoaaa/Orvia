@@ -1,7 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import argon2 from 'argon2';
-import bcrypt from 'bcryptjs';
 import {
   AuditEvents,
   type LoginFailureReason,
@@ -9,15 +8,26 @@ import {
 import { AuditService } from '../../audit/services/audit.service.js';
 import type { AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
+import { hasAdminAccess, isAdminRole, toClassifiableRoles } from '../utils/admin-role.util.js';
 import { SessionService, type TokenPair } from './session.service.js';
 
 /**
- * Precomputed 12-round bcrypt hash for dummy password comparison.
- * Neutralizes user enumeration timing attacks by guaranteeing constant-time comparison
- * even when the email is unregistered, locked, or the account has no password.
+ * Precomputed argon2id hash of a throwaway string, used as the comparison target when there is no
+ * real hash to check (unknown email, locked account, Google-only account). Verifying against it
+ * costs the same as a real verification, so response time does not reveal whether the account
+ * exists.
  */
-const DUMMY_BCRYPT_HASH =
-  '$2b$12$jyA712IBNf0Scv9Aiikzh.17fk30r55zowTVjt83wnnupx/gFTRA.';
+const DUMMY_ARGON2_HASH =
+  '$argon2id$v=19$m=65536,p=4,t=3$rsXLORTGGnL2J5XcnHFjKA$Dck5hTtS+S2m1j/p0Yia9pgEaOhgKEbxd7We1NVwPlk';
+
+/** argon2 verify, treating a malformed/legacy hash as "no match" instead of throwing. */
+async function verifyPassword(hash: string, password: string): Promise<boolean> {
+  try {
+    return await argon2.verify(hash, password);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Maximum consecutive failed login attempts before temporary account lockout.
@@ -39,10 +49,11 @@ interface FailedAttemptState {
  * Handles administrator authentication via email + password (Issue #8).
  *
  * Enforces:
- *  - Constant-time execution (dummy bcrypt comparison) to prevent timing side-channels.
- *  - Local password-only accounts (`authProvider === 'local'` and `passwordHash !== null`).
+ *  - Constant-time execution (dummy argon2 comparison) to prevent timing side-channels.
+ *  - Password-only accounts (`authProvider === 'local'` and `passwordHash !== null`), argon2id hashes.
  *  - Generic 401 on credential mismatch, suspended status, or non-admin accounts.
- *  - Admin role requirement: platform-scoped role or `SCHOOL_ADMIN`.
+ *  - Admin role requirement: a platform-scoped role, or any role granting an administrative
+ *    permission (see `auth/utils/admin-role.util.ts`) — no role name is hardcoded.
  *  - Brute-force mitigation: locks account after 5 consecutive failures and audits `account_locked`.
  *  - First-login activation: transitions `INVITED` admin accounts to `ACTIVE` so subsequent
  *    requests pass `JwtAuthGuard` without lockout.
@@ -83,7 +94,7 @@ export class AdminLoginService {
     const state = this.attemptTracker.get(normalizedEmail);
     if (state?.lockedUntil && state.lockedUntil.getTime() > now) {
       // Execute dummy comparison to preserve timing uniformity even for locked accounts
-      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
+      await verifyPassword(DUMMY_ARGON2_HASH, password);
       await this.recordFailure(
         normalizedEmail,
         'account_locked',
@@ -93,13 +104,19 @@ export class AdminLoginService {
       return this.deny();
     }
 
-    // 2. Fetch user together with role assignments
+    // 2. Fetch user together with role assignments and their permissions
     const user = await this.prisma.user.findUnique({
       where: { email: normalizedEmail },
       include: {
         assignments: {
           include: {
-            role: { select: { name: true, scope: true } },
+            role: {
+              select: {
+                name: true,
+                scope: true,
+                rolePermissions: { select: { permission: { select: { code: true } } } },
+              },
+            },
             school: { select: { id: true, name: true, status: true } },
           },
         },
@@ -107,9 +124,9 @@ export class AdminLoginService {
     });
 
     // 3. Case: User not found or account is not password-based (e.g. Google-only).
-    // Perform dummy bcrypt comparison to ensure uniform response timing.
+    // Perform dummy argon2 comparison to ensure uniform response timing.
     if (!user || user.authProvider !== 'local' || !user.passwordHash) {
-      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
+      await verifyPassword(DUMMY_ARGON2_HASH, password);
       return this.handleLoginFailure(
         normalizedEmail,
         'invalid_credentials',
@@ -118,17 +135,8 @@ export class AdminLoginService {
       );
     }
 
-    // 4. Case: Password mismatch (supports argon2 and bcrypt)
-    let passwordValid = false;
-    try {
-      if (user.passwordHash.startsWith('$argon2')) {
-        passwordValid = await argon2.verify(user.passwordHash, password);
-      } else {
-        passwordValid = await bcrypt.compare(password, user.passwordHash);
-      }
-    } catch {
-      passwordValid = false;
-    }
+    // 4. Case: Password mismatch (argon2id only)
+    const passwordValid = await verifyPassword(user.passwordHash, password);
     if (!passwordValid) {
       return this.handleLoginFailure(
         normalizedEmail,
@@ -148,11 +156,10 @@ export class AdminLoginService {
       );
     }
 
-    // 6. Case: Account is not an administrator (neither platform scope nor SCHOOL_ADMIN)
-    const isAdmin = user.assignments.some(
-      (a) => a.role.scope === 'platform' || a.role.name === 'SCHOOL_ADMIN',
-    );
-    if (!isAdmin) {
+    // 6. Case: Account is not an administrator. Admin-ness comes from data, not from a role name:
+    // a platform-scoped role, or a role granting an administrative permission.
+    const roles = toClassifiableRoles(user.assignments);
+    if (!hasAdminAccess(roles)) {
       return this.handleLoginFailure(
         normalizedEmail,
         'not_admin',
@@ -199,11 +206,10 @@ export class AdminLoginService {
       effectiveDeviceId,
     );
 
-    // 10. Resolve primary admin assignment for audit trail
-    const adminAssignment =
-      user.assignments.find((a) => a.role.scope === 'platform') ||
-      user.assignments.find((a) => a.role.name === 'SCHOOL_ADMIN') ||
-      user.assignments[0];
+    // 10. Resolve primary admin assignment for audit trail (platform scope first, then admin roles)
+    const platformIndex = roles.findIndex((r) => r.scope === 'platform');
+    const adminIndex = platformIndex >= 0 ? platformIndex : roles.findIndex(isAdminRole);
+    const adminAssignment = user.assignments[adminIndex >= 0 ? adminIndex : 0];
 
     await this.audit.record(
       AuditEvents.loginSuccess(

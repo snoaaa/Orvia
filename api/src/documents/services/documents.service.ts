@@ -1,22 +1,52 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateDocumentDto, CreateSpaceDto, UpdateDocumentDto } from '../dto/index.js';
-import { DocumentEntity, SpaceEntity } from '../entities/index.js';
+import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto } from '../dto/index.js';
+import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity } from '../entities/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
 
 @Injectable()
 export class DocumentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAllDocuments(actor: AuthenticatedUser): Promise<DocumentEntity[]> {
+  /**
+   * Platform-wide readers see every document; others only the documents of spaces in their schools.
+   * Paginated with the shared `page`/`limit` contract (`limit` capped at 100) and ordered
+   * `created_at DESC, id DESC`, so pages stay stable when two documents share a timestamp.
+   */
+  async findAllDocuments(
+    actor: AuthenticatedUser,
+    query?: ListDocumentsQueryDto,
+  ): Promise<PaginatedDocumentsEntity> {
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
+    const skip = (page - 1) * limit;
+
     const schoolId = schoolIdFilter(actor, 'documents:read');
-    const docs = await this.prisma.document.findMany({
-      where: schoolId ? { space: { schoolId } } : undefined,
+    const where: Prisma.DocumentWhereInput = schoolId ? { space: { schoolId } } : {};
+
+    const [total, docs] = await Promise.all([
+      this.prisma.document.count({ where }),
+      this.prisma.document.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    return new PaginatedDocumentsEntity({
+      data: docs.map((d) => DocumentMapper.toEntity(d)),
+      total,
+      page,
+      limit,
+      totalPages,
     });
-    return docs.map((d) => DocumentMapper.toEntity(d));
   }
 
   async findDocumentById(id: string, actor: AuthenticatedUser): Promise<DocumentEntity> {
@@ -63,10 +93,37 @@ export class DocumentsService {
     return DocumentMapper.toEntity(updated);
   }
 
-  async findAllSpaces(actor: AuthenticatedUser): Promise<SpaceEntity[]> {
+  /**
+   * Spaces of the caller's schools, paginated with the shared `page`/`limit` contract and ordered
+   * alphabetically (stable id tie-breaker). The table is small, so no extra index is needed.
+   */
+  async findAllSpaces(actor: AuthenticatedUser, query?: ListSpacesQueryDto): Promise<PaginatedSpacesEntity> {
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
+    const skip = (page - 1) * limit;
+
     const schoolId = schoolIdFilter(actor, 'spaces:read');
-    const spaces = await this.prisma.space.findMany({ where: schoolId ? { schoolId } : undefined });
-    return spaces.map((s) => SpaceMapper.toEntity(s));
+    const where: Prisma.SpaceWhereInput = schoolId ? { schoolId } : {};
+
+    const [total, spaces] = await Promise.all([
+      this.prisma.space.count({ where }),
+      this.prisma.space.findMany({
+        where,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    return new PaginatedSpacesEntity({
+      data: spaces.map((s) => SpaceMapper.toEntity(s)),
+      total,
+      page,
+      limit,
+      totalPages,
+    });
   }
 
   /** School-scoped users must create the space in one of their schools. */

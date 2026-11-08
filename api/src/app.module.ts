@@ -11,6 +11,7 @@ import { PrismaModule } from './database/prisma.module.js';
 import { DocumentsModule } from './documents/documents.module.js';
 import { IdentityAndAccessModule } from './identity-and-access/identity-and-access.module.js';
 import { MobileSyncModule } from './mobile-sync/mobile-sync.module.js';
+import { OverviewModule } from './overview/overview.module.js';
 import { RagPerformanceModule } from './rag-performance/rag-performance.module.js';
 
 @Module({
@@ -27,6 +28,7 @@ import { RagPerformanceModule } from './rag-performance/rag-performance.module.j
     ConversationsModule,
     RagPerformanceModule,
     MobileSyncModule,
+    OverviewModule,
     AuditModule,
   ],
   controllers: [AppController],

@@ -131,7 +131,12 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             return Promise.resolve({ id: 'role-platform-id', name: 'PLATFORM_ADMIN', scope: 'platform' });
           }
           if (where.name === 'SCHOOL_ADMIN') {
-            return Promise.resolve({ id: 'role-school-admin-id', name: 'SCHOOL_ADMIN', scope: 'school' });
+            return Promise.resolve({
+              id: 'role-school-admin-id',
+              name: 'SCHOOL_ADMIN',
+              scope: 'school',
+              rolePermissions: [{ permission: { code: 'users:assign_role' } }],
+            });
           }
           return Promise.resolve(null);
         }),
@@ -221,7 +226,9 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         fakeContext,
       );
 
-      expect(mockPrisma.role.findUnique).toHaveBeenCalledWith({ where: { name: 'STUDENT' } });
+      expect(mockPrisma.role.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { name: 'STUDENT' } }),
+      );
     });
 
     it('assigns custom specified role when valid for the school', async () => {
@@ -231,7 +238,9 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         fakeContext,
       );
 
-      expect(mockPrisma.role.findUnique).toHaveBeenCalledWith({ where: { name: 'TEACHER' } });
+      expect(mockPrisma.role.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { name: 'TEACHER' } }),
+      );
     });
 
     it('generates a setup token when inviting an administrator (Issue #26)', async () => {
