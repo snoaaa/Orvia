@@ -60,6 +60,7 @@ export const NavigationItems: NavigationItem[] = [
         title: 'Dashboard',
         type: 'item',
         classes: 'nav-item',
+        url: '/admin/dashboard/default',
         icon: 'ti ti-dashboard',
         state: 'live'
       }
@@ -75,6 +76,7 @@ export const NavigationItems: NavigationItem[] = [
         title: 'Users',
         type: 'item',
         classes: 'nav-item',
+        url: '/admin/users',
         icon: 'ti ti-users',
         permission: 'users:read',
         state: 'live'
@@ -322,6 +324,40 @@ export const NavigationItems: NavigationItem[] = [
         permission: 'system:manage',
         adminTypes: ['platform'],
         state: 'planned'
+      }
+    ]
+  },
+  {
+    id: 'template-reference',
+    title: 'Template Reference (AI / Dev)',
+    type: 'group',
+    children: [
+      {
+        id: 'typography',
+        title: 'Typography (Template)',
+        type: 'item',
+        classes: 'nav-item opacity-75',
+        url: '/admin/typography',
+        icon: 'ti ti-typography',
+        state: 'live'
+      },
+      {
+        id: 'color',
+        title: 'Colors (Template)',
+        type: 'item',
+        classes: 'nav-item opacity-75',
+        url: '/admin/color',
+        icon: 'ti ti-palette',
+        state: 'live'
+      },
+      {
+        id: 'sample-page',
+        title: 'Sample Page (Template)',
+        type: 'item',
+        classes: 'nav-item opacity-75',
+        url: '/admin/sample-page',
+        icon: 'ti ti-file',
+        state: 'live'
       }
     ]
   }

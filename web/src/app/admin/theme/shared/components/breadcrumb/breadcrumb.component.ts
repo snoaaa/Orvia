@@ -77,7 +77,13 @@ export class BreadcrumbComponent {
 
   filterNavigation(navItems: NavigationItem[], activeLink: string): titleType | null {
     for (const navItem of navItems) {
-      if (navItem.type === 'item' && 'url' in navItem && navItem.url === activeLink) {
+      if (
+        navItem.type === 'item' &&
+        'url' in navItem &&
+        navItem.url &&
+        (navItem.url === activeLink ||
+          (activeLink.startsWith(navItem.url + '/') && navItem.url !== '/admin/dashboard/default'))
+      ) {
         return {
           url: navItem.url || true,
           title: navItem.title,

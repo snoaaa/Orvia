@@ -1,19 +1,22 @@
 @if (!item().url) {
-<!-- No destination yet: renders the label without navigating anywhere -->
+<!-- Static item: planned or label without navigation -->
 <li [ngClass]="item().classes!">
-  <span class="nav-link nav-link-static">
+  <a class="nav-link nav-link-static" href="javascript:void(0)" (click)="$event.preventDefault()">
     @if (item().icon) {
     <span class="coded-micon">
       <i class="{{ item().icon }}"></i>
     </span>
+    }
+    @if (item().icon) {
     <span class="coded-mtext">{{ item().title }}</span>
     } @else {
     {{ item().title }}
     }
-  </span>
+  </a>
 </li>
 }
 @if (item().url && !item().external) {
+<!-- Internal route item -->
 <li [ngClass]="item().classes!" [routerLinkActive]="['active']">
   <a class="nav-link" [target]="item().target ? '_blank' : '_self'" [routerLink]="[item().url]"
     (click)="closeOtherMenu($event)">
@@ -31,8 +34,9 @@
 </li>
 }
 @if (item().url && item().external) {
+<!-- External link item -->
 <li [ngClass]="item().classes!">
-  <a [target]="item().target ? '_blank' : '_self'" [href]="item().url">
+  <a class="nav-link" [target]="item().target ? '_blank' : '_self'" [href]="item().url">
     @if (item().icon) {
     <span class="coded-micon">
       <i class="{{ item().icon }}"></i>
