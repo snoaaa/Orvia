@@ -1,0 +1,467 @@
+<!-- KPI Summary Row (Exact Mantis Dashboard Layout) -->
+<div class="row">
+  <div class="col-md-6 col-xl-3">
+    <app-card
+      [showHeader]="false"
+      blockClass="dashboard-card"
+      class="cursor-pointer"
+      (click)="setTypeFilter('ALL')"
+    >
+      <h6 class="mb-2 f-w-400 text-muted">Total Roles</h6>
+      <h4 class="mb-3">
+        {{ totalRolesCount() }}
+        <span class="badge bg-light-primary border border-primary">
+          <i antIcon type="rise" theme="outline"></i>
+          100%
+        </span>
+      </h4>
+      <p class="mb-0 text-muted text-sm">
+        All configured
+        <span class="text-primary">roles</span>
+        in system
+      </p>
+    </app-card>
+  </div>
+
+  <div class="col-md-6 col-xl-3">
+    <app-card
+      [showHeader]="false"
+      blockClass="dashboard-card"
+      class="cursor-pointer"
+      (click)="setTypeFilter('BASE')"
+    >
+      <h6 class="mb-2 f-w-400 text-muted">System Base Roles</h6>
+      <h4 class="mb-3">
+        {{ baseRolesCount() }}
+        <span class="badge bg-light-info border border-info">
+          <i antIcon type="rise" theme="outline"></i>
+          Base
+        </span>
+      </h4>
+      <p class="mb-0 text-muted text-sm">
+        Protected
+        <span class="text-info">immutable</span>
+        definitions
+      </p>
+    </app-card>
+  </div>
+
+  <div class="col-md-6 col-xl-3">
+    <app-card
+      [showHeader]="false"
+      blockClass="dashboard-card"
+      class="cursor-pointer"
+      (click)="setTypeFilter('CUSTOM')"
+    >
+      <h6 class="mb-2 f-w-400 text-muted">Custom Roles</h6>
+      <h4 class="mb-3">
+        {{ customRolesCount() }}
+        <span class="badge bg-light-success border border-success">
+          <i antIcon type="rise" theme="outline"></i>
+          Custom
+        </span>
+      </h4>
+      <p class="mb-0 text-muted text-sm">
+        Configured by
+        <span class="text-success">administrators</span>
+      </p>
+    </app-card>
+  </div>
+
+  <div class="col-md-6 col-xl-3">
+    <app-card
+      [showHeader]="false"
+      blockClass="dashboard-card"
+      class="cursor-pointer"
+      (click)="resetFilters()"
+    >
+      <h6 class="mb-2 f-w-400 text-muted">System Permissions</h6>
+      <h4 class="mb-3">
+        {{ totalPermissionsCount() }}
+        <span class="badge bg-light-warning border border-warning">
+          <i antIcon type="rise" theme="outline"></i>
+          Total
+        </span>
+      </h4>
+      <p class="mb-0 text-muted text-sm">
+        Platform
+        <span class="text-warning">capabilities</span>
+        catalog
+      </p>
+    </app-card>
+  </div>
+</div>
+
+<!-- Roles Table Section -->
+<div class="row">
+  <div class="col-12">
+    <!-- Uniform Role Type Tabs -->
+    <ul class="nav nav-tabs tabs-border mb-3" role="tablist">
+      <li class="nav-item">
+        <button
+          type="button"
+          class="nav-link"
+          [class.active]="selectedType() === 'ALL'"
+          (click)="setTypeFilter('ALL')"
+        >
+          All Roles
+          <span class="badge ms-1" [ngClass]="selectedType() === 'ALL' ? 'bg-primary' : 'bg-light text-muted'">
+            {{ totalRolesCount() }}
+          </span>
+        </button>
+      </li>
+      <li class="nav-item">
+        <button
+          type="button"
+          class="nav-link"
+          [class.active]="selectedType() === 'BASE'"
+          (click)="setTypeFilter('BASE')"
+        >
+          <i class="ti ti-lock me-1"></i>System Base
+          <span class="badge ms-1" [ngClass]="selectedType() === 'BASE' ? 'bg-primary' : 'bg-light text-muted'">
+            {{ baseRolesCount() }}
+          </span>
+        </button>
+      </li>
+      <li class="nav-item">
+        <button
+          type="button"
+          class="nav-link"
+          [class.active]="selectedType() === 'CUSTOM'"
+          (click)="setTypeFilter('CUSTOM')"
+        >
+          Custom Roles
+          <span class="badge ms-1" [ngClass]="selectedType() === 'CUSTOM' ? 'bg-primary' : 'bg-light text-muted'">
+            {{ customRolesCount() }}
+          </span>
+        </button>
+      </li>
+    </ul>
+
+    <!-- Filter & Action Controls Bar -->
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+      <!-- Scope Filter Buttons -->
+      <div class="d-flex align-items-center gap-2">
+        <span class="text-muted text-xs text-uppercase f-w-600">Scope:</span>
+        <div class="btn-group btn-group-sm">
+          <button
+            type="button"
+            class="btn"
+            [ngClass]="selectedScope() === 'ALL' ? 'btn-primary' : 'btn-outline-secondary'"
+            (click)="setScopeFilter('ALL')"
+          >
+            All
+          </button>
+          <button
+            type="button"
+            class="btn"
+            [ngClass]="selectedScope() === 'platform' ? 'btn-primary' : 'btn-outline-secondary'"
+            (click)="setScopeFilter('platform')"
+          >
+            Platform
+          </button>
+          <button
+            type="button"
+            class="btn"
+            [ngClass]="selectedScope() === 'school' ? 'btn-primary' : 'btn-outline-secondary'"
+            (click)="setScopeFilter('school')"
+          >
+            School
+          </button>
+          <button
+            type="button"
+            class="btn"
+            [ngClass]="selectedScope() === 'group' ? 'btn-primary' : 'btn-outline-secondary'"
+            (click)="setScopeFilter('group')"
+          >
+            Group
+          </button>
+        </div>
+      </div>
+
+      <!-- Right: Search & Create Role -->
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <div class="form-group mb-0">
+          <input
+            type="text"
+            class="form-control form-control-sm"
+            placeholder="Search role name..."
+            style="min-width: 220px;"
+            [ngModel]="searchTerm()"
+            (ngModelChange)="onSearchChange($event)"
+          />
+        </div>
+        <button
+          type="button"
+          class="btn btn-sm btn-primary d-inline-flex align-items-center gap-1 shadow-sm"
+          (click)="navigateToCreate()"
+        >
+          <i class="ti ti-plus"></i>
+          <span>Create Role</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Table Card Container -->
+    <div class="card tbl-card">
+      <div class="table-responsive" [class.table-updating]="isUpdating()">
+        @if (isUpdating()) {
+          <div class="table-loading-overlay">
+            <div class="table-loading-bar"></div>
+          </div>
+        }
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th (click)="toggleSort('name')" class="cursor-pointer user-select-none">
+                ROLE NAME
+                <i
+                  class="ti ms-1"
+                  [ngClass]="sortBy() === 'name' ? (sortOrder() === 'asc' ? 'ti-arrow-up text-primary' : 'ti-arrow-down text-primary') : 'ti-arrows-sort text-muted'"
+                ></i>
+              </th>
+              <th class="text-nowrap" style="width: 130px;">SCOPE</th>
+              <th class="text-nowrap" style="width: 200px;">PERMISSIONS COVERAGE</th>
+              <th class="text-nowrap" style="width: 140px;">ASSIGNED USERS</th>
+              <th class="text-nowrap" style="width: 130px;">TYPE</th>
+              <th (click)="toggleSort('createdAt')" class="cursor-pointer user-select-none text-nowrap" style="width: 130px;">
+                CREATED AT
+                <i
+                  class="ti ms-1"
+                  [ngClass]="sortBy() === 'createdAt' ? (sortOrder() === 'asc' ? 'ti-arrow-up text-primary' : 'ti-arrow-down text-primary') : 'ti-arrows-sort text-muted'"
+                ></i>
+              </th>
+              <th class="text-end text-nowrap pe-4" style="width: 60px;">ACTION</th>
+            </tr>
+          </thead>
+          <tbody>
+            @if (isLoading()) {
+              <tr>
+                <td colspan="7" class="text-center py-5 text-muted">
+                  <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                  Loading roles...
+                </td>
+              </tr>
+            } @else if (filteredRoles().length === 0) {
+              <tr>
+                <td colspan="7" class="text-center py-5 text-muted">
+                  <i class="ti ti-shield-lock f-24 mb-2 d-block text-muted"></i>
+                  <p class="mb-2">No roles found matching current filters.</p>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" (click)="resetFilters()">
+                    Reset Filters
+                  </button>
+                </td>
+              </tr>
+            } @else {
+              @for (role of filteredRoles(); track role.id) {
+                <tr>
+                  <td>
+                    <a
+                      [routerLink]="role.isBase ? ['/admin/roles', role.id] : ['/admin/roles', role.id, 'edit']"
+                      class="text-dark f-w-500 text-truncate d-block"
+                      [title]="role.name"
+                    >
+                      {{ role.name }}
+                    </a>
+                    <small class="text-muted font-monospace text-xs text-truncate d-block" style="max-width: 240px;">
+                      {{ role.id }}
+                    </small>
+                  </td>
+                  <td class="text-nowrap">
+                    @if (role.scope === 'platform') {
+                      <span class="badge bg-light-primary text-primary border border-primary">Platform</span>
+                    } @else if (role.scope === 'school') {
+                      <span class="badge bg-light-info text-info border border-info">School</span>
+                    } @else {
+                      <span class="badge bg-light-secondary text-secondary border">Group</span>
+                    }
+                  </td>
+                  <td class="text-nowrap">
+                    <div class="d-flex align-items-center gap-2">
+                      <button
+                        type="button"
+                        class="btn btn-link btn-sm p-0 text-decoration-none text-primary f-w-600"
+                        (click)="openPermissionsPreview(role)"
+                        title="Inspect permissions"
+                      >
+                        {{ role.permissions?.length ?? 0 }} / {{ totalPermissionsCount() }}
+                      </button>
+                      <div class="progress progress-sm flex-grow-1" style="height: 4px; width: 60px;">
+                        <div
+                          class="progress-bar bg-primary"
+                          role="progressbar"
+                          [style.width.%]="getCoveragePercentage(role)"
+                          [attr.aria-valuenow]="getCoveragePercentage(role)"
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                        ></div>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="text-nowrap">
+                    <span class="text-muted text-sm">{{ role.assignedUsersCount ?? 0 }} user(s)</span>
+                  </td>
+                  <td class="text-nowrap">
+                    <span class="status-indicator">
+                      <i class="badge-circle {{ role.isBase ? 'bg-primary' : 'bg-success' }} me-2"></i>
+                      <span>{{ role.isBase ? 'System Base' : 'Custom' }}</span>
+                    </span>
+                  </td>
+                  <td class="text-nowrap">{{ role.createdAt | date:'mediumDate' }}</td>
+                  <td class="text-end text-nowrap pe-4">
+                    <div class="d-inline-block" ngbDropdown container="body" placement="bottom-end">
+                      <button
+                        type="button"
+                        class="btn btn-icon btn-link-secondary dropdown-toggle arrow-none"
+                        ngbDropdownToggle
+                        title="Actions"
+                        aria-label="Role actions"
+                      >
+                        <i class="ti ti-dots-vertical f-18"></i>
+                      </button>
+                      <div class="dropdown-menu dropdown-menu-end shadow" ngbDropdownMenu>
+                        @if (role.isBase) {
+                          <a
+                            [routerLink]="['/admin/roles', role.id]"
+                            class="dropdown-item"
+                            ngbDropdownItem
+                          >
+                            <i class="ti ti-eye text-primary me-2 f-15"></i>
+                            <span>View Details</span>
+                          </a>
+                          <button
+                            type="button"
+                            class="dropdown-item"
+                            (click)="openPermissionsPreview(role)"
+                            ngbDropdownItem
+                          >
+                            <i class="ti ti-key text-muted me-2 f-15"></i>
+                            <span>View Permissions</span>
+                          </button>
+                        } @else {
+                          <a
+                            [routerLink]="['/admin/roles', role.id, 'edit']"
+                            class="dropdown-item"
+                            ngbDropdownItem
+                          >
+                            <i class="ti ti-edit text-primary me-2 f-15"></i>
+                            <span>Edit Role</span>
+                          </a>
+                          <div class="dropdown-divider my-1"></div>
+                          <button
+                            type="button"
+                            class="dropdown-item text-danger"
+                            (click)="openDeleteModal(role)"
+                            ngbDropdownItem
+                          >
+                            <i class="ti ti-trash text-danger me-2 f-15"></i>
+                            <span>Delete Role</span>
+                          </button>
+                        }
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal (Standard Mantis Reusable Component) -->
+<app-confirmation-modal
+  [isOpen]="isDeleteModalOpen()"
+  [isLoading]="isDeleting()"
+  title="Delete Custom Role"
+  [message]="'Are you sure you want to permanently delete role \'' + (roleToDelete()?.name || '') + '\'?'"
+  [detailText]="(roleToDelete()?.assignedUsersCount ?? 0) > 0 ? 'Warning: Role is currently assigned to ' + roleToDelete()?.assignedUsersCount + ' user(s).' : 'Role ID: ' + (roleToDelete()?.id || '')"
+  confirmText="Delete Role"
+  confirmButtonClass="btn-danger"
+  iconType="danger"
+  (confirm)="confirmDelete()"
+  (cancel)="cancelDelete()"
+></app-confirmation-modal>
+
+<!-- Permissions Preview Modal -->
+@if (isPreviewModalOpen() && previewRole()) {
+  <div class="modal-backdrop fade show"></div>
+  <div class="modal fade show d-block" tabindex="-1" role="dialog" (click)="closePermissionsPreview()">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document" (click)="$event.stopPropagation()">
+      <div class="modal-content shadow border-0">
+        <div class="modal-header border-bottom py-3">
+          <div>
+            <h5 class="modal-title mb-0 f-w-600">{{ previewRole()?.name }}</h5>
+            <small class="text-muted">
+              Scope: {{ previewRole()?.scope | uppercase }} &bull; {{ previewRole()?.permissions?.length ?? 0 }} permissions assigned
+              @if (previewRole()?.isBase) {
+                &bull; <span class="text-primary f-w-600">System Base (Read-only)</span>
+              }
+            </small>
+          </div>
+          <button type="button" class="btn-close" (click)="closePermissionsPreview()"></button>
+        </div>
+
+        <div class="modal-body p-3">
+          <!-- Category Tabs in Modal -->
+          <ul class="nav nav-tabs tabs-border mb-3 flex-nowrap overflow-auto" role="tablist">
+            <li class="nav-item">
+              <button
+                type="button"
+                class="nav-link py-2 px-3 text-xs"
+                [class.active]="activePreviewTab() === 'all'"
+                (click)="activePreviewTab.set('all')"
+              >
+                All ({{ previewRole()?.permissions?.length ?? 0 }})
+              </button>
+            </li>
+            @for (cat of previewGrouped(); track cat.key) {
+              <li class="nav-item">
+                <button
+                  type="button"
+                  class="nav-link text-nowrap py-2 px-3 text-xs"
+                  [class.active]="activePreviewTab() === cat.key"
+                  (click)="activePreviewTab.set(cat.key)"
+                >
+                  {{ cat.title.split('&')[0].trim() }} ({{ cat.permissions.length }})
+                </button>
+              </li>
+            }
+          </ul>
+
+          @if (activePreviewCategories().length === 0) {
+            <div class="text-center py-4 text-muted">
+              No permissions assigned in this category.
+            </div>
+          } @else {
+            @for (cat of activePreviewCategories(); track cat.key) {
+              <div class="mb-3">
+                <div class="text-muted text-uppercase text-xs f-w-600 border-bottom pb-1 mb-2">
+                  {{ cat.title }} ({{ cat.permissions.length }})
+                </div>
+                <div class="row g-2">
+                  @for (perm of cat.permissions; track perm.code) {
+                    <div class="col-md-6">
+                      <div class="p-2 border rounded bg-light-subtle">
+                        <div class="font-monospace text-xs f-w-600 text-dark">{{ perm.code }}</div>
+                        <small class="text-muted text-xs d-block mt-1">{{ perm.description || 'System capability' }}</small>
+                      </div>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+          }
+        </div>
+
+        <div class="modal-footer border-top py-2">
+          <button type="button" class="btn btn-secondary btn-sm" (click)="closePermissionsPreview()">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+}
