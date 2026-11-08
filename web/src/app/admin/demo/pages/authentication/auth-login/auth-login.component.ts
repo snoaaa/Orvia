@@ -3,6 +3,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { Router, RouterModule } from '@angular/router';
 import { environment } from 'src/environments/environment';
+import { GoeyToastService } from 'goey-toast-angular';
 
 /** Response of POST /auth/admin/login (TokenPairEntity in the API). */
 interface TokenPair {
@@ -23,6 +24,7 @@ interface TokenPair {
 export class AuthLoginComponent {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
+  private readonly toast = inject(GoeyToastService);
 
   readonly loading = signal(false);
   readonly error = signal('');
@@ -47,11 +49,14 @@ export class AuthLoginComponent {
         localStorage.setItem('accessToken', accessToken);
         localStorage.setItem('refreshToken', refreshToken);
         this.loading.set(false);
+        this.toast.success('Signed In', { description: 'Welcome to the WAMDP Admin Console.' });
         void this.router.navigateByUrl('/admin/dashboard/default');
       },
       error: (response: HttpErrorResponse) => {
         this.loading.set(false);
-        this.error.set(readErrorMessage(response));
+        const errorMsg = readErrorMessage(response);
+        this.error.set(errorMsg);
+        this.toast.error('Authentication Failed', { description: errorMsg });
       }
     });
   }

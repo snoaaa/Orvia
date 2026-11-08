@@ -1,25 +1,48 @@
-// This file is intentionally left empty to allow customers to add custom CSS if needed.
-
-// Entries without a destination are labels, not links.
-.nav-link-static {
-  cursor: default;
-  display: flex;
-  align-items: center;
+:host {
+  display: block;
 }
 
-// The template only spaces the icon for `<a>` links (`.nav-link > .coded-micon`),
-// so the static label branch needs the gap itself.
-.nav-link-static .coded-micon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 18px;
-  margin-right: 12px;
-}
+li {
+  position: relative;
 
-// Tabler icon font sizing (the font ships with the template).
-.coded-micon .ti {
-  font-size: 18px;
-  line-height: 1;
+  > a {
+    display: flex !important;
+    align-items: center !important;
+    padding: 12px 16px 12px 28px !important;
+    text-decoration: none;
+    color: #262626;
+
+    .coded-micon {
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex: 0 0 20px !important;
+      width: 20px !important;
+      min-width: 20px !important;
+      height: 20px !important;
+      margin-right: 12px !important;
+      text-align: center;
+
+      .ti,
+      i {
+        font-size: 18px !important;
+        line-height: 1 !important;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+    }
+
+    .coded-mtext {
+      position: relative;
+      vertical-align: middle;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    &.nav-link-static {
+      cursor: default !important;
+      user-select: none;
+    }
+  }
 }
