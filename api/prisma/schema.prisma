@@ -35,6 +35,8 @@ model User {
   syncChanges       SyncChange[]
   passwordSetupTokens PasswordSetupToken[]
 
+  /// Supports the paginated user list: ORDER BY created_at DESC, id DESC (see findAllUsers).
+  @@index([createdAt, id])
   @@map("users")
 }
 
@@ -241,6 +243,8 @@ model Document {
   offlineSelections OfflineSelection[]
 
   @@index([spaceId])
+  /// Supports the paginated document list: ORDER BY created_at DESC, id DESC (see findAllDocuments).
+  @@index([createdAt, id])
   @@map("documents")
 }
 

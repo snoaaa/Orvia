@@ -6,6 +6,7 @@ import type { AuditRequestContext } from '../../audit/utils/audit-request-contex
 import type { AuthConfig } from '../../config/index.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { DomainValidationService } from '../../identity-and-access/services/domain-validation.service.js';
+import { hasAdminAccess, toClassifiableRoles } from '../utils/admin-role.util.js';
 import { SessionService, type TokenPair } from './session.service.js';
 
 /**
@@ -88,7 +89,13 @@ export class GoogleLoginService {
       include: {
         assignments: {
           include: {
-            role: { select: { name: true, scope: true } },
+            role: {
+              select: {
+                name: true,
+                scope: true,
+                rolePermissions: { select: { permission: { select: { code: true } } } },
+              },
+            },
             school: { select: { id: true, name: true, status: true } },
           },
         },
@@ -102,7 +109,13 @@ export class GoogleLoginService {
         include: {
           assignments: {
             include: {
-              role: { select: { name: true, scope: true } },
+              role: {
+                select: {
+                  name: true,
+                  scope: true,
+                  rolePermissions: { select: { permission: { select: { code: true } } } },
+                },
+              },
               school: { select: { id: true, name: true, status: true } },
             },
           },
@@ -117,12 +130,11 @@ export class GoogleLoginService {
       return this.deny();
     }
 
-    // 4. Reject administrator accounts (admins are email + password only)
+    // 4. Reject administrator accounts (admins are email + password only). Admin-ness is derived
+    // from data (platform scope, or a role granting an administrative permission), never a name.
     const isAdmin =
       (user.authProvider === 'local' && !!user.passwordHash) ||
-      user.assignments.some(
-        (a) => a.role.scope === 'platform' || a.role.name === 'SCHOOL_ADMIN',
-      );
+      hasAdminAccess(toClassifiableRoles(user.assignments));
     if (isAdmin) {
       await this.recordFailure(email, 'not_admin', user.id, context);
       return this.deny();

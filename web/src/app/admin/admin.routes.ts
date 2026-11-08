@@ -19,6 +19,16 @@ export const adminRoutes: Routes = [
         loadComponent: () => import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
       },
       {
+        path: 'users',
+        loadComponent: () =>
+          import('./identity/users/user-list/user-list.component').then((c) => c.UserListComponent)
+      },
+      {
+        path: 'users/:id',
+        loadComponent: () =>
+          import('./identity/users/user-edit/user-edit.component').then((c) => c.UserEditComponent)
+      },
+      {
         path: 'typography',
         loadComponent: () => import('./demo/component/basic-component/typography/typography.component').then((c) => c.TypographyComponent)
       },

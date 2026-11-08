@@ -1,0 +1,268 @@
+<div class="row">
+  <!-- Left Column: User Profile & Edit Form -->
+  <div class="col-md-12 col-xl-5">
+    <app-card cardTitle="User Details">
+      @if (isLoading()) {
+        <div class="py-5 text-center text-muted">
+          <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+          <span>Loading user details...</span>
+        </div>
+      } @else if (!user()) {
+        <div class="py-5 text-center text-muted">
+          <h6 class="mb-1">User Not Found</h6>
+          <p class="text-sm text-muted mb-3">The requested user account does not exist or has been removed.</p>
+          <a [routerLink]="['/admin/users']" class="btn btn-sm btn-outline-primary">
+            Return to Users
+          </a>
+        </div>
+      } @else {
+        <!-- User Status & Quick Actions Header -->
+        <div class="d-flex align-items-center justify-content-between mb-4 pb-3 border-bottom flex-wrap gap-2">
+          <div>
+            <h5 class="mb-1">{{ user()?.fullName }}</h5>
+            <small class="text-muted d-block">
+              Provider: {{ user()?.authProvider | uppercase }}
+            </small>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span class="status-indicator me-2">
+              <i class="badge-circle {{ getStatusBadgeClass(user()?.status) }} me-2"></i>
+              <span class="f-w-600 f-14">{{ user()?.status | titlecase }}</span>
+            </span>
+            @if (user()?.status === 'ACTIVE' || user()?.status === 'INVITED') {
+              <button
+                type="button"
+                class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1"
+                (click)="openSuspendModal()"
+              >
+                <i class="ti ti-ban f-14"></i>
+                <span>Suspend</span>
+              </button>
+            } @else if (user()?.status === 'SUSPENDED') {
+              <button
+                type="button"
+                class="btn btn-sm btn-light-success d-inline-flex align-items-center gap-1"
+                (click)="openReactivateModal()"
+              >
+                <i class="ti ti-check f-14"></i>
+                <span>Reactivate</span>
+              </button>
+            }
+          </div>
+        </div>
+
+        <!-- Edit Form -->
+        <form [formGroup]="editForm" (ngSubmit)="saveProfile()">
+          <div class="form-group mb-3">
+            <label class="form-label" for="fullName">Full Name</label>
+            <input
+              type="text"
+              class="form-control"
+              id="fullName"
+              formControlName="fullName"
+              placeholder="Full Name"
+            />
+            @if (editForm.get('fullName')?.invalid && editForm.get('fullName')?.touched) {
+              <small class="text-danger d-block mt-1">Full name is required (min 2 characters).</small>
+            }
+          </div>
+
+          <div class="form-group mb-3">
+            <label class="form-label" for="email">Email Address</label>
+            <input
+              type="email"
+              class="form-control"
+              id="email"
+              formControlName="email"
+              placeholder="Email Address"
+            />
+            @if (editForm.get('email')?.invalid && editForm.get('email')?.touched) {
+              <small class="text-danger d-block mt-1">Please enter a valid email address.</small>
+            }
+          </div>
+
+          <div class="form-group mb-3">
+            <label class="form-label">User Identifier</label>
+            <div class="input-group">
+              <input
+                type="text"
+                class="form-control"
+                [value]="user()?.id"
+                readonly
+              />
+              <button
+                type="button"
+                class="btn btn-outline-secondary"
+                (click)="copyUserId()"
+                [title]="copiedId() ? 'Copied!' : 'Copy User ID'"
+              >
+                {{ copiedId() ? 'Copied' : 'Copy' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="row mb-3">
+            <div class="col-6">
+              <small class="text-muted d-block">Created At</small>
+              <span class="text-sm f-w-500">{{ user()?.createdAt | date:'mediumDate' }}</span>
+            </div>
+            <div class="col-6">
+              <small class="text-muted d-block">Last Updated</small>
+              <span class="text-sm f-w-500">{{ user()?.updatedAt | date:'mediumDate' }}</span>
+            </div>
+          </div>
+
+          <div class="d-flex align-items-center justify-content-between pt-3 border-top flex-wrap gap-2">
+            <a [routerLink]="['/admin/users']" class="btn btn-outline-secondary">
+              Back to Users
+            </a>
+            <div class="d-flex align-items-center gap-2">
+              <button
+                type="button"
+                class="btn btn-light"
+                (click)="resetForm()"
+                [disabled]="editForm.pristine || isSaving()"
+              >
+                Reset
+              </button>
+              <button
+                type="submit"
+                class="btn btn-primary"
+                [disabled]="editForm.invalid || editForm.pristine || isSaving()"
+              >
+                {{ isSaving() ? 'Saving...' : 'Save Changes' }}
+              </button>
+            </div>
+          </div>
+        </form>
+      }
+    </app-card>
+  </div>
+
+  <!-- Right Column: Active Sessions & Connected Devices -->
+  <div class="col-md-12 col-xl-7">
+    <app-card cardTitle="Active Sessions & Devices">
+      <ng-template #headerOptionsTemplate>
+        @if (sessions().length > 0) {
+          <button
+            type="button"
+            class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1"
+            (click)="openRevokeAllModal()"
+          >
+            <i class="ti ti-trash f-14"></i>
+            <span>Revoke All</span>
+          </button>
+        }
+      </ng-template>
+
+      @if (isSessionsLoading()) {
+        <div class="py-5 text-center text-muted">
+          <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+          <span>Loading sessions...</span>
+        </div>
+      } @else if (sessions().length === 0) {
+        <div class="py-5 text-center text-muted">
+          <p class="mb-0">No active login sessions found for this user.</p>
+        </div>
+      } @else {
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>PLATFORM / DEVICE</th>
+                <th>IP ADDRESS</th>
+                <th>LOGIN TIME</th>
+                <th>LAST ACTIVE</th>
+                <th class="text-end">ACTION</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (session of sessions(); track session.id) {
+                <tr>
+                  <td>
+                    <span class="f-w-500">
+                      {{ session.device?.platform ? (session.device?.platform | titlecase) : 'Web Browser' }}
+                    </span>
+                    @if (session.current) {
+                      <span class="badge bg-light-primary border border-primary ms-1">Current</span>
+                    }
+                    <small
+                      class="text-muted d-block text-truncate"
+                      style="max-width: 160px;"
+                      [title]="session.userAgent || ''"
+                    >
+                      {{ session.userAgent || '—' }}
+                    </small>
+                  </td>
+                  <td><code>{{ session.ip || '—' }}</code></td>
+                  <td>{{ session.createdAt | date:'short' }}</td>
+                  <td>{{ session.lastUsedAt ? (session.lastUsedAt | date:'short') : 'Active' }}</td>
+                  <td class="text-end">
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1"
+                      (click)="openRevokeSessionModal(session)"
+                      title="Revoke Session"
+                    >
+                      <i class="ti ti-trash f-14"></i>
+                      <span>Revoke</span>
+                    </button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </app-card>
+  </div>
+</div>
+
+<!-- Confirmation Modals -->
+<app-confirmation-modal
+  [isOpen]="modalType() === 'suspend'"
+  title="Suspend User Account"
+  message="Are you sure you want to suspend this user? This will immediately revoke all their active sessions and prevent them from signing in."
+  [detailText]="'User: ' + (user()?.fullName || '') + ' (' + (user()?.email || '') + ')'"
+  confirmText="Suspend Account"
+  confirmButtonClass="btn-danger"
+  [isLoading]="modalLoading()"
+  (confirmed)="handleModalConfirm()"
+  (cancelled)="closeModal()"
+/>
+
+<app-confirmation-modal
+  [isOpen]="modalType() === 'reactivate'"
+  title="Reactivate User Account"
+  message="Are you sure you want to reactivate this user? Account access will be restored."
+  [detailText]="'User: ' + (user()?.fullName || '') + ' (' + (user()?.email || '') + ')'"
+  confirmText="Reactivate Account"
+  confirmButtonClass="btn-success"
+  [isLoading]="modalLoading()"
+  (confirmed)="handleModalConfirm()"
+  (cancelled)="closeModal()"
+/>
+
+<app-confirmation-modal
+  [isOpen]="modalType() === 'revoke-session'"
+  title="Revoke Session"
+  message="Are you sure you want to revoke this session? The user will be immediately logged out from this device."
+  [detailText]="'Session IP: ' + (selectedSessionToRevoke()?.ip || 'Unknown')"
+  confirmText="Revoke Session"
+  confirmButtonClass="btn-danger"
+  [isLoading]="modalLoading()"
+  (confirmed)="handleModalConfirm()"
+  (cancelled)="closeModal()"
+/>
+
+<app-confirmation-modal
+  [isOpen]="modalType() === 'revoke-all'"
+  title="Revoke All Sessions"
+  message="Are you sure you want to revoke ALL active sessions for this user? They will be signed out from every connected device."
+  [detailText]="'Total Sessions: ' + sessions().length"
+  confirmText="Revoke All Sessions"
+  confirmButtonClass="btn-danger"
+  [isLoading]="modalLoading()"
+  (confirmed)="handleModalConfirm()"
+  (cancelled)="closeModal()"
+/>

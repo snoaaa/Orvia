@@ -1,5 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
 
+/**
+ * One person holding a permission, in one school.
+ *
+ * Grouped per (user, school): someone who is `SCHOOL_ADMIN` in two schools, or who holds two roles
+ * that both grant the same permission, appears **once** — with every granting role in `roles`.
+ */
 export class PermissionHolderEntity {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000' })
   userId: string;
@@ -13,8 +19,12 @@ export class PermissionHolderEntity {
   @ApiProperty({ example: 'ACTIVE', enum: ['INVITED', 'ACTIVE', 'SUSPENDED'] })
   status: string;
 
-  @ApiProperty({ example: 'SCHOOL_ADMIN', description: 'Role that grants the permission' })
-  role: string;
+  @ApiProperty({
+    type: [String],
+    example: ['PLATFORM_ADMIN', 'SCHOOL_ADMIN'],
+    description: 'Every role of this user in this school that grants the permission',
+  })
+  roles: string[];
 
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174001' })
   schoolId: string;
@@ -37,8 +47,20 @@ export class PermissionOverviewEntity {
   @ApiProperty({ example: ['PLATFORM_ADMIN', 'SCHOOL_ADMIN'], description: 'Roles granting this permission' })
   roles: string[];
 
-  @ApiProperty({ type: [PermissionHolderEntity], description: 'Users holding it (scoped to your schools)' })
-  holders: PermissionHolderEntity[];
+  @ApiProperty({
+    example: 12,
+    description: 'Distinct users holding the permission (counted per user and school), scoped to your schools',
+  })
+  holdersTotal: number;
+
+  @ApiProperty({
+    type: [PermissionHolderEntity],
+    required: false,
+    description:
+      'Who holds it. Only returned when the request asks for one permission (`?code=`), capped by `limit`; ' +
+      'without `code` only `holdersTotal` is computed so the response stays small.',
+  })
+  holders?: PermissionHolderEntity[];
 
   constructor(partial: PermissionOverviewEntity) {
     Object.assign(this, partial);

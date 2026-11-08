@@ -1,0 +1,342 @@
+<!-- KPI Summary Row (Exact Mantis Dashboard Layout) -->
+<div class="row">
+  <div class="col-md-6 col-xl-3">
+    <app-card
+      [showHeader]="false"
+      blockClass="dashboard-card"
+      class="cursor-pointer"
+      (click)="setStatusFilter('ALL')"
+    >
+      <h6 class="mb-2 f-w-400 text-muted">Total Users</h6>
+      <h4 class="mb-3">
+        {{ totalUsers() }}
+        <span class="badge bg-light-primary border border-primary">
+          <i antIcon type="rise" theme="outline"></i>
+          100%
+        </span>
+      </h4>
+      <p class="mb-0 text-muted text-sm">
+        All registered
+        <span class="text-primary">accounts</span>
+        in system
+      </p>
+    </app-card>
+  </div>
+
+  <div class="col-md-6 col-xl-3">
+    <app-card
+      [showHeader]="false"
+      blockClass="dashboard-card"
+      class="cursor-pointer"
+      (click)="setStatusFilter('ACTIVE')"
+    >
+      <h6 class="mb-2 f-w-400 text-muted">Active Users</h6>
+      <h4 class="mb-3">
+        {{ activeCount() }}
+        <span class="badge bg-light-success border border-success">
+          <i antIcon type="rise" theme="outline"></i>
+          Active
+        </span>
+      </h4>
+      <p class="mb-0 text-muted text-sm">
+        Permitted to
+        <span class="text-success">authenticate</span>
+        normally
+      </p>
+    </app-card>
+  </div>
+
+  <div class="col-md-6 col-xl-3">
+    <app-card
+      [showHeader]="false"
+      blockClass="dashboard-card"
+      class="cursor-pointer"
+      (click)="setStatusFilter('SUSPENDED')"
+    >
+      <h6 class="mb-2 f-w-400 text-muted">Suspended</h6>
+      <h4 class="mb-3">
+        {{ suspendedCount() }}
+        <span class="badge bg-light-danger border border-danger">
+          <i antIcon type="fall" theme="outline"></i>
+          Suspended
+        </span>
+      </h4>
+      <p class="mb-0 text-muted text-sm">
+        Sessions
+        <span class="text-danger">revoked</span>
+        and blocked
+      </p>
+    </app-card>
+  </div>
+
+  <div class="col-md-6 col-xl-3">
+    <app-card
+      [showHeader]="false"
+      blockClass="dashboard-card"
+      class="cursor-pointer"
+      (click)="setStatusFilter('INVITED')"
+    >
+      <h6 class="mb-2 f-w-400 text-muted">Pending Invitations</h6>
+      <h4 class="mb-3">
+        {{ invitedCount() }}
+        <span class="badge bg-light-warning border border-warning">
+          <i antIcon type="rise" theme="outline"></i>
+          Invited
+        </span>
+      </h4>
+      <p class="mb-0 text-muted text-sm">
+        Awaiting
+        <span class="text-warning">first sign-in</span>
+        via Google
+      </p>
+    </app-card>
+  </div>
+</div>
+
+<!-- Users Table Section (Exact Mantis tbl-card Pattern) -->
+<div class="row">
+  <div class="col-12">
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+      <h5 class="mb-0">All Users</h5>
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <div class="form-group mb-0">
+          <input
+            type="text"
+            class="form-control form-control-sm"
+            placeholder="Search email or name..."
+            style="min-width: 220px;"
+            [ngModel]="searchTerm()"
+            (ngModelChange)="onSearchChange($event)"
+          />
+        </div>
+        <div class="btn-group btn-group-sm">
+          <button
+            type="button"
+            class="btn"
+            [ngClass]="selectedStatus() === 'ALL' ? 'btn-primary' : 'btn-outline-secondary'"
+            (click)="setStatusFilter('ALL')"
+          >
+            All
+          </button>
+          <button
+            type="button"
+            class="btn"
+            [ngClass]="selectedStatus() === 'ACTIVE' ? 'btn-primary' : 'btn-outline-secondary'"
+            (click)="setStatusFilter('ACTIVE')"
+          >
+            Active
+          </button>
+          <button
+            type="button"
+            class="btn"
+            [ngClass]="selectedStatus() === 'SUSPENDED' ? 'btn-primary' : 'btn-outline-secondary'"
+            (click)="setStatusFilter('SUSPENDED')"
+          >
+            Suspended
+          </button>
+          <button
+            type="button"
+            class="btn"
+            [ngClass]="selectedStatus() === 'INVITED' ? 'btn-primary' : 'btn-outline-secondary'"
+            (click)="setStatusFilter('INVITED')"
+          >
+            Invited
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card tbl-card">
+      <div class="table-responsive" [class.table-updating]="isUpdating()">
+        @if (isUpdating()) {
+          <div class="table-loading-overlay">
+            <div class="table-loading-bar"></div>
+          </div>
+        }
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th (click)="toggleSort('fullName')" class="cursor-pointer user-select-none">
+                FULL NAME
+                <i
+                  class="ti ms-1"
+                  [ngClass]="sortBy() === 'fullName' ? (sortOrder() === 'asc' ? 'ti-arrow-up text-primary' : 'ti-arrow-down text-primary') : 'ti-arrows-sort text-muted'"
+                ></i>
+              </th>
+              <th (click)="toggleSort('email')" class="cursor-pointer user-select-none">
+                EMAIL
+                <i
+                  class="ti ms-1"
+                  [ngClass]="sortBy() === 'email' ? (sortOrder() === 'asc' ? 'ti-arrow-up text-primary' : 'ti-arrow-down text-primary') : 'ti-arrows-sort text-muted'"
+                ></i>
+              </th>
+              <th (click)="toggleSort('status')" class="cursor-pointer user-select-none text-nowrap" style="width: 125px;">
+                STATUS
+                <i
+                  class="ti ms-1"
+                  [ngClass]="sortBy() === 'status' ? (sortOrder() === 'asc' ? 'ti-arrow-up text-primary' : 'ti-arrow-down text-primary') : 'ti-arrows-sort text-muted'"
+                ></i>
+              </th>
+              <th class="text-nowrap" style="width: 125px;">AUTH PROVIDER</th>
+              <th (click)="toggleSort('createdAt')" class="cursor-pointer user-select-none text-nowrap" style="width: 125px;">
+                CREATED AT
+                <i
+                  class="ti ms-1"
+                  [ngClass]="sortBy() === 'createdAt' ? (sortOrder() === 'asc' ? 'ti-arrow-up text-primary' : 'ti-arrow-down text-primary') : 'ti-arrows-sort text-muted'"
+                ></i>
+              </th>
+              <th class="text-end text-nowrap pe-4" style="width: 60px;">ACTION</th>
+            </tr>
+          </thead>
+          <tbody>
+            @if (isInitialLoading()) {
+              <tr>
+                <td colspan="6" class="text-center py-5 text-muted">
+                  <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                  Loading users...
+                </td>
+              </tr>
+            } @else if (users().length === 0) {
+              <tr>
+                <td colspan="6" class="text-center py-5 text-muted">
+                  No users found matching current filters.
+                </td>
+              </tr>
+            } @else {
+              @for (u of users(); track u.id) {
+                <tr>
+                  <td>
+                    <a [routerLink]="['/admin/users', u.id]" class="text-dark f-w-500 text-truncate d-block" [title]="u.fullName">
+                      {{ u.fullName }}
+                    </a>
+                  </td>
+                  <td>
+                    <a [routerLink]="['/admin/users', u.id]" class="text-muted text-truncate d-block" [title]="u.email">
+                      {{ u.email }}
+                    </a>
+                  </td>
+                  <td class="text-nowrap">
+                    <span class="status-indicator">
+                      <i class="badge-circle {{ getStatusBadgeClass(u.status) }} me-2"></i>
+                      <span>{{ u.status | titlecase }}</span>
+                    </span>
+                  </td>
+                  <td class="text-nowrap">{{ u.authProvider | uppercase }}</td>
+                  <td class="text-nowrap">{{ u.createdAt | date:'mediumDate' }}</td>
+                  <td class="text-end text-nowrap pe-4">
+                    <div class="d-inline-block" ngbDropdown container="body" placement="bottom-end">
+                      <button
+                        type="button"
+                        class="btn btn-icon btn-link-secondary dropdown-toggle arrow-none"
+                        ngbDropdownToggle
+                        title="Actions"
+                        aria-label="User actions"
+                      >
+                        <i class="ti ti-dots-vertical f-18"></i>
+                      </button>
+                      <div class="dropdown-menu dropdown-menu-end shadow" ngbDropdownMenu>
+                        <a
+                          [routerLink]="['/admin/users', u.id]"
+                          class="dropdown-item"
+                          ngbDropdownItem
+                        >
+                          <i class="ti ti-edit text-primary me-2 f-15"></i>
+                          <span>Edit Details</span>
+                        </a>
+                        <div class="dropdown-divider my-1"></div>
+                        @if (u.status === 'ACTIVE' || u.status === 'INVITED') {
+                          <button
+                            type="button"
+                            class="dropdown-item text-danger"
+                            (click)="openSuspendModal(u, $event)"
+                            ngbDropdownItem
+                          >
+                            <i class="ti ti-ban text-danger me-2 f-15"></i>
+                            <span>Suspend User</span>
+                          </button>
+                        } @else if (u.status === 'SUSPENDED') {
+                          <button
+                            type="button"
+                            class="dropdown-item text-success"
+                            (click)="openReactivateModal(u, $event)"
+                            ngbDropdownItem
+                          >
+                            <i class="ti ti-check text-success me-2 f-15"></i>
+                            <span>Reactivate User</span>
+                          </button>
+                        }
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination footer -->
+      <div class="card-footer d-flex align-items-center justify-content-between flex-wrap gap-2 py-2">
+        <span class="text-muted text-sm">
+          Showing page {{ currentPage() }} of {{ totalPages() }} ({{ totalUsers() }} total users)
+        </span>
+        <div class="d-flex align-items-center gap-2">
+          <select
+            class="form-select form-select-sm"
+            style="width: 75px;"
+            [ngModel]="pageSize()"
+            (ngModelChange)="changePageSize($event)"
+          >
+            <option [ngValue]="10">10</option>
+            <option [ngValue]="25">25</option>
+            <option [ngValue]="50">50</option>
+          </select>
+
+          <div class="btn-group btn-group-sm">
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              [disabled]="currentPage() <= 1"
+              (click)="goToPage(currentPage() - 1)"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              [disabled]="currentPage() >= totalPages()"
+              (click)="goToPage(currentPage() + 1)"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirmation Modals -->
+<app-confirmation-modal
+  [isOpen]="modalAction() === 'suspend'"
+  title="Suspend User Account"
+  message="Are you sure you want to suspend this user? This will revoke all their active sessions immediately and block them from logging in."
+  [detailText]="'User: ' + (targetUser()?.fullName || '') + ' (' + (targetUser()?.email || '') + ')'"
+  confirmText="Suspend Account"
+  confirmButtonClass="btn-danger"
+  [isLoading]="modalLoading()"
+  (confirmed)="confirmModalAction()"
+  (cancelled)="closeModal()"
+/>
+
+<app-confirmation-modal
+  [isOpen]="modalAction() === 'reactivate'"
+  title="Reactivate User Account"
+  message="Are you sure you want to reactivate this user? Account access will be restored."
+  [detailText]="'User: ' + (targetUser()?.fullName || '') + ' (' + (targetUser()?.email || '') + ')'"
+  confirmText="Reactivate Account"
+  confirmButtonClass="btn-success"
+  [isLoading]="modalLoading()"
+  (confirmed)="confirmModalAction()"
+  (cancelled)="closeModal()"
+/>
