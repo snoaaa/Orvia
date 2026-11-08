@@ -128,7 +128,7 @@ describe('Group creation (e2e)', () => {
     it('lets only one of two simultaneous requests create the name', async () => {
       const body = { schoolId: schools.A, name: 'Race' };
       const results = await Promise.all([create(ids.AdminA, body), create(ids.AdminA, body)]);
-      expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+      expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([201, 409]);
     });
   });
 });

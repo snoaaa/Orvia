@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -29,7 +30,7 @@ export class GroupsService {
       return new GroupEntity(group);
     } catch (error) {
       // The unique index decides, so two simultaneous requests cannot both succeed.
-      if ((error as { code?: string }).code === 'P2002') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException(`A group named '${dto.name}' already exists in this school`);
       }
       throw error;

@@ -9,6 +9,6 @@ import { IdentityAndAccessService } from './services/identity-and-access.service
 @Module({
   controllers: [IdentityAndAccessController, SchoolsController, GroupsController],
   providers: [IdentityAndAccessService, DomainValidationService, GroupsService],
-  exports: [IdentityAndAccessService, DomainValidationService],
+  exports: [IdentityAndAccessService, DomainValidationService, GroupsService],
 })
 export class IdentityAndAccessModule {}
