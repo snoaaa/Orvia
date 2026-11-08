@@ -304,6 +304,14 @@ those assignments; filtering on another school or one of its groups is 403. User
 are visible to platform admins only. Password hashes, tokens and Google ids are never returned.
 Unknown role → 400, unknown group → 404. `GET /identity/users` runs the same code.
 
+### View a user: `GET /users/{id}` (#39, `users:read`)
+
+Returns the profile, `status`, `hasPassword`, `googleLinked`, `assignments`, `groups` and the active
+`sessions` with their devices (IP, user agent, created, last used, expiry). School admins only get
+users of their own school(s), and only those assignments and groups; another school, or a user
+without a school, is 403. Sessions belong to the user, not to a school, so all active ones are listed.
+Password hashes, tokens and Google ids are never returned. Invalid UUID → 400, unknown user → 404. This replaces the former `GET /identity/users/{id}`.
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of

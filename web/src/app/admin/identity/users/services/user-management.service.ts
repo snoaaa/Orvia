@@ -43,7 +43,7 @@ export class UserManagementService {
    * Fetches a single user by ID.
    */
   getUserById(id: string): Observable<UserEntity> {
-    return this.http.get<UserEntity>(`${this.apiUrl}/identity/users/${id}`).pipe(
+    return this.http.get<UserEntity>(`${this.apiUrl}/users/${id}`).pipe(
       catchError((error) => {
         return throwError(() => error);
       })

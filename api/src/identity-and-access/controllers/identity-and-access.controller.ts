@@ -40,16 +40,6 @@ export class IdentityAndAccessController {
     return this.identityService.listUsers(actor, query);
   }
 
-  @Get('users/:id')
-  @RequirePermission('users:read')
-  @ApiOperation({ summary: 'Get user by ID' })
-  @ApiParam({ name: 'id', description: 'User UUID' })
-  @ApiResponse({ status: 200, description: 'User retrieved', type: UserEntity })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async getUserById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<UserEntity> {
-    return this.identityService.findUserById(id, actor);
-  }
-
   /**
    * Minimal user invitation endpoint (Issue #9).
    *
