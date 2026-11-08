@@ -37,7 +37,7 @@ export class IdentityAndAccessController {
     @Query() query: ListUsersQueryDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedUsersEntity> {
-    return this.identityService.findAllUsers(actor, query);
+    return this.identityService.listUsers(actor, query);
   }
 
   @Get('users/:id')

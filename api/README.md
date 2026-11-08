@@ -282,6 +282,28 @@ With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
   `student.a@demo.test`, `suspended.a@demo.test` (SUSPENDED), `invited.a@demo.test` (INVITED),
   `admin.b@demo.test`, `student.b@demo.test`
 
+## User administration
+
+`src/identity-and-access/controllers/users.controller.ts`, under the **Users** tag in Swagger
+(Section 4.5). Platform admins act on every school, school admins on their own school(s) only;
+other roles have no `users:*` permission and get 403.
+
+### Search and list users: `GET /users` (#38, `users:read`)
+
+| Query | Meaning |
+|---|---|
+| `search` | Part of the full name or email, case-insensitive |
+| `schoolId`, `role`, `groupId` | Combinable; school, role and group must match the **same** assignment ("STAFF in school A"). A group also matches through a group membership |
+| `status` | `INVITED`, `ACTIVE` or `SUSPENDED` |
+| `page`, `limit` | Default 1 and 10, `limit` at most 100 |
+| `sortBy`, `sortOrder` | `createdAt` (default), `fullName`, `email`, `status`; `asc` / `desc`. Newest first for `createdAt`, A–Z for the other columns |
+
+Answer: `{ data, total, page, limit, totalPages }`. Each user carries its `assignments`
+(school, role, group). School admins only get users with an assignment in their schools, and only
+those assignments; filtering on another school or one of its groups is 403. Users without any school
+are visible to platform admins only. Password hashes, tokens and Google ids are never returned.
+Unknown role → 400, unknown group → 404. `GET /identity/users` runs the same code.
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of

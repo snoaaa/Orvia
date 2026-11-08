@@ -20,6 +20,7 @@ import {
   RoleEntity,
   SchoolEntity,
   UserEntity,
+  UserListItemEntity,
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
 import { DomainValidationService } from './domain-validation.service.js';
@@ -50,56 +51,110 @@ export class IdentityAndAccessService {
   ) {}
 
   /**
-   * Platform admins see everyone; others only users assigned to a school they can read users in.
+   * GET /users (#38): search, filters, pagination and sorting, scoped to the admin's schools.
    *
-   * Filters: `status` (INVITED/ACTIVE/SUSPENDED), `search` (email or full name contains) and
-   * `sortBy`/`sortOrder`. Paginated with the same `page`/`limit` contract as `findAllSchools`
-   * (`limit` capped at 100), ordered with `id` as the tie-breaker so pages stay stable.
+   * - School admins only get users with an assignment in one of their schools; filtering on another
+   *   school or one of its groups is 403. Users without any school are visible to platform admins only.
+   * - `schoolId`, `role` and `groupId` must match the SAME assignment ("STAFF in school A"); a group
+   *   can also match through a group membership (group_members).
+   * - Each user's `assignments` only lists the schools the admin can see.
    */
-  async findAllUsers(
-    actor: AuthenticatedUser,
-    query?: ListUsersQueryDto,
-  ): Promise<PaginatedUsersEntity> {
-    const page = Math.max(1, query?.page ?? 1);
-    const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
-    const skip = (page - 1) * limit;
+  async listUsers(actor: AuthenticatedUser, query: ListUsersQueryDto = {}): Promise<PaginatedUsersEntity> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const scope = schoolIdFilter(actor, 'users:read');
+    const sortBy = query.sortBy ?? 'createdAt';
+    const sortOrder = query.sortOrder ?? (sortBy === 'createdAt' ? 'desc' : 'asc');
 
-    const schoolId = schoolIdFilter(actor, 'users:read');
-    const search = query?.search?.trim();
-    const where: Prisma.UserWhereInput = {
-      ...(schoolId ? { assignments: { some: { schoolId } } } : {}),
-      ...(query?.status ? { status: query.status as UserStatus } : {}),
-      ...(search
-        ? { OR: [{ email: { contains: search } }, { fullName: { contains: search } }] }
-        : {}),
+    if (query.schoolId) {
+      assertSchoolAccess(actor, 'users:read', query.schoolId);
+    }
+    if (query.groupId) {
+      const group = await this.prisma.group.findUnique({ where: { id: query.groupId }, select: { schoolId: true } });
+      if (!group) {
+        throw new NotFoundException(`Group with ID ${query.groupId} not found`);
+      }
+      assertSchoolAccess(actor, 'users:read', group.schoolId);
+    }
+    if (query.role && !(await this.prisma.role.findUnique({ where: { name: query.role }, select: { id: true } }))) {
+      throw new BadRequestException(`Unknown role '${query.role}'`);
+    }
+
+    // Conditions one assignment must meet; also confined to the admin's schools when scoped.
+    const assignment: Prisma.UserAssignmentWhereInput = {
+      ...(query.schoolId ? { schoolId: query.schoolId } : scope ? { schoolId: scope } : {}),
+      ...(query.role && { role: { name: query.role } }),
     };
-
-    const sortBy = query?.sortBy ?? 'createdAt';
-    const sortOrder = query?.sortOrder ?? (sortBy === 'createdAt' ? 'desc' : 'asc');
-    const orderBy: Prisma.UserOrderByWithRelationInput[] = [
-      { [sortBy]: sortOrder } as Prisma.UserOrderByWithRelationInput,
-      // Stable tie-breaker: without it, rows sharing the sort value could repeat or be skipped.
-      ...(sortBy === 'createdAt' ? [{ id: sortOrder } as Prisma.UserOrderByWithRelationInput] : [{ id: 'desc' } as Prisma.UserOrderByWithRelationInput]),
-    ];
+    const filters: Prisma.UserWhereInput[] = [];
+    if (scope) filters.push({ assignments: { some: { schoolId: scope } } });
+    if (query.status) filters.push({ status: query.status });
+    if (query.search) {
+      // MySQL's default collation (utf8mb4_unicode_ci) makes `contains` case-insensitive.
+      filters.push({ OR: [{ fullName: { contains: query.search } }, { email: { contains: query.search } }] });
+    }
+    if (query.groupId) {
+      filters.push({
+        OR: [
+          { assignments: { some: { ...assignment, groupId: query.groupId } } },
+          {
+            AND: [
+              { groupMemberships: { some: { groupId: query.groupId } } },
+              { assignments: { some: assignment } },
+            ],
+          },
+        ],
+      });
+    } else if (query.schoolId || query.role) {
+      filters.push({ assignments: { some: assignment } });
+    }
+    const where: Prisma.UserWhereInput = filters.length > 0 ? { AND: filters } : {};
 
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
       this.prisma.user.findMany({
         where,
-        orderBy,
-        skip,
+        // Secondary sort on id keeps pagination stable when values are equal.
+        orderBy: [{ [sortBy]: sortOrder }, { id: 'asc' }],
+        skip: (page - 1) * limit,
         take: limit,
+        include: {
+          assignments: {
+            where: scope ? { schoolId: scope } : undefined,
+            orderBy: { createdAt: 'asc' },
+            include: {
+              school: { select: { name: true } },
+              role: { select: { name: true } },
+              group: { select: { name: true } },
+            },
+          },
+        },
       }),
     ]);
 
-    const totalPages = Math.ceil(total / limit) || 1;
-
     return new PaginatedUsersEntity({
-      data: users.map((u) => UserMapper.toEntity(u)),
+      data: users.map(
+        (u) =>
+          new UserListItemEntity({
+            id: u.id,
+            email: u.email,
+            fullName: u.fullName,
+            authProvider: u.authProvider,
+            status: u.status,
+            assignments: u.assignments.map((a) => ({
+              schoolId: a.schoolId,
+              schoolName: a.school.name,
+              role: a.role.name,
+              groupId: a.groupId,
+              groupName: a.group?.name ?? null,
+            })),
+            createdAt: u.createdAt,
+            updatedAt: u.updatedAt,
+          }),
+      ),
       total,
       page,
       limit,
-      totalPages,
+      totalPages: Math.ceil(total / limit) || 1,
     });
   }
 
