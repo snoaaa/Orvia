@@ -128,14 +128,14 @@ describe('Auth guards (e2e)', () => {
   describe('school scoping', () => {
     it('a school admin cannot read a user of another school', async () => {
       await request(app.getHttpServer())
-        .get(`/identity/users/${userIds.studentB}`)
+        .get(`/users/${userIds.studentB}`)
         .set('Authorization', await bearer('adminA'))
         .expect(403);
     });
 
     it('a school admin can read a user of their own school', async () => {
       await request(app.getHttpServer())
-        .get(`/identity/users/${userIds.studentA}`)
+        .get(`/users/${userIds.studentA}`)
         .set('Authorization', await bearer('adminA'))
         .expect(200);
     });
@@ -171,7 +171,7 @@ describe('Auth guards (e2e)', () => {
       expect(assignments).toHaveLength(1);
       expect(assignments[0]).toMatchObject({ schoolId: schoolIds.A, role: { name: 'STUDENT' } });
 
-      await request(app.getHttpServer()).get(`/identity/users/${invited.body.id}`).set('Authorization', auth).expect(200);
+      await request(app.getHttpServer()).get(`/users/${invited.body.id}`).set('Authorization', auth).expect(200);
       const list = await request(app.getHttpServer()).get('/identity/users?limit=100').set('Authorization', auth).expect(200);
       expect(list.body.data.map((u: { id: string }) => u.id)).toContain(invited.body.id);
     });

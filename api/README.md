@@ -282,6 +282,44 @@ With `AUTH_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
   `student.a@demo.test`, `suspended.a@demo.test` (SUSPENDED), `invited.a@demo.test` (INVITED),
   `admin.b@demo.test`, `student.b@demo.test`
 
+## User administration
+
+`src/identity-and-access/controllers/users.controller.ts`, under the **Users** tag in Swagger
+(Section 4.5). Platform admins act on every school, school admins on their own school(s) only;
+other roles have no `users:*` permission and get 403.
+
+### Search and list users: `GET /users` (#38, `users:read`)
+
+| Query | Meaning |
+|---|---|
+| `search` | Part of the full name or email, case-insensitive |
+| `schoolId`, `role`, `groupId` | Combinable; school, role and group must match the **same** assignment ("STAFF in school A"). A group also matches through a group membership |
+| `status` | `INVITED`, `ACTIVE` or `SUSPENDED` |
+| `page`, `limit` | Default 1 and 10, `limit` at most 100 |
+| `sortBy`, `sortOrder` | `createdAt` (default), `fullName`, `email`, `status`; `asc` / `desc`. Newest first for `createdAt`, A–Z for the other columns |
+
+Answer: `{ data, total, page, limit, totalPages }`. Each user carries its `assignments`
+(school, role, group). School admins only get users with an assignment in their schools, and only
+those assignments; filtering on another school or one of its groups is 403. Users without any school
+are visible to platform admins only. Password hashes, tokens and Google ids are never returned.
+Unknown role → 400, unknown group → 404. `GET /identity/users` runs the same code.
+
+### View a user: `GET /users/{id}` (#39, `users:read`)
+
+Returns the profile, `status`, `hasPassword`, `googleLinked`, `assignments`, `groups` and the active
+`sessions` with their devices (IP, user agent, created, last used, expiry). School admins only get
+users of their own school(s), and only those assignments and groups; another school, or a user
+without a school, is 403. Sessions belong to the user, not to a school, so all active ones are listed.
+Password hashes, tokens and Google ids are never returned. Invalid UUID → 400, unknown user → 404. This replaces the former `GET /identity/users/{id}`.
+
+### Edit a user: `PATCH /users/{id}` (#40, `users:update`)
+
+Body: `fullName` and/or `email` (at least one, otherwise 400). The status cannot be changed here.
+A new email must match the allowed domains of the user's schools (400), following the login rule: a
+user who also belongs to a school without domain restrictions passes. An email used by someone else
+is 409. School admins can only edit users of their own school(s) (403). `updated_at` changes only when
+a value really changes. The older `PATCH /identity/users/{id}` applies the same email checks.
+
 ## Groups
 
 `src/identity-and-access/controllers/groups.controller.ts`, under the **Groups** tag in Swagger

@@ -6,12 +6,13 @@ import argon2 from 'argon2';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
+import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
+import type { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto, UpdateUserProfileDto } from '../dto/index.js';
 import {
   PaginatedSchoolsEntity,
   PaginatedUsersEntity,
@@ -19,7 +20,9 @@ import {
   PermissionOverviewEntity,
   RoleEntity,
   SchoolEntity,
+  UserDetailEntity,
   UserEntity,
+  UserListItemEntity,
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
 import { DomainValidationService } from './domain-validation.service.js';
@@ -50,62 +53,169 @@ export class IdentityAndAccessService {
   ) {}
 
   /**
-   * Platform admins see everyone; others only users assigned to a school they can read users in.
+   * GET /users (#38): search, filters, pagination and sorting, scoped to the admin's schools.
    *
-   * Filters: `status` (INVITED/ACTIVE/SUSPENDED), `search` (email or full name contains) and
-   * `sortBy`/`sortOrder`. Paginated with the same `page`/`limit` contract as `findAllSchools`
-   * (`limit` capped at 100), ordered with `id` as the tie-breaker so pages stay stable.
+   * - School admins only get users with an assignment in one of their schools; filtering on another
+   *   school or one of its groups is 403. Users without any school are visible to platform admins only.
+   * - `schoolId`, `role` and `groupId` must match the SAME assignment ("STAFF in school A"); a group
+   *   can also match through a group membership (group_members).
+   * - Each user's `assignments` only lists the schools the admin can see.
    */
-  async findAllUsers(
-    actor: AuthenticatedUser,
-    query?: ListUsersQueryDto,
-  ): Promise<PaginatedUsersEntity> {
-    const page = Math.max(1, query?.page ?? 1);
-    const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
-    const skip = (page - 1) * limit;
+  async listUsers(actor: AuthenticatedUser, query: ListUsersQueryDto = {}): Promise<PaginatedUsersEntity> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const scope = schoolIdFilter(actor, 'users:read');
+    const sortBy = query.sortBy ?? 'createdAt';
+    const sortOrder = query.sortOrder ?? (sortBy === 'createdAt' ? 'desc' : 'asc');
 
-    const schoolId = schoolIdFilter(actor, 'users:read');
-    const search = query?.search?.trim();
-    const where: Prisma.UserWhereInput = {
-      ...(schoolId ? { assignments: { some: { schoolId } } } : {}),
-      ...(query?.status ? { status: query.status as UserStatus } : {}),
-      ...(search
-        ? { OR: [{ email: { contains: search } }, { fullName: { contains: search } }] }
-        : {}),
+    if (query.schoolId) {
+      assertSchoolAccess(actor, 'users:read', query.schoolId);
+    }
+    if (query.groupId) {
+      const group = await this.prisma.group.findUnique({ where: { id: query.groupId }, select: { schoolId: true } });
+      if (!group) {
+        throw new NotFoundException(`Group with ID ${query.groupId} not found`);
+      }
+      assertSchoolAccess(actor, 'users:read', group.schoolId);
+    }
+    if (query.role && !(await this.prisma.role.findUnique({ where: { name: query.role }, select: { id: true } }))) {
+      throw new BadRequestException(`Unknown role '${query.role}'`);
+    }
+
+    // Conditions one assignment must meet; also confined to the admin's schools when scoped.
+    const assignment: Prisma.UserAssignmentWhereInput = {
+      ...(query.schoolId ? { schoolId: query.schoolId } : scope ? { schoolId: scope } : {}),
+      ...(query.role && { role: { name: query.role } }),
     };
-
-    const sortBy = query?.sortBy ?? 'createdAt';
-    const sortOrder = query?.sortOrder ?? (sortBy === 'createdAt' ? 'desc' : 'asc');
-    const orderBy: Prisma.UserOrderByWithRelationInput[] = [
-      { [sortBy]: sortOrder } as Prisma.UserOrderByWithRelationInput,
-      // Stable tie-breaker: without it, rows sharing the sort value could repeat or be skipped.
-      ...(sortBy === 'createdAt' ? [{ id: sortOrder } as Prisma.UserOrderByWithRelationInput] : [{ id: 'desc' } as Prisma.UserOrderByWithRelationInput]),
-    ];
+    const filters: Prisma.UserWhereInput[] = [];
+    if (scope) filters.push({ assignments: { some: { schoolId: scope } } });
+    if (query.status) filters.push({ status: query.status });
+    if (query.search) {
+      // MySQL's default collation (utf8mb4_unicode_ci) makes `contains` case-insensitive.
+      filters.push({ OR: [{ fullName: { contains: query.search } }, { email: { contains: query.search } }] });
+    }
+    if (query.groupId) {
+      filters.push({
+        OR: [
+          { assignments: { some: { ...assignment, groupId: query.groupId } } },
+          {
+            AND: [
+              { groupMemberships: { some: { groupId: query.groupId } } },
+              { assignments: { some: assignment } },
+            ],
+          },
+        ],
+      });
+    } else if (query.schoolId || query.role) {
+      filters.push({ assignments: { some: assignment } });
+    }
+    const where: Prisma.UserWhereInput = filters.length > 0 ? { AND: filters } : {};
 
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
       this.prisma.user.findMany({
         where,
-        orderBy,
-        skip,
+        // Secondary sort on id keeps pagination stable when values are equal.
+        orderBy: [{ [sortBy]: sortOrder }, { id: 'asc' }],
+        skip: (page - 1) * limit,
         take: limit,
+        include: {
+          assignments: {
+            where: scope ? { schoolId: scope } : undefined,
+            orderBy: { createdAt: 'asc' },
+            include: {
+              school: { select: { name: true } },
+              role: { select: { name: true } },
+              group: { select: { name: true } },
+            },
+          },
+        },
       }),
     ]);
 
-    const totalPages = Math.ceil(total / limit) || 1;
-
     return new PaginatedUsersEntity({
-      data: users.map((u) => UserMapper.toEntity(u)),
+      data: users.map(
+        (u) =>
+          new UserListItemEntity({
+            id: u.id,
+            email: u.email,
+            fullName: u.fullName,
+            authProvider: u.authProvider,
+            status: u.status,
+            assignments: u.assignments.map((a) => ({
+              schoolId: a.schoolId,
+              schoolName: a.school.name,
+              role: a.role.name,
+              groupId: a.groupId,
+              groupName: a.group?.name ?? null,
+            })),
+            createdAt: u.createdAt,
+            updatedAt: u.updatedAt,
+          }),
+      ),
       total,
       page,
       limit,
-      totalPages,
+      totalPages: Math.ceil(total / limit) || 1,
     });
   }
 
-  async findUserById(id: string, actor: AuthenticatedUser): Promise<UserEntity> {
-    const user = await this.findUserInScope(id, actor, 'users:read');
-    return UserMapper.toEntity(user);
+  /** GET /users/:id (#39): 403 outside the admin's schools; assignments and groups are limited to those schools. */
+  async getUserDetail(id: string, actor: AuthenticatedUser): Promise<UserDetailEntity> {
+    const scope = schoolIdFilter(actor, 'users:read');
+
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      include: {
+        assignments: {
+          where: scope ? { schoolId: scope } : undefined,
+          orderBy: { createdAt: 'asc' },
+          include: {
+            school: { select: { name: true } },
+            role: { select: { name: true } },
+            group: { select: { name: true } },
+          },
+        },
+        groupMemberships: {
+          where: scope ? { group: { schoolId: scope } } : undefined,
+          orderBy: { createdAt: 'asc' },
+          include: { group: { include: { school: { select: { name: true } } } } },
+        },
+      },
+    });
+    if (!user) {
+      throw new NotFoundException(`User with ID ${id} not found`);
+    }
+    // For a scoped admin only assignments in their schools were loaded: none means outside their scope.
+    assertSchoolAccess(actor, 'users:read', user.assignments.map((a) => a.schoolId));
+    const sessions = await this.sessions.listActive(id);
+
+    return new UserDetailEntity({
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      authProvider: user.authProvider,
+      status: user.status,
+      hasPassword: user.passwordHash !== null,
+      googleLinked: user.googleSub !== null,
+      assignments: user.assignments.map((a) => ({
+        schoolId: a.schoolId,
+        schoolName: a.school.name,
+        role: a.role.name,
+        groupId: a.groupId,
+        groupName: a.group?.name ?? null,
+      })),
+      groups: user.groupMemberships.map((m) => ({
+        groupId: m.groupId,
+        groupName: m.group.name,
+        groupType: m.group.type,
+        schoolId: m.group.schoolId,
+        schoolName: m.group.school.name,
+      })),
+      sessions: sessions.map((s) => ActiveSessionEntity.from(s, actor.sessionId)),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    });
   }
 
   /** Loads a user and throws 403 unless `actor` has `permission` in one of the user's schools. */
@@ -323,6 +433,19 @@ export class IdentityAndAccessService {
   }
 
   /** Suspending a user also revokes all their sessions (#12), so no token keeps working. */
+  /** PATCH /users/:id (#40): full name and email only. */
+  async updateUserProfile(
+    id: string,
+    dto: UpdateUserProfileDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    if (dto.fullName === undefined && dto.email === undefined) {
+      throw new BadRequestException('Nothing to update: provide fullName or email');
+    }
+    return this.updateUser(id, dto, actor, auditContext);
+  }
+
   async updateUser(
     id: string,
     dto: UpdateUserDto,
@@ -335,6 +458,13 @@ export class IdentityAndAccessService {
       assertSchoolAccess(actor, 'users:suspend', target.assignments.map((a) => a.schoolId));
     }
 
+    // Nothing would change: skip the write so updated_at only moves on a real edit.
+    const sameName = dto.fullName === undefined || dto.fullName.trim() === target.fullName;
+    const sameEmail = dto.email === undefined || dto.email.trim().toLowerCase() === target.email;
+    if (sameName && sameEmail && !dto.status) {
+      return UserMapper.toEntity(target);
+    }
+
     if (dto.email) {
       const normalizedEmail = dto.email.trim().toLowerCase();
       const existing = await this.prisma.user.findUnique({
@@ -342,6 +472,16 @@ export class IdentityAndAccessService {
       });
       if (existing && existing.id !== id) {
         throw new ConflictException(`Email '${dto.email}' is already in use`);
+      }
+      // Only a new address is checked: renaming a user must not fail because of an older email.
+      const schoolIds = target.assignments.map((a) => a.schoolId);
+      if (normalizedEmail !== target.email && schoolIds.length > 0) {
+        const { allowed } = await this.domainValidation.validateDomainForUser(normalizedEmail, schoolIds);
+        if (!allowed) {
+          throw new BadRequestException(
+            `Email domain '@${this.domainValidation.extractDomain(normalizedEmail)}' is not allowed for this user's school`,
+          );
+        }
       }
     }
 

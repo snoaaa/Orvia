@@ -37,17 +37,7 @@ export class IdentityAndAccessController {
     @Query() query: ListUsersQueryDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedUsersEntity> {
-    return this.identityService.findAllUsers(actor, query);
-  }
-
-  @Get('users/:id')
-  @RequirePermission('users:read')
-  @ApiOperation({ summary: 'Get user by ID' })
-  @ApiParam({ name: 'id', description: 'User UUID' })
-  @ApiResponse({ status: 200, description: 'User retrieved', type: UserEntity })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async getUserById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<UserEntity> {
-    return this.identityService.findUserById(id, actor);
+    return this.identityService.listUsers(actor, query);
   }
 
   /**
@@ -94,7 +84,10 @@ export class IdentityAndAccessController {
 
   @Patch('users/:id')
   @RequirePermission('users:update')
-  @ApiOperation({ summary: 'Update an existing user (changing the status also needs users:suspend)' })
+  @ApiOperation({
+    summary: 'Update an existing user (changing the status also needs users:suspend)',
+    description: 'For profile edits, use PATCH /users/{id}, which replaces this route.',
+  })
   @ApiParam({ name: 'id', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User updated', type: UserEntity })
   async updateUser(
