@@ -84,6 +84,7 @@ model Group {
   assignments    UserAssignment[]
   documentAccess DocumentAccess[]
 
+  @@unique([schoolId, name])
   @@index([schoolId])
   @@map("groups")
 }

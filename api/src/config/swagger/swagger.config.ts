@@ -79,6 +79,7 @@ export function setupSwagger(app: INestApplication, options?: SwaggerConfigOptio
     .addTag('Identity and Access', 'Users, schools, groups, roles, permissions, and sessions')
     .addTag('Schools', 'School administration and management (Section 4.5)')
     .addTag('Users', 'User administration: search, view and edit users (Section 4.5)')
+    .addTag('Groups', 'Classes, departments and teams of a school (Sections 4.5 and 4.7)')
     .addTag('Documents', 'Spaces, documents, versions, access control, and processing jobs')
     .addTag('Conversations', 'Conversations, messages, references, and saved answers')
     .addTag('RAG Performance', 'RAG request metrics, retrieval latency, and evaluation')
