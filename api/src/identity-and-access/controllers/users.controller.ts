@@ -2,8 +2,8 @@ import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { SearchUsersQueryDto } from '../dto/index.js';
-import { PaginatedUserListEntity, UserDetailEntity } from '../entities/index.js';
+import { ListUsersQueryDto } from '../dto/index.js';
+import { PaginatedUsersEntity, UserDetailEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
 /**
@@ -27,13 +27,13 @@ export class UsersController {
       'match the same assignment). School admins only see users of their own schools and only those assignments; ' +
       'filtering on another school or its groups returns 403. Never returns password hashes or tokens.',
   })
-  @ApiResponse({ status: 200, description: 'One page of users', type: PaginatedUserListEntity })
+  @ApiResponse({ status: 200, description: 'One page of users', type: PaginatedUsersEntity })
   @ApiResponse({ status: 400, description: 'Invalid query parameter or unknown role' })
   @ApiResponse({ status: 404, description: 'groupId does not exist' })
   async listUsers(
-    @Query() query: SearchUsersQueryDto,
+    @Query() query: ListUsersQueryDto,
     @CurrentUser() actor: AuthenticatedUser,
-  ): Promise<PaginatedUserListEntity> {
+  ): Promise<PaginatedUsersEntity> {
     return this.identityService.listUsers(actor, query);
   }
 

@@ -296,13 +296,13 @@ other roles have no `users:*` permission and get 403.
 | `schoolId`, `role`, `groupId` | Combinable; school, role and group must match the **same** assignment ("STAFF in school A"). A group also matches through a group membership |
 | `status` | `INVITED`, `ACTIVE` or `SUSPENDED` |
 | `page`, `limit` | Default 1 and 10, `limit` at most 100 |
-| `sortBy`, `order` | `createdAt` (default), `fullName`, `email`, `status`; `asc` / `desc` (default) |
+| `sortBy`, `sortOrder` | `createdAt` (default), `fullName`, `email`, `status`; `asc` / `desc`. Newest first for `createdAt`, A–Z for the other columns |
 
 Answer: `{ data, total, page, limit, totalPages }`. Each user carries its `assignments`
 (school, role, group). School admins only get users with an assignment in their schools, and only
 those assignments; filtering on another school or one of its groups is 403. Users without any school
 are visible to platform admins only. Password hashes, tokens and Google ids are never returned.
-Unknown role → 400, unknown group → 404.
+Unknown role → 400, unknown group → 404. `GET /identity/users` runs the same code.
 
 ### View a user: `GET /users/{id}` (#39, `users:read`)
 
@@ -310,7 +310,7 @@ Returns the profile, `status`, `hasPassword`, `googleLinked`, `assignments`, `gr
 `sessions` with their devices (IP, user agent, created, last used, expiry). School admins only get
 users of their own school(s), and only those assignments and groups; another school, or a user
 without a school, is 403. Sessions belong to the user, not to a school, so all active ones are listed.
-Password hashes, tokens and Google ids are never returned. Invalid UUID → 400, unknown user → 404.
+Password hashes, tokens and Google ids are never returned. Invalid UUID → 400, unknown user → 404. This replaces the former `GET /identity/users/{id}`.
 
 ## Audit trail
 

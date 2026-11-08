@@ -9,13 +9,12 @@ import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/util
 import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { isAdminRole } from '../../auth/utils/admin-role.util.js';
+import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { AssignRoleDto, CreateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, SearchUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
+import type { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
 import {
   PaginatedSchoolsEntity,
-  PaginatedUserListEntity,
   PaginatedUsersEntity,
   PermissionHolderEntity,
   PermissionOverviewEntity,
@@ -62,10 +61,12 @@ export class IdentityAndAccessService {
    *   can also match through a group membership (group_members).
    * - Each user's `assignments` only lists the schools the admin can see.
    */
-  async listUsers(actor: AuthenticatedUser, query: SearchUsersQueryDto = {}): Promise<PaginatedUserListEntity> {
+  async listUsers(actor: AuthenticatedUser, query: ListUsersQueryDto = {}): Promise<PaginatedUsersEntity> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const scope = schoolIdFilter(actor, 'users:read');
+    const sortBy = query.sortBy ?? 'createdAt';
+    const sortOrder = query.sortOrder ?? (sortBy === 'createdAt' ? 'desc' : 'asc');
 
     if (query.schoolId) {
       assertSchoolAccess(actor, 'users:read', query.schoolId);
@@ -115,7 +116,7 @@ export class IdentityAndAccessService {
       this.prisma.user.findMany({
         where,
         // Secondary sort on id keeps pagination stable when values are equal.
-        orderBy: [{ [query.sortBy ?? 'createdAt']: query.order ?? 'desc' }, { id: 'asc' }],
+        orderBy: [{ [sortBy]: sortOrder }, { id: 'asc' }],
         skip: (page - 1) * limit,
         take: limit,
         include: {
@@ -132,7 +133,7 @@ export class IdentityAndAccessService {
       }),
     ]);
 
-    return new PaginatedUserListEntity({
+    return new PaginatedUsersEntity({
       data: users.map(
         (u) =>
           new UserListItemEntity({
@@ -161,31 +162,33 @@ export class IdentityAndAccessService {
 
   /** GET /users/:id (#39): 403 outside the admin's schools; assignments and groups are limited to those schools. */
   async getUserDetail(id: string, actor: AuthenticatedUser): Promise<UserDetailEntity> {
-    await this.findUserInScope(id, actor, 'users:read');
     const scope = schoolIdFilter(actor, 'users:read');
 
-    const [user, sessions] = await Promise.all([
-      this.prisma.user.findUniqueOrThrow({
-        where: { id },
-        include: {
-          assignments: {
-            where: scope ? { schoolId: scope } : undefined,
-            orderBy: { createdAt: 'asc' },
-            include: {
-              school: { select: { name: true } },
-              role: { select: { name: true } },
-              group: { select: { name: true } },
-            },
-          },
-          groupMemberships: {
-            where: scope ? { group: { schoolId: scope } } : undefined,
-            orderBy: { createdAt: 'asc' },
-            include: { group: { include: { school: { select: { name: true } } } } },
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      include: {
+        assignments: {
+          where: scope ? { schoolId: scope } : undefined,
+          orderBy: { createdAt: 'asc' },
+          include: {
+            school: { select: { name: true } },
+            role: { select: { name: true } },
+            group: { select: { name: true } },
           },
         },
-      }),
-      this.sessions.listActive(id),
-    ]);
+        groupMemberships: {
+          where: scope ? { group: { schoolId: scope } } : undefined,
+          orderBy: { createdAt: 'asc' },
+          include: { group: { include: { school: { select: { name: true } } } } },
+        },
+      },
+    });
+    if (!user) {
+      throw new NotFoundException(`User with ID ${id} not found`);
+    }
+    // For a scoped admin only assignments in their schools were loaded: none means outside their scope.
+    assertSchoolAccess(actor, 'users:read', user.assignments.map((a) => a.schoolId));
+    const sessions = await this.sessions.listActive(id);
 
     return new UserDetailEntity({
       id: user.id,
@@ -213,65 +216,6 @@ export class IdentityAndAccessService {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     });
-  }
-
-  /**
-   * Platform admins see everyone; others only users assigned to a school they can read users in.
-   *
-   * Filters: `status` (INVITED/ACTIVE/SUSPENDED), `search` (email or full name contains) and
-   * `sortBy`/`sortOrder`. Paginated with the same `page`/`limit` contract as `findAllSchools`
-   * (`limit` capped at 100), ordered with `id` as the tie-breaker so pages stay stable.
-   */
-  async findAllUsers(
-    actor: AuthenticatedUser,
-    query?: ListUsersQueryDto,
-  ): Promise<PaginatedUsersEntity> {
-    const page = Math.max(1, query?.page ?? 1);
-    const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
-    const skip = (page - 1) * limit;
-
-    const schoolId = schoolIdFilter(actor, 'users:read');
-    const search = query?.search?.trim();
-    const where: Prisma.UserWhereInput = {
-      ...(schoolId ? { assignments: { some: { schoolId } } } : {}),
-      ...(query?.status ? { status: query.status as UserStatus } : {}),
-      ...(search
-        ? { OR: [{ email: { contains: search } }, { fullName: { contains: search } }] }
-        : {}),
-    };
-
-    const sortBy = query?.sortBy ?? 'createdAt';
-    const sortOrder = query?.sortOrder ?? (sortBy === 'createdAt' ? 'desc' : 'asc');
-    const orderBy: Prisma.UserOrderByWithRelationInput[] = [
-      { [sortBy]: sortOrder } as Prisma.UserOrderByWithRelationInput,
-      // Stable tie-breaker: without it, rows sharing the sort value could repeat or be skipped.
-      ...(sortBy === 'createdAt' ? [{ id: sortOrder } as Prisma.UserOrderByWithRelationInput] : [{ id: 'desc' } as Prisma.UserOrderByWithRelationInput]),
-    ];
-
-    const [total, users] = await Promise.all([
-      this.prisma.user.count({ where }),
-      this.prisma.user.findMany({
-        where,
-        orderBy,
-        skip,
-        take: limit,
-      }),
-    ]);
-
-    const totalPages = Math.ceil(total / limit) || 1;
-
-    return new PaginatedUsersEntity({
-      data: users.map((u) => UserMapper.toEntity(u)),
-      total,
-      page,
-      limit,
-      totalPages,
-    });
-  }
-
-  async findUserById(id: string, actor: AuthenticatedUser): Promise<UserEntity> {
-    const user = await this.findUserInScope(id, actor, 'users:read');
-    return UserMapper.toEntity(user);
   }
 
   /** Loads a user and throws 403 unless `actor` has `permission` in one of the user's schools. */
@@ -907,6 +851,14 @@ export class IdentityAndAccessService {
   async findAllRoles(): Promise<RoleEntity[]> {
     const roles = await this.prisma.role.findMany({
       orderBy: { name: 'asc' },
+      include: {
+        rolePermissions: {
+          include: { permission: true },
+        },
+        _count: {
+          select: { assignments: true },
+        },
+      },
     });
     return roles.map(
       (r) =>
@@ -914,14 +866,47 @@ export class IdentityAndAccessService {
           id: r.id,
           name: r.name,
           scope: r.scope,
+          permissions: r.rolePermissions.map((rp) => rp.permission.code).sort(),
+          assignedUsersCount: r._count.assignments,
+          isBase: isBaseRoleName(r.name),
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
         }),
     );
   }
 
+  async findRoleById(id: string): Promise<RoleEntity> {
+    const role = await this.prisma.role.findFirst({
+      where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
+      include: {
+        rolePermissions: {
+          include: { permission: true },
+        },
+        _count: {
+          select: { assignments: true },
+        },
+      },
+    });
+    if (!role) {
+      throw new NotFoundException(`Role '${id}' not found`);
+    }
+    return new RoleEntity({
+      id: role.id,
+      name: role.name,
+      scope: role.scope,
+      permissions: role.rolePermissions.map((rp) => rp.permission.code).sort(),
+      assignedUsersCount: role._count.assignments,
+      isBase: isBaseRoleName(role.name),
+      createdAt: role.createdAt,
+      updatedAt: role.updatedAt,
+    });
+  }
+
   async createRole(dto: CreateRoleDto): Promise<RoleEntity> {
     const roleName = dto.name.trim().toUpperCase();
+    if (isBaseRoleName(roleName)) {
+      throw new BadRequestException(`Role name '${roleName}' is reserved for system base roles`);
+    }
     const existing = await this.prisma.role.findUnique({
       where: { name: roleName },
     });
@@ -937,13 +922,109 @@ export class IdentityAndAccessService {
         scope: dto.scope || 'school',
       },
     });
-    return new RoleEntity({
-      id: role.id,
-      name: role.name,
-      scope: role.scope,
-      createdAt: role.createdAt,
-      updatedAt: role.updatedAt,
+
+    if (dto.permissions && dto.permissions.length > 0) {
+      const perms = await this.prisma.permission.findMany({
+        where: { code: { in: dto.permissions } },
+      });
+      if (perms.length > 0) {
+        await this.prisma.rolePermission.createMany({
+          data: perms.map((p) => ({
+            roleId: role.id,
+            permissionId: p.id,
+          })),
+          skipDuplicates: true,
+        });
+      }
+    }
+
+    return this.findRoleById(role.id);
+  }
+
+  async updateRole(id: string, dto: UpdateRoleDto): Promise<RoleEntity> {
+    const role = await this.prisma.role.findFirst({
+      where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
     });
+    if (!role) {
+      throw new NotFoundException(`Role '${id}' not found`);
+    }
+    if (isBaseRoleName(role.name)) {
+      throw new BadRequestException('System base roles cannot be modified');
+    }
+
+    let nextName = role.name;
+    if (dto.name && dto.name.trim()) {
+      nextName = dto.name.trim().toUpperCase();
+      if (isBaseRoleName(nextName)) {
+        throw new BadRequestException(`Role name '${nextName}' is reserved for system base roles`);
+      }
+      if (nextName !== role.name) {
+        const existing = await this.prisma.role.findUnique({ where: { name: nextName } });
+        if (existing && existing.id !== role.id) {
+          throw new ConflictException(`Role '${nextName}' already exists`);
+        }
+      }
+    }
+
+    await this.prisma.role.update({
+      where: { id: role.id },
+      data: {
+        name: nextName,
+        ...(dto.scope ? { scope: dto.scope } : {}),
+      },
+    });
+
+    if (dto.permissions) {
+      await this.prisma.rolePermission.deleteMany({
+        where: { roleId: role.id },
+      });
+      if (dto.permissions.length > 0) {
+        const perms = await this.prisma.permission.findMany({
+          where: { code: { in: dto.permissions } },
+        });
+        if (perms.length > 0) {
+          await this.prisma.rolePermission.createMany({
+            data: perms.map((p) => ({
+              roleId: role.id,
+              permissionId: p.id,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+    }
+
+    return this.findRoleById(role.id);
+  }
+
+  async deleteRole(id: string): Promise<{ success: boolean; message: string }> {
+    const role = await this.prisma.role.findFirst({
+      where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
+    });
+    if (!role) {
+      throw new NotFoundException(`Role '${id}' not found`);
+    }
+    if (isBaseRoleName(role.name)) {
+      throw new BadRequestException('System base roles cannot be deleted');
+    }
+
+    const assignedCount = await this.prisma.userAssignment.count({
+      where: { roleId: role.id },
+    });
+    if (assignedCount > 0) {
+      throw new BadRequestException(
+        `Cannot delete role '${role.name}': still assigned to ${assignedCount} user(s). Please reassign them before deleting.`,
+      );
+    }
+
+    await this.prisma.role.delete({
+      where: { id: role.id },
+    });
+
+    return {
+      success: true,
+      message: `Role '${role.name}' was successfully deleted`,
+    };
   }
 
   /**
