@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
+import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
@@ -26,6 +27,7 @@ import {
   PermissionOverviewEntity,
   RoleEntity,
   SchoolEntity,
+  UserDetailEntity,
   UserEntity,
   UserListItemEntity,
 } from '../entities/index.js';
@@ -147,6 +149,62 @@ export class IdentityAndAccessService {
       page,
       limit,
       totalPages: Math.ceil(total / limit) || 1,
+    });
+  }
+
+  /** GET /users/:id (#39): 403 outside the admin's schools; assignments and groups are limited to those schools. */
+  async getUserDetail(id: string, actor: AuthenticatedUser): Promise<UserDetailEntity> {
+    await this.findUserInScope(id, actor, 'users:read');
+    const scope = schoolIdFilter(actor, 'users:read');
+
+    const [user, sessions] = await Promise.all([
+      this.prisma.user.findUniqueOrThrow({
+        where: { id },
+        include: {
+          assignments: {
+            where: scope ? { schoolId: scope } : undefined,
+            orderBy: { createdAt: 'asc' },
+            include: {
+              school: { select: { name: true } },
+              role: { select: { name: true } },
+              group: { select: { name: true } },
+            },
+          },
+          groupMemberships: {
+            where: scope ? { group: { schoolId: scope } } : undefined,
+            orderBy: { createdAt: 'asc' },
+            include: { group: { include: { school: { select: { name: true } } } } },
+          },
+        },
+      }),
+      this.sessions.listActive(id),
+    ]);
+
+    return new UserDetailEntity({
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      authProvider: user.authProvider,
+      status: user.status,
+      hasPassword: user.passwordHash !== null,
+      googleLinked: user.googleSub !== null,
+      assignments: user.assignments.map((a) => ({
+        schoolId: a.schoolId,
+        schoolName: a.school.name,
+        role: a.role.name,
+        groupId: a.groupId,
+        groupName: a.group?.name ?? null,
+      })),
+      groups: user.groupMemberships.map((m) => ({
+        groupId: m.groupId,
+        groupName: m.group.name,
+        groupType: m.group.type,
+        schoolId: m.group.schoolId,
+        schoolName: m.group.school.name,
+      })),
+      sessions: sessions.map((s) => ActiveSessionEntity.from(s, actor.sessionId)),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
     });
   }
 

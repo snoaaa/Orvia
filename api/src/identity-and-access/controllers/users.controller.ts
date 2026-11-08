@@ -1,9 +1,9 @@
-import { Controller, Get, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { ListUsersQueryDto } from '../dto/index.js';
-import { PaginatedUsersEntity } from '../entities/index.js';
+import { PaginatedUsersEntity, UserDetailEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
 /**
@@ -35,5 +35,24 @@ export class UsersController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<PaginatedUsersEntity> {
     return this.identityService.listUsers(actor, query);
+  }
+
+  @Get(':id')
+  @RequirePermission('users:read')
+  @ApiOperation({
+    summary: "View a user's details",
+    description:
+      'Profile, status, assignments, groups, and active sessions with their devices. School admins only get users of ' +
+      'their own schools (403 otherwise) and only those assignments and groups. Never returns password hashes or tokens.',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'The user', type: UserDetailEntity })
+  @ApiResponse({ status: 400, description: 'id is not a valid UUID' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async getUser(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<UserDetailEntity> {
+    return this.identityService.getUserDetail(id, actor);
   }
 }
