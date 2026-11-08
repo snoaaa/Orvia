@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class RoleEntity {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174002', description: 'Unique role identifier (UUID)' })
@@ -9,6 +9,15 @@ export class RoleEntity {
 
   @ApiProperty({ example: 'platform', description: 'Scope of the role (platform, school, group)' })
   scope: string;
+
+  @ApiPropertyOptional({ example: ['users:read', 'users:invite'], description: 'Permission codes assigned to this role' })
+  permissions?: string[];
+
+  @ApiPropertyOptional({ example: 5, description: 'Number of active user assignments with this role' })
+  assignedUsersCount?: number;
+
+  @ApiPropertyOptional({ example: false, description: 'Whether this is a protected system base role' })
+  isBase?: boolean;
 
   @ApiProperty({ example: '2026-10-17T12:00:00.000Z', description: 'Creation timestamp' })
   createdAt: Date;

@@ -54,3 +54,22 @@ export function toClassifiableRoles(assignments: readonly AssignmentWithRole[]):
     permissions: a.role.rolePermissions?.map((rp) => rp.permission.code) ?? [],
   }));
 }
+
+/** Immutable system base roles defined in the specification. */
+export const BASE_ROLE_NAMES = [
+  'PLATFORM_ADMIN',
+  'SCHOOL_ADMIN',
+  'CONTENT_MANAGER',
+  'STAFF',
+  'STUDENT',
+  'PARENT_GUEST',
+] as const;
+
+export type BaseRoleName = (typeof BASE_ROLE_NAMES)[number];
+
+export function isBaseRoleName(name: string): boolean {
+  if (!name) return false;
+  const upper = name.trim().toUpperCase();
+  return (BASE_ROLE_NAMES as readonly string[]).includes(upper);
+}
+
