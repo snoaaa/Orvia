@@ -19,6 +19,7 @@ import type {
   CreateUserDto,
   InviteUserDto,
   UpdateUserDto,
+  UpdateUserProfileDto,
 } from '../dto/index.js';
 import {
   PaginatedSchoolsEntity,
@@ -435,6 +436,19 @@ export class IdentityAndAccessService {
   }
 
   /** Suspending a user also revokes all their sessions (#12), so no token keeps working. */
+  /** PATCH /users/:id (#40): full name and email only. */
+  async updateUserProfile(
+    id: string,
+    dto: UpdateUserProfileDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    if (dto.fullName === undefined && dto.email === undefined) {
+      throw new BadRequestException('Nothing to update: provide fullName or email');
+    }
+    return this.updateUser(id, dto, actor, auditContext);
+  }
+
   async updateUser(
     id: string,
     dto: UpdateUserDto,
@@ -454,6 +468,16 @@ export class IdentityAndAccessService {
       });
       if (existing && existing.id !== id) {
         throw new ConflictException(`Email '${dto.email}' is already in use`);
+      }
+      // Only a new address is checked: renaming a user must not fail because of an older email.
+      const schoolIds = target.assignments.map((a) => a.schoolId);
+      if (normalizedEmail !== target.email && schoolIds.length > 0) {
+        const { allowed } = await this.domainValidation.validateDomainForUser(normalizedEmail, schoolIds);
+        if (!allowed) {
+          throw new BadRequestException(
+            `Email domain '@${this.domainValidation.extractDomain(normalizedEmail)}' is not allowed for this user's school`,
+          );
+        }
       }
     }
 
