@@ -1,14 +1,20 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsArray, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class CreateRoleDto {
-  @ApiProperty({ example: 'ADMIN_PLATFORM', description: 'Unique role name' })
+  @ApiProperty({ example: 'TEACHING_ASSISTANT', description: 'Unique role name' })
   @IsString()
   @IsNotEmpty()
   name: string;
 
-  @ApiProperty({ example: 'platform', description: 'Scope (platform, school, group)' })
+  @ApiProperty({ example: 'school', description: 'Scope (platform, school, group)' })
   @IsString()
   @IsNotEmpty()
   scope: string;
+
+  @ApiPropertyOptional({ example: ['documents:read', 'conversations:create'], description: 'List of permission codes' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  permissions?: string[];
 }

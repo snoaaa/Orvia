@@ -8,6 +8,7 @@ export class SchoolMapper {
     allowedDomains?: string | null;
     status?: string | null;
     settings?: unknown;
+    domains?: Array<{ domain: string }> | null;
     createdAt: Date;
     updatedAt: Date;
   }): SchoolEntity {
@@ -29,6 +30,7 @@ export class SchoolMapper {
       id: raw.id,
       name: raw.name,
       allowedDomains: raw.allowedDomains || '',
+      domains: Array.isArray(raw.domains) ? raw.domains.map((d) => d.domain).filter(Boolean) : [],
       status: raw.status || 'active',
       settings: settingsObj,
       createdAt: raw.createdAt,

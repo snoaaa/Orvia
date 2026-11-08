@@ -2,7 +2,7 @@
   <div class="auth-wrapper v3">
     <div class="auth-form">
       <div class="auth-header">
-        <a [routerLink]="['/']"><img src="assets/images/logo-dark.svg" alt="logo" /></a>
+        <a [routerLink]="['/']"><img src="assets/images/logo.png" alt="logo" /></a>
       </div>
       <div class="card my-5">
         <div class="card-body">
@@ -12,11 +12,11 @@
           </div>
           <div class="form-group mb-3">
             <label class="form-label" for="email">Email Address</label>
-            <input type="email" class="form-control" id="email" placeholder="Email Address" value="info@codedthemes.com" />
+            <input type="email" class="form-control" id="email" #email placeholder="Email Address" (keyup.enter)="signIn(email.value, password.value)" />
           </div>
           <div class="form-group mb-3">
             <label class="form-label" for="password">Password</label>
-            <input type="password" class="form-control" id="password" placeholder="Password" value="123456789" />
+            <input type="password" class="form-control" id="password" #password placeholder="Password" (keyup.enter)="signIn(email.value, password.value)" />
           </div>
           <div class="d-flex mt-1 justify-content-between">
             <div class="form-check">
@@ -26,12 +26,17 @@
             <h5 class="text-secondary f-w-400"><button type="button" class="btn btn-link text-secondary p-0 text-decoration-none" style="font-size: inherit; font-weight: inherit; line-height: inherit; vertical-align: baseline;">Forgot Password?</button></h5>
           </div>
           <div class="d-grid mt-4">
-            <button type="button" class="btn btn-primary">Login</button>
+            <button type="button" class="btn btn-primary" [disabled]="loading()" (click)="signIn(email.value, password.value)">
+              {{ loading() ? 'Signing in…' : 'Login' }}
+            </button>
           </div>
+          @if (error()) {
+            <div class="alert alert-danger mt-3 mb-0 py-2" role="alert">{{ error() }}</div>
+          }
           <div class="saprator mt-3">
             <span>Login with</span>
           </div>
-          <div class="row">
+          <div class="row justify-content-center">
             @for (item of SignInOptions; track item) {
               <div class="col-4">
                 <div class="d-grid">
@@ -45,21 +50,7 @@
           </div>
         </div>
       </div>
-      <div class="auth-footer row">
-        <div class="col my-1">
-          <p class="m-0">
-            Copyright ©
-            <a href="https://codedthemes.com/" target="_blank">CodedThemes</a>
-          </p>
-        </div>
-        <div class="col-auto my-1">
-          <ul class="list-inline footer-link mb-0">
-            <li class="list-inline-item"><a href="https://codedthemes.com/" target="_blank">Home</a></li>
-            <li class="list-inline-item"><a href="https://codedthemes.com/privacy-policy/" target="_blank">Privacy Policy</a></li>
-            <li class="list-inline-item"><a href="https://codedthemes.support-hub.io/" target="_blank">Contact us</a></li>
-          </ul>
-        </div>
-      </div>
+      <div class="auth-footer row"></div>
     </div>
   </div>
 </div>

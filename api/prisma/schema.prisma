@@ -35,6 +35,8 @@ model User {
   syncChanges       SyncChange[]
   passwordSetupTokens PasswordSetupToken[]
 
+  /// Supports the paginated user list: ORDER BY created_at DESC, id DESC (see findAllUsers).
+  @@index([createdAt, id])
   @@map("users")
 }
 
@@ -82,6 +84,7 @@ model Group {
   assignments    UserAssignment[]
   documentAccess DocumentAccess[]
 
+  @@unique([schoolId, name])
   @@index([schoolId])
   @@map("groups")
 }
@@ -241,6 +244,8 @@ model Document {
   offlineSelections OfflineSelection[]
 
   @@index([spaceId])
+  /// Supports the paginated document list: ORDER BY created_at DESC, id DESC (see findAllDocuments).
+  @@index([createdAt, id])
   @@map("documents")
 }
 

@@ -131,13 +131,49 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             return Promise.resolve({ id: 'role-platform-id', name: 'PLATFORM_ADMIN', scope: 'platform' });
           }
           if (where.name === 'SCHOOL_ADMIN') {
-            return Promise.resolve({ id: 'role-school-admin-id', name: 'SCHOOL_ADMIN', scope: 'school' });
+            return Promise.resolve({
+              id: 'role-school-admin-id',
+              name: 'SCHOOL_ADMIN',
+              scope: 'school',
+              rolePermissions: [{ permission: { code: 'users:assign_role' } }],
+            });
           }
           return Promise.resolve(null);
         }),
+        findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockImplementation(({ data }: { data: any }) =>
+          Promise.resolve({
+            ...data,
+            id: data.id || 'generated-role-id',
+            rolePermissions: [],
+            _count: { assignments: 0 },
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        ),
+        update: vi.fn().mockImplementation(({ where, data }: { where: { id: string }; data: any }) =>
+          Promise.resolve({
+            id: where.id,
+            ...data,
+            rolePermissions: [],
+            _count: { assignments: 0 },
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        ),
+        delete: vi.fn().mockResolvedValue({ id: 'deleted-role-id' }),
+      },
+      rolePermission: {
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      permission: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'perm-1', code: 'users:read' }]),
       },
       userAssignment: {
         create: vi.fn().mockResolvedValue({}),
+        count: vi.fn().mockResolvedValue(0),
       },
       passwordSetupToken: {
         create: vi.fn().mockResolvedValue({}),
@@ -221,7 +257,9 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         fakeContext,
       );
 
-      expect(mockPrisma.role.findUnique).toHaveBeenCalledWith({ where: { name: 'STUDENT' } });
+      expect(mockPrisma.role.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { name: 'STUDENT' } }),
+      );
     });
 
     it('assigns custom specified role when valid for the school', async () => {
@@ -231,7 +269,9 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         fakeContext,
       );
 
-      expect(mockPrisma.role.findUnique).toHaveBeenCalledWith({ where: { name: 'TEACHER' } });
+      expect(mockPrisma.role.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { name: 'TEACHER' } }),
+      );
     });
 
     it('generates a setup token when inviting an administrator (Issue #26)', async () => {
@@ -711,6 +751,207 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       it('throws 404 NotFoundException if school to reactivate does not exist', async () => {
         await expect(service.reactivateSchool('school-nonexistent', platformAdmin, fakeContext)).rejects.toBeInstanceOf(
           NotFoundException,
+        );
+      });
+    });
+  });
+
+  describe('Role Management (Issue #44, #45, #46, #60)', () => {
+    describe('findAllRoles', () => {
+      it('returns all roles with permissions, assignment counts, and base flag', async () => {
+        mockPrisma.role.findMany.mockResolvedValueOnce([
+          {
+            id: 'role-1',
+            name: 'PLATFORM_ADMIN',
+            scope: 'platform',
+            rolePermissions: [{ permission: { code: 'system:manage' } }],
+            _count: { assignments: 1 },
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          {
+            id: 'role-2',
+            name: 'TA',
+            scope: 'school',
+            rolePermissions: [{ permission: { code: 'documents:read' } }],
+            _count: { assignments: 4 },
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ]);
+
+        const result = await service.findAllRoles();
+        expect(result).toHaveLength(2);
+        expect(result[0].name).toBe('PLATFORM_ADMIN');
+        expect(result[0].isBase).toBe(true);
+        expect(result[0].permissions).toEqual(['system:manage']);
+        expect(result[0].assignedUsersCount).toBe(1);
+
+        expect(result[1].name).toBe('TA');
+        expect(result[1].isBase).toBe(false);
+        expect(result[1].permissions).toEqual(['documents:read']);
+        expect(result[1].assignedUsersCount).toBe(4);
+      });
+    });
+
+    describe('findRoleById', () => {
+      it('returns role when found by id or name', async () => {
+        mockPrisma.role.findFirst.mockResolvedValueOnce({
+          id: 'role-custom-id',
+          name: 'CUSTOM_ROLE',
+          scope: 'school',
+          rolePermissions: [{ permission: { code: 'users:read' } }],
+          _count: { assignments: 2 },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        const result = await service.findRoleById('role-custom-id');
+        expect(result.id).toBe('role-custom-id');
+        expect(result.name).toBe('CUSTOM_ROLE');
+        expect(result.isBase).toBe(false);
+        expect(result.permissions).toEqual(['users:read']);
+      });
+
+      it('throws 404 NotFoundException when role does not exist', async () => {
+        mockPrisma.role.findFirst.mockResolvedValueOnce(null);
+        await expect(service.findRoleById('nonexistent')).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
+
+    describe('createRole', () => {
+      it('creates custom role and links requested permissions', async () => {
+        mockPrisma.role.findUnique.mockResolvedValueOnce(null);
+        mockPrisma.permission.findMany.mockResolvedValueOnce([{ id: 'p1', code: 'documents:read' }]);
+        mockPrisma.role.findFirst.mockResolvedValueOnce({
+          id: 'new-role-id',
+          name: 'TA_MATH',
+          scope: 'school',
+          rolePermissions: [{ permission: { code: 'documents:read' } }],
+          _count: { assignments: 0 },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        const result = await service.createRole({
+          name: 'ta_math',
+          scope: 'school',
+          permissions: ['documents:read'],
+        });
+
+        expect(mockPrisma.role.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              name: 'TA_MATH',
+              scope: 'school',
+            }),
+          }),
+        );
+        expect(mockPrisma.rolePermission.createMany).toHaveBeenCalled();
+        expect(result.name).toBe('TA_MATH');
+      });
+
+      it('rejects creating role with reserved base role name', async () => {
+        await expect(
+          service.createRole({
+            name: 'PLATFORM_ADMIN',
+            scope: 'platform',
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      });
+
+      it('rejects duplicate role name with 409 ConflictException', async () => {
+        mockPrisma.role.findUnique.mockResolvedValueOnce({ id: 'existing', name: 'TA_MATH' });
+        await expect(
+          service.createRole({
+            name: 'TA_MATH',
+            scope: 'school',
+          }),
+        ).rejects.toBeInstanceOf(ConflictException);
+      });
+    });
+
+    describe('updateRole', () => {
+      it('updates custom role and resyncs permissions', async () => {
+        mockPrisma.role.findFirst.mockResolvedValueOnce({
+          id: 'custom-id',
+          name: 'OLD_NAME',
+          scope: 'school',
+        });
+        mockPrisma.role.findUnique.mockResolvedValueOnce(null);
+        mockPrisma.permission.findMany.mockResolvedValueOnce([{ id: 'p2', code: 'spaces:read' }]);
+        mockPrisma.role.findFirst.mockResolvedValueOnce({
+          id: 'custom-id',
+          name: 'NEW_NAME',
+          scope: 'group',
+          rolePermissions: [{ permission: { code: 'spaces:read' } }],
+          _count: { assignments: 0 },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        const result = await service.updateRole('custom-id', {
+          name: 'new_name',
+          scope: 'group',
+          permissions: ['spaces:read'],
+        });
+
+        expect(mockPrisma.role.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: 'custom-id' },
+            data: expect.objectContaining({ name: 'NEW_NAME', scope: 'group' }),
+          }),
+        );
+        expect(mockPrisma.rolePermission.deleteMany).toHaveBeenCalledWith({ where: { roleId: 'custom-id' } });
+        expect(result.name).toBe('NEW_NAME');
+      });
+
+      it('rejects modifying system base roles with 400 BadRequestException', async () => {
+        mockPrisma.role.findFirst.mockResolvedValueOnce({
+          id: 'base-id',
+          name: 'SCHOOL_ADMIN',
+          scope: 'school',
+        });
+
+        await expect(
+          service.updateRole('base-id', {
+            name: 'RENAMED_SCHOOL_ADMIN',
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      });
+    });
+
+    describe('deleteRole', () => {
+      it('deletes custom role when not assigned to users', async () => {
+        mockPrisma.role.findFirst.mockResolvedValueOnce({
+          id: 'custom-id',
+          name: 'CUSTOM_TA',
+        });
+        mockPrisma.userAssignment.count.mockResolvedValueOnce(0);
+
+        const result = await service.deleteRole('custom-id');
+        expect(result.success).toBe(true);
+        expect(mockPrisma.role.delete).toHaveBeenCalledWith({ where: { id: 'custom-id' } });
+      });
+
+      it('rejects deleting system base roles', async () => {
+        mockPrisma.role.findFirst.mockResolvedValueOnce({
+          id: 'base-id',
+          name: 'CONTENT_MANAGER',
+        });
+
+        await expect(service.deleteRole('base-id')).rejects.toBeInstanceOf(BadRequestException);
+      });
+
+      it('blocks deleting role assigned to users and reports user count', async () => {
+        mockPrisma.role.findFirst.mockResolvedValueOnce({
+          id: 'in-use-id',
+          name: 'ACTIVE_ROLE',
+        });
+        mockPrisma.userAssignment.count.mockResolvedValueOnce(3);
+
+        await expect(service.deleteRole('in-use-id')).rejects.toThrow(
+          "Cannot delete role 'ACTIVE_ROLE': still assigned to 3 user(s)",
         );
       });
     });

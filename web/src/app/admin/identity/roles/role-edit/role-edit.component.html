@@ -1,0 +1,467 @@
+<div class="row">
+  <!-- Left Column: Role Details & Form -->
+  <div class="col-md-12 col-xl-5">
+    <app-card cardTitle="Role Details">
+      @if (isLoading()) {
+        <div class="py-5 text-center text-muted">
+          <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+          <span>Loading role details...</span>
+        </div>
+      } @else {
+        <!-- Role Status & Quick Actions Header -->
+        <div class="d-flex align-items-center justify-content-between mb-4 pb-3 border-bottom flex-wrap gap-2">
+          <div>
+            <h5 class="mb-1 f-w-600">{{ isCreateMode() ? (roleForm.get('name')?.value || 'New Role Definition') : role()?.name }}</h5>
+            <small class="text-muted d-block">
+              Authorization Scope: <span class="text-uppercase f-w-600 text-dark">{{ roleForm.get('scope')?.value }}</span>
+            </small>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span class="status-indicator me-2">
+              <i class="badge-circle {{ isReadOnly() ? 'bg-primary' : (isCreateMode() ? 'bg-info' : 'bg-success') }} me-2"></i>
+              <span class="f-w-600 f-14">{{ isReadOnly() ? 'System Base' : (isCreateMode() ? 'Draft' : 'Custom') }}</span>
+            </span>
+            @if (!isCreateMode() && !isReadOnly()) {
+              <button
+                type="button"
+                class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1"
+                (click)="openDeleteModal()"
+              >
+                <i class="ti ti-trash f-14"></i>
+                <span>Delete</span>
+              </button>
+            }
+          </div>
+        </div>
+
+        <!-- Role Form -->
+        <form [formGroup]="roleForm" (ngSubmit)="onSave()">
+          <!-- Role Name Input -->
+          <div class="form-group mb-3">
+            <label class="form-label" for="name">
+              Role Name <span class="text-danger">*</span>
+            </label>
+            <input
+              type="text"
+              class="form-control text-uppercase font-monospace"
+              id="name"
+              formControlName="name"
+              placeholder="e.g. TEACHING_ASSISTANT"
+              (input)="onRoleNameInput($event)"
+              [readonly]="isReadOnly()"
+            />
+            @if (roleForm.get('name')?.invalid && (roleForm.get('name')?.touched || roleForm.get('name')?.dirty)) {
+              @if (roleForm.get('name')?.errors?.['required']) {
+                <small class="text-danger d-block mt-1">Role name is required.</small>
+              } @else if (roleForm.get('name')?.errors?.['minlength']) {
+                <small class="text-danger d-block mt-1">Role name must be at least 2 characters.</small>
+              } @else if (roleForm.get('name')?.errors?.['maxlength']) {
+                <small class="text-danger d-block mt-1">Role name cannot exceed 50 characters.</small>
+              } @else if (roleForm.get('name')?.errors?.['pattern']) {
+                <small class="text-danger d-block mt-1">Only uppercase letters, numbers, and underscores are allowed (e.g. TEACHING_ASSISTANT).</small>
+              }
+            } @else {
+              <small class="text-muted d-block mt-1">Unique alphanumeric identifier with uppercase letters and underscores.</small>
+            }
+          </div>
+
+          <!-- Enterprise Scope Selection Cards -->
+          <div class="form-group mb-3">
+            <label class="form-label mb-1">
+              Authorization Scope <span class="text-danger">*</span>
+            </label>
+            <small class="text-muted d-block mb-3">
+              Defines the operational boundary where users assigned this role can exercise their permissions.
+            </small>
+            <div class="row g-2">
+              <!-- Platform Scope Card -->
+              <div class="col-12">
+                <div
+                  class="scope-option-card border rounded p-3 transition-all cursor-pointer"
+                  [ngClass]="{
+                    'active': roleForm.get('scope')?.value === 'platform',
+                    'disabled': isReadOnly()
+                  }"
+                  (click)="setScope('platform')"
+                >
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div class="d-flex align-items-center gap-3">
+                      <div class="scope-radio-indicator">
+                        <input
+                          type="radio"
+                          class="form-check-input"
+                          name="scopeOption"
+                          [checked]="roleForm.get('scope')?.value === 'platform'"
+                          [disabled]="isReadOnly()"
+                          (click)="$event.stopPropagation(); setScope('platform')"
+                        />
+                      </div>
+                      <div>
+                        <div class="d-flex align-items-center gap-2">
+                          <i class="ti ti-world text-primary f-16"></i>
+                          <span class="f-w-600 text-dark">Platform Scope</span>
+                          <span class="badge bg-light-primary text-primary border border-primary text-2xs">Global</span>
+                        </div>
+                        <small class="text-muted d-block mt-1">
+                          Grants tenant-wide reach across all schools, administrative modules, and global platform services.
+                        </small>
+                      </div>
+                    </div>
+                    @if (roleForm.get('scope')?.value === 'platform') {
+                      <span class="badge bg-primary text-white d-none d-sm-inline-flex align-items-center gap-1">
+                        <i class="ti ti-check"></i> Selected
+                      </span>
+                    }
+                  </div>
+                </div>
+              </div>
+
+              <!-- School Scope Card -->
+              <div class="col-12">
+                <div
+                  class="scope-option-card border rounded p-3 transition-all cursor-pointer"
+                  [ngClass]="{
+                    'active': roleForm.get('scope')?.value === 'school',
+                    'disabled': isReadOnly()
+                  }"
+                  (click)="setScope('school')"
+                >
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div class="d-flex align-items-center gap-3">
+                      <div class="scope-radio-indicator">
+                        <input
+                          type="radio"
+                          class="form-check-input"
+                          name="scopeOption"
+                          [checked]="roleForm.get('scope')?.value === 'school'"
+                          [disabled]="isReadOnly()"
+                          (click)="$event.stopPropagation(); setScope('school')"
+                        />
+                      </div>
+                      <div>
+                        <div class="d-flex align-items-center gap-2">
+                          <i class="ti ti-school text-info f-16"></i>
+                          <span class="f-w-600 text-dark">School Scope</span>
+                          <span class="badge bg-light-info text-info border border-info text-2xs">Institution</span>
+                        </div>
+                        <small class="text-muted d-block mt-1">
+                          Confined to the user's assigned school institution, its departments, course offerings, and campus rosters.
+                        </small>
+                      </div>
+                    </div>
+                    @if (roleForm.get('scope')?.value === 'school') {
+                      <span class="badge bg-primary text-white d-none d-sm-inline-flex align-items-center gap-1">
+                        <i class="ti ti-check"></i> Selected
+                      </span>
+                    }
+                  </div>
+                </div>
+              </div>
+
+              <!-- Group Scope Card -->
+              <div class="col-12">
+                <div
+                  class="scope-option-card border rounded p-3 transition-all cursor-pointer"
+                  [ngClass]="{
+                    'active': roleForm.get('scope')?.value === 'group',
+                    'disabled': isReadOnly()
+                  }"
+                  (click)="setScope('group')"
+                >
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div class="d-flex align-items-center gap-3">
+                      <div class="scope-radio-indicator">
+                        <input
+                          type="radio"
+                          class="form-check-input"
+                          name="scopeOption"
+                          [checked]="roleForm.get('scope')?.value === 'group'"
+                          [disabled]="isReadOnly()"
+                          (click)="$event.stopPropagation(); setScope('group')"
+                        />
+                      </div>
+                      <div>
+                        <div class="d-flex align-items-center gap-2">
+                          <i class="ti ti-hierarchy text-secondary f-16"></i>
+                          <span class="f-w-600 text-dark">Group Scope</span>
+                          <span class="badge bg-light-secondary text-secondary border text-2xs">Cohort / Team</span>
+                        </div>
+                        <small class="text-muted d-block mt-1">
+                          Restricted strictly to specific classes, student cohorts, or research project groups.
+                        </small>
+                      </div>
+                    </div>
+                    @if (roleForm.get('scope')?.value === 'group') {
+                      <span class="badge bg-primary text-white d-none d-sm-inline-flex align-items-center gap-1">
+                        <i class="ti ti-check"></i> Selected
+                      </span>
+                    }
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          @if (!isCreateMode()) {
+            <!-- Role Identifier with Copy Button (Uniform Mantis User Pattern) -->
+            <div class="form-group mb-3">
+              <label class="form-label">Role Identifier</label>
+              <div class="input-group">
+                <input
+                  type="text"
+                  class="form-control font-monospace"
+                  [value]="role()?.id"
+                  readonly
+                />
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary"
+                  (click)="copyRoleId()"
+                  [title]="copiedId() ? 'Copied!' : 'Copy Role ID'"
+                >
+                  {{ copiedId() ? 'Copied' : 'Copy' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Metadata Row -->
+            <div class="row mb-3">
+              <div class="col-6">
+                <small class="text-muted d-block">Created At</small>
+                <span class="text-sm f-w-500">{{ role()?.createdAt | date:'mediumDate' }}</span>
+              </div>
+              <div class="col-6">
+                <small class="text-muted d-block">Active Assignments</small>
+                <span class="text-sm f-w-500">{{ role()?.assignedUsersCount ?? 0 }} account(s)</span>
+              </div>
+            </div>
+          }
+
+          @if (isReadOnly()) {
+            <div class="alert alert-info py-2 px-3 mb-3 text-sm d-flex align-items-center gap-2">
+              <i class="ti ti-lock f-16 text-info"></i>
+              <span><strong>System Base Role</strong>: Built-in platform primitives cannot be modified or deleted.</span>
+            </div>
+          }
+
+          <!-- Form Buttons Bar (Uniform Mantis User Edit Pattern) -->
+          <div class="d-flex align-items-center justify-content-between pt-3 border-top flex-wrap gap-2 mt-4">
+            <a [routerLink]="['/admin/roles']" class="btn btn-outline-secondary">
+              Back to Roles
+            </a>
+            <div class="d-flex align-items-center gap-2">
+              @if (!isReadOnly()) {
+                <button
+                  type="button"
+                  class="btn btn-light"
+                  (click)="resetForm()"
+                  [disabled]="!isDirty() || isSaving()"
+                >
+                  Reset
+                </button>
+                <button
+                  type="submit"
+                  class="btn btn-primary d-inline-flex align-items-center gap-1"
+                  [disabled]="roleForm.invalid || !isDirty() || isSaving()"
+                >
+                  @if (isSaving()) {
+                    <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                    <span>Saving...</span>
+                  } @else {
+                    <span>{{ isCreateMode() ? 'Create Role' : 'Save Changes' }}</span>
+                  }
+                </button>
+              }
+            </div>
+          </div>
+        </form>
+      }
+    </app-card>
+  </div>
+
+  <!-- Right Column: Permissions Matrix with Category Tabs -->
+  <div class="col-md-12 col-xl-7">
+    <app-card cardTitle="Permissions Matrix">
+      <!-- Search & Global Counters Header -->
+      <div class="d-flex align-items-center justify-content-between mb-3 pb-2 border-bottom flex-wrap gap-2">
+        <div class="input-group input-group-sm flex-grow-1" style="max-width: 320px;">
+          <span class="input-group-text bg-white border-end-0">
+            <i class="ti ti-search text-muted"></i>
+          </span>
+          <input
+            type="text"
+            class="form-control border-start-0 ps-0"
+            placeholder="Filter permissions by code or keyword..."
+            [ngModel]="permissionSearchTerm()"
+            (ngModelChange)="onSearchTermChange($event)"
+          />
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-light-primary border border-primary text-primary px-2 py-1">
+            <strong>{{ totalSelectedCount() }}</strong> of {{ totalAvailableCount() }} granted
+          </span>
+          @if (!isReadOnly()) {
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-primary py-1 px-2"
+              (click)="selectAllPermissions()"
+              title="Grant all permissions across all categories"
+            >
+              Select All
+            </button>
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-secondary py-1 px-2"
+              (click)="clearAllPermissions()"
+              title="Revoke all selected permissions"
+            >
+              Clear All
+            </button>
+          }
+        </div>
+      </div>
+
+      <!-- Uniform Category Tabs (.nav-tabs.tabs-border) -->
+      <ul class="nav nav-tabs tabs-border mb-3 flex-nowrap overflow-auto" role="tablist">
+        <li class="nav-item">
+          <button
+            type="button"
+            class="nav-link text-nowrap py-2 px-3"
+            [class.active]="activeCategoryTab() === 'all'"
+            (click)="activeCategoryTab.set('all')"
+          >
+            All Categories
+            <span class="badge ms-1" [ngClass]="totalSelectedCount() > 0 ? 'bg-primary' : 'bg-light text-muted'">
+              {{ totalSelectedCount() }}/{{ totalAvailableCount() }}
+            </span>
+          </button>
+        </li>
+        @for (cat of groupedCategories(); track cat.key) {
+          <li class="nav-item">
+            <button
+              type="button"
+              class="nav-link text-nowrap py-2 px-3"
+              [class.active]="activeCategoryTab() === cat.key"
+              (click)="activeCategoryTab.set(cat.key)"
+            >
+              {{ cat.title.split('&')[0].trim() }}
+              <span class="badge ms-1" [ngClass]="getCategorySelectedCount(cat) > 0 ? 'bg-primary' : 'bg-light text-muted'">
+                {{ getCategorySelectedCount(cat) }}/{{ cat.permissions.length }}
+              </span>
+            </button>
+          </li>
+        }
+      </ul>
+
+      <!-- Category Content & Permission Selection Cards -->
+      <div class="permissions-scroll-container" style="max-height: 540px; overflow-y: auto;">
+        @if (isLoading()) {
+          <div class="text-center py-4 text-muted">
+            <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+            Loading permissions catalog...
+          </div>
+        } @else if (displayedCategories().length === 0) {
+          <div class="text-center py-5 text-muted">
+            <i class="ti ti-search f-24 mb-2 d-block"></i>
+            <p class="mb-2">No permissions matching search criteria in this category.</p>
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-secondary"
+              (click)="permissionSearchTerm.set(''); activeCategoryTab.set('all')"
+            >
+              Clear Filter & View All
+            </button>
+          </div>
+        } @else {
+          @for (category of displayedCategories(); track category.key) {
+            <div class="mb-4">
+              <!-- Category Header with Category Toggle -->
+              <div class="d-flex align-items-center justify-content-between border-bottom pb-2 mb-2 flex-wrap gap-2">
+                <div>
+                  <span class="f-w-600 text-sm text-dark">{{ category.title }}</span>
+                  <small class="text-muted text-xs d-block">{{ category.description }}</small>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <span class="badge bg-light text-muted border">
+                    {{ getCategorySelectedCount(category) }} / {{ category.permissions.length }} granted
+                  </span>
+                  @if (!isReadOnly()) {
+                    <button
+                      type="button"
+                      class="btn btn-xs btn-outline-secondary py-1 px-2 text-xs"
+                      (click)="toggleCategory(category)"
+                    >
+                      {{ isCategoryFullySelected(category) ? 'Deselect Category' : 'Select Category' }}
+                    </button>
+                  }
+                </div>
+              </div>
+
+              <!-- Permission Cards Grid -->
+              <div class="row g-2">
+                @for (perm of category.permissions; track perm.code) {
+                  <div class="col-md-6">
+                    <div
+                      class="permission-selection-card border rounded p-2 px-3 h-100 transition-all cursor-pointer"
+                      [ngClass]="{
+                        'active': isPermissionSelected(perm.code),
+                        'disabled': isReadOnly()
+                      }"
+                      (click)="togglePermission(perm.code)"
+                    >
+                      <div class="d-flex align-items-start gap-2">
+                        <div class="form-check mt-1 mb-0 flex-shrink-0">
+                          <input
+                            type="checkbox"
+                            class="form-check-input"
+                            [id]="'perm_' + perm.code"
+                            [checked]="isPermissionSelected(perm.code)"
+                            [disabled]="isReadOnly()"
+                            (click)="$event.stopPropagation(); togglePermission(perm.code)"
+                          />
+                        </div>
+                        <div class="flex-grow-1 overflow-hidden">
+                          <div class="d-flex align-items-center justify-content-between gap-1 mb-1">
+                            <span
+                              class="font-monospace text-xs f-w-600 text-truncate"
+                              [ngClass]="isPermissionSelected(perm.code) ? 'text-primary' : 'text-dark'"
+                              [title]="perm.code"
+                            >
+                              {{ perm.code }}
+                            </span>
+                            @if (isPermissionSelected(perm.code)) {
+                              <span class="badge bg-light-primary text-primary border border-primary text-2xs">Granted</span>
+                            } @else {
+                              <span class="badge bg-light text-muted border text-2xs">Optional</span>
+                            }
+                          </div>
+                          <small class="text-muted text-xs d-block line-clamp-2" [title]="perm.description || 'System capability'">
+                            {{ perm.description || 'System capability' }}
+                          </small>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                }
+              </div>
+            </div>
+          }
+        }
+      </div>
+    </app-card>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal (Standard Mantis Reusable Component) -->
+<app-confirmation-modal
+  [isOpen]="isDeleteModalOpen()"
+  [isLoading]="isDeleting()"
+  title="Delete Custom Role"
+  [message]="'Are you sure you want to permanently delete role \'' + (role()?.name || '') + '\'?'"
+  [detailText]="(role()?.assignedUsersCount ?? 0) > 0 ? 'Warning: Role is currently assigned to ' + role()?.assignedUsersCount + ' user(s).' : 'Role ID: ' + (role()?.id || '')"
+  confirmText="Delete Role"
+  confirmButtonClass="btn-danger"
+  iconType="danger"
+  (confirm)="confirmDelete()"
+  (cancel)="cancelDelete()"
+></app-confirmation-modal>

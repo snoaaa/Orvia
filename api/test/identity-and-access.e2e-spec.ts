@@ -1,4 +1,4 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
@@ -179,7 +179,7 @@ describe('IdentityAndAccess (e2e)', () => {
     expect(adminUser?.email).toBe(adminEmail);
     expect(adminUser?.status).toBe('ACTIVE');
     expect(adminUser?.passwordHash).toBeDefined();
-    expect(adminUser?.passwordHash).toMatch(/^\$2[aby]\$\d+\$/);
+    expect(adminUser?.passwordHash).toMatch(/^\$argon2id\$/);
   });
 
   it('should verify PLATFORM_ADMIN role assignment and role-permissions in database', async () => {
@@ -233,7 +233,7 @@ describe('IdentityAndAccess (e2e)', () => {
     expect(res.body.message).toContain('already exists');
   });
 
-  it('should hash user password securely with bcrypt on user creation', async () => {
+  it('should hash user password securely with argon2id on user creation', async () => {
     const email = `test-e2e-pwd-${Date.now()}@example.com`;
     const res = await request(app.getHttpServer())
       .post('/identity/users')
@@ -251,7 +251,7 @@ describe('IdentityAndAccess (e2e)', () => {
     });
 
     expect(userInDb?.passwordHash).toBeDefined();
-    expect(userInDb?.passwordHash).toMatch(/^\$2[aby]\$\d+\$/);
+    expect(userInDb?.passwordHash).toMatch(/^\$argon2id\$/);
     expect(userInDb?.passwordHash).not.toBe('SuperSecret2026!');
   });
 

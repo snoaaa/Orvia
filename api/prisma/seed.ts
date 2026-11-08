@@ -1,5 +1,5 @@
 import { PrismaClient, UserStatus } from '@prisma/client';
-import bcrypt from 'bcryptjs';
+import argon2 from 'argon2';
 
 const prisma = new PrismaClient();
 
@@ -264,7 +264,7 @@ async function main(): Promise<void> {
   const adminPassword = process.env.PLATFORM_ADMIN_PASSWORD?.trim() || process.env.ADMIN_PASSWORD?.trim() || 'wamdp_admin_2026!';
   const adminName = process.env.PLATFORM_ADMIN_NAME?.trim() || process.env.ADMIN_NAME?.trim() || 'Platform Administrator';
 
-  const passwordHash = await bcrypt.hash(adminPassword, 12);
+  const passwordHash = await argon2.hash(adminPassword);
 
   const adminUser = await prisma.user.upsert({
     where: { email: adminEmail },
