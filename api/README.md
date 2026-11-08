@@ -312,6 +312,14 @@ users of their own school(s), and only those assignments and groups; another sch
 without a school, is 403. Sessions belong to the user, not to a school, so all active ones are listed.
 Password hashes, tokens and Google ids are never returned. Invalid UUID → 400, unknown user → 404. This replaces the former `GET /identity/users/{id}`.
 
+### Edit a user: `PATCH /users/{id}` (#40, `users:update`)
+
+Body: `fullName` and/or `email` (at least one, otherwise 400). The status cannot be changed here.
+A new email must match the allowed domains of the user's schools (400), following the login rule: a
+user who also belongs to a school without domain restrictions passes. An email used by someone else
+is 409. School admins can only edit users of their own school(s) (403). `updated_at` changes only when
+a value really changes. The older `PATCH /identity/users/{id}` applies the same email checks.
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of

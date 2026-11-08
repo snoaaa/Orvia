@@ -1,9 +1,11 @@
-import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
+import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { ListUsersQueryDto } from '../dto/index.js';
-import { PaginatedUsersEntity, UserDetailEntity } from '../entities/index.js';
+import { ListUsersQueryDto, UpdateUserProfileDto } from '../dto/index.js';
+import { PaginatedUsersEntity, UserDetailEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
 /**
@@ -54,5 +56,27 @@ export class UsersController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<UserDetailEntity> {
     return this.identityService.getUserDetail(id, actor);
+  }
+
+  @Patch(':id')
+  @RequirePermission('users:update')
+  @ApiOperation({
+    summary: "Edit a user's profile (full name, email)",
+    description:
+      "A new email must match the allowed domains of the user's schools. School admins can only edit users of their " +
+      'own schools (403 otherwise). The status cannot be changed here.',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'The updated user', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'Invalid id or body, nothing to update, or email domain not allowed' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 409, description: 'Email already used by another user' })
+  async updateUser(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateUserProfileDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.identityService.updateUserProfile(id, dto, actor, auditContextFromRequest(req));
   }
 }

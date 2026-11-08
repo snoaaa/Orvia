@@ -84,7 +84,10 @@ export class IdentityAndAccessController {
 
   @Patch('users/:id')
   @RequirePermission('users:update')
-  @ApiOperation({ summary: 'Update an existing user (changing the status also needs users:suspend)' })
+  @ApiOperation({
+    summary: 'Update an existing user (changing the status also needs users:suspend)',
+    description: 'For profile edits, use PATCH /users/{id}, which replaces this route.',
+  })
   @ApiParam({ name: 'id', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User updated', type: UserEntity })
   async updateUser(
