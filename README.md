@@ -74,7 +74,7 @@ The backend is modularized according to the system specifications (`docs/RAGBack
 
 ## Branch Rules & Code Review Policy
 
-This repository enforces branch protection and code ownership on `develop` and `main`:
+This repository enforces branch protection and code ownership on `develop` (default integration branch) and `main` (production release branch):
 - **Designated Reviewers & Code Owners**: [@snoaaa](https://github.com/snoaaa) and [@N2K-keli](https://github.com/N2K-keli)
 - Direct pushes to protected branches are disabled. All merges require pull requests with approval from at least one designated reviewer/code owner.
 - Detailed contribution rules and checklist are documented in [CONTRIBUTING.md](CONTRIBUTING.md).

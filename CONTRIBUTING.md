@@ -8,13 +8,14 @@ Thank you for contributing to the WAMDP project! To maintain high code quality, 
 
 WAMDP follows a staged GitFlow branching model:
 
-- **`develop`**: The primary **integration branch** (our second main).
-  - **All active development, feature, bugfix, and chore PRs must target `develop`.**
+- **`develop`**: The primary **integration and default repository branch**.
+  - **All active development, feature, bugfix, and chore PRs must target `develop`** (pre-selected by GitHub by default).
+  - **Closing keywords (`closes #...`, `fixes #...`) automatically close issues upon merging into `develop`.**
   - **Direct pushes are strictly disabled.**
   - **Force pushes and branch deletions are blocked.**
   - **All merges must happen via Pull Requests (PRs)** with required approvals.
   - Acts as the pre-release/staging baseline where all newly merged work is tested together.
-- **`main`**: The **production branch** (default repository branch for cloning).
+- **`main`**: The **production release branch**.
   - Contains strictly stable, release-ready code deployed to production.
   - **Direct pushes are strictly disabled.**
   - Code is promoted from `develop` into `main` via scheduled Release / Promotion PRs or tagged releases.
@@ -52,7 +53,7 @@ All pull requests targeting `develop` or `main` must be reviewed and approved by
 ## 3. Pull Request Guidelines
 
 Before submitting your PR:
-1. **Target Base Branch**: **All pull requests must target `develop`.** Because `main` is the default repository branch, GitHub pre-selects `main` in the base branch dropdown; you **must manually switch the base branch to `develop`** when opening a pull request. Do not open feature or bugfix PRs directly against `main`.
+1. **Target Base Branch**: **All pull requests must target `develop`.** With `develop` configured as the default repository branch, GitHub automatically selects `develop` as the base branch when opening a pull request. Do not open feature or bugfix PRs directly against `main`.
 2. **Sync with `develop`**: Ensure your branch is rebased or up to date with `develop` (`git pull origin develop`).
 3. **Run Tests & Linters**:
    - Backend (`api/`): Run unit and e2e tests (`npm run test`, `npm run test:e2e`).

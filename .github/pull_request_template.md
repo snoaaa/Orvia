@@ -5,8 +5,8 @@
 <!-- Link related issues e.g. Closes #123 -->
 
 ## Required Reviewers
-> **IMPORTANT**: Make sure the base branch for this PR is set to **`develop`** (GitHub defaults to `main`).
-This repository enforces branch protection and code ownership on `develop` (integration) and `main` (production).
+> **NOTE**: The default repository branch is **`develop`**, so PRs will automatically target `develop`.
+This repository enforces branch protection and code ownership on `develop` (integration, default) and `main` (production).
 Every pull request must be reviewed and approved by at least one of the code owners:
 - [ ] @snoaaa
 - [ ] @N2K-keli
@@ -18,7 +18,7 @@ Every pull request must be reviewed and approved by at least one of the code own
 - [ ] Refactor / Chore / Documentation
 
 ## Checklist
-- [ ] This PR targets the `develop` branch (manually select `develop` from the GitHub base branch dropdown; `main` is only for release promotions / hotfixes)
+- [ ] This PR targets the `develop` branch (default base branch; `main` is strictly reserved for release promotions / hotfixes)
 - [ ] My code follows the project's architecture and coding standards
 - [ ] I have performed a self-review of my own code
 - [ ] Existing and new automated tests pass locally
