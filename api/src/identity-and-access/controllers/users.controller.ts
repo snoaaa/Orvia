@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
@@ -64,7 +64,7 @@ export class UsersController {
     summary: "Edit a user's profile (full name, email)",
     description:
       "A new email must match the allowed domains of the user's schools. School admins can only edit users of their " +
-      'own schools (403 otherwise). The status cannot be changed here.',
+      'own schools (403 otherwise). The status cannot be changed here: use PATCH /users/{id}/suspend or /reactivate.',
   })
   @ApiParam({ name: 'id', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'The updated user', type: UserEntity })
@@ -78,5 +78,63 @@ export class UsersController {
     @Req() req: Request,
   ): Promise<UserEntity> {
     return this.identityService.updateUserProfile(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Patch(':id/suspend')
+  @RequirePermission('users:suspend')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Suspend a user and revoke all their sessions (Section 4.6)',
+    description:
+      'Sets the status to SUSPENDED and revokes every active session, so the user can no longer sign in, refresh, ' +
+      'or use an access token already issued. Platform admins can suspend any user; school admins only users ' +
+      'whose schools are all theirs, and never a user with a higher-level (platform) role. Nobody can suspend ' +
+      'themselves. Idempotent: suspending an already suspended user returns 200 and revokes any session left.',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'The suspended user', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'id is not a valid UUID' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'Missing users:suspend, own account, a user outside your schools (or in a school you do not administer), ' +
+      'or a user with a higher-level role',
+  })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async suspendUser(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.identityService.suspendUser(id, actor, auditContextFromRequest(req));
+  }
+
+  @Patch(':id/reactivate')
+  @RequirePermission('users:suspend')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reactivate a suspended user (Section 4.6)',
+    description:
+      'Sets a SUSPENDED user back to ACTIVE so they can sign in again. Sessions revoked by the suspension stay ' +
+      'revoked. Same rules as suspension: platform admins act on any user; school admins only on users whose ' +
+      'schools are all theirs, never on a higher-level (platform) role, and never on themselves. Idempotent for an ' +
+      'ACTIVE user. An INVITED user cannot be reactivated (409).',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'The reactivated user', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'id is not a valid UUID' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'Missing users:suspend, own account, a user outside your schools (or in a school you do not administer), ' +
+      'or a user with a higher-level role',
+  })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 409, description: 'The user is INVITED, not suspended' })
+  async reactivateUser(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<UserEntity> {
+    return this.identityService.reactivateUser(id, actor);
   }
 }

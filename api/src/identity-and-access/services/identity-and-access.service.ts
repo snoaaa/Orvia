@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import type { UserStatus } from '@prisma/client';
+import type { User, UserStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import argon2 from 'argon2';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
@@ -10,6 +10,7 @@ import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
+import { highestRoleLevel } from '../../auth/utils/role-level.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto, UpdateUserProfileDto } from '../dto/index.js';
@@ -34,6 +35,9 @@ interface RoleWithPermissions {
   scope: string;
   rolePermissions?: ReadonlyArray<{ permission: { code: string } }>;
 }
+
+/** A user with the school and role scope of each assignment: what the account-status rules need. */
+type UserWithAssignments = User & { assignments: { schoolId: string; role: { scope: string } }[] };
 
 /** Admin-ness of a role row (see `auth/utils/admin-role.util.ts`); a missing include counts as none. */
 function roleGrantsAdmin(role: RoleWithPermissions): boolean {
@@ -218,17 +222,109 @@ export class IdentityAndAccessService {
     });
   }
 
-  /** Loads a user and throws 403 unless `actor` has `permission` in one of the user's schools. */
-  private async findUserInScope(id: string, actor: AuthenticatedUser, permission: string) {
+  /** Loads a user with the school and role scope of each assignment; 404 if they do not exist. */
+  private async findUserWithAssignments(id: string): Promise<UserWithAssignments> {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      include: { assignments: { select: { schoolId: true } } },
+      include: { assignments: { select: { schoolId: true, role: { select: { scope: true } } } } },
     });
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
+    return user;
+  }
+
+  /** Loads a user and throws 403 unless `actor` has `permission` in one of the user's schools. */
+  private async findUserInScope(id: string, actor: AuthenticatedUser, permission: string): Promise<UserWithAssignments> {
+    const user = await this.findUserWithAssignments(id);
     assertSchoolAccess(actor, permission, user.assignments.map((a) => a.schoolId));
     return user;
+  }
+
+  /**
+   * Rules for changing another user's account status (Section 4.6), shared by every suspension and
+   * reactivation path so none can bypass them:
+   *  - nobody can act on their own account;
+   *  - platform-wide `users:suspend` reaches every user; otherwise the actor must hold it in ALL of
+   *    the target's schools (the status applies to the whole account), and a user without any
+   *    school is out of reach;
+   *  - the target must not hold a higher-level role than the actor (see role-level.util.ts).
+   */
+  private assertCanChangeAccountStatus(target: UserWithAssignments, actor: AuthenticatedUser, action: 'suspend' | 'reactivate'): void {
+    if (target.id === actor.id) {
+      throw new ForbiddenException(`You cannot ${action} your own account`);
+    }
+
+    const actorSchools = schoolsWithPermission(actor, 'users:suspend');
+    if (actorSchools !== 'all') {
+      const targetSchools = target.assignments.map((a) => a.schoolId);
+      if (targetSchools.length === 0 || !targetSchools.every((schoolId) => actorSchools.includes(schoolId))) {
+        throw new ForbiddenException(`You can only ${action} users whose schools you all administer`);
+      }
+    }
+
+    const actorLevel = highestRoleLevel(
+      actor.assignments.filter((a) => a.permissions.includes('users:suspend')).map((a) => a.scope),
+    );
+    const targetLevel = highestRoleLevel(target.assignments.map((a) => a.role.scope));
+    if (targetLevel > actorLevel) {
+      throw new ForbiddenException(`You cannot ${action} a user with a higher-level role`);
+    }
+  }
+
+  /**
+   * PATCH /users/:id/suspend (#41): blocks the account and revokes all its sessions.
+   * Idempotent: an already suspended user stays suspended and any session left active is revoked.
+   */
+  async suspendUser(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    const target = await this.findUserWithAssignments(id);
+    this.assertCanChangeAccountStatus(target, actor, 'suspend');
+    return this.applySuspension(target, actor, auditContext);
+  }
+
+  /**
+   * PATCH /users/:id/reactivate (#42): sets a SUSPENDED user back to ACTIVE so they can sign in again.
+   * Sessions revoked by the suspension stay revoked: the user signs in again to get new ones.
+   * Idempotent for an ACTIVE user; an INVITED user is refused (409), so the invitation flow is not skipped.
+   */
+  async reactivateUser(id: string, actor: AuthenticatedUser): Promise<UserEntity> {
+    const target = await this.findUserWithAssignments(id);
+    this.assertCanChangeAccountStatus(target, actor, 'reactivate');
+    if (target.status === 'INVITED') {
+      throw new ConflictException('Only a suspended user can be reactivated (this user is still INVITED)');
+    }
+    const user =
+      target.status === 'ACTIVE'
+        ? target
+        : await this.prisma.user.update({ where: { id }, data: { status: 'ACTIVE' } });
+    return UserMapper.toEntity(user);
+  }
+
+  /**
+   * Sets SUSPENDED first, then revokes the sessions (each revocation is audited as session_revoked).
+   * In this order the user is blocked even if a revocation fails: the guard and the refresh check
+   * the status on every request, and calling suspend again revokes what is left.
+   */
+  private async applySuspension(
+    user: User,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext,
+  ): Promise<UserEntity> {
+    const suspended =
+      user.status === 'SUSPENDED'
+        ? user
+        : await this.prisma.user.update({ where: { id: user.id }, data: { status: 'SUSPENDED' } });
+    await this.sessions.revokeAllForUser(
+      user.id,
+      'user_suspended',
+      { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+      auditContext,
+    );
+    return UserMapper.toEntity(suspended);
   }
 
   /**
@@ -432,7 +528,6 @@ export class IdentityAndAccessService {
     return role;
   }
 
-  /** Suspending a user also revokes all their sessions (#12), so no token keeps working. */
   /** PATCH /users/:id (#40): full name and email only. */
   async updateUserProfile(
     id: string,
@@ -453,8 +548,14 @@ export class IdentityAndAccessService {
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<UserEntity> {
     const target = await this.findUserInScope(id, actor, 'users:update');
-    if (dto.status) {
-      // Suspending / reactivating is a separate right from editing a profile.
+    // Suspending and reactivating go through the same rules as their PATCH /users/:id/* routes, before any write.
+    const suspending = dto.status?.toUpperCase() === 'SUSPENDED';
+    if (suspending) {
+      this.assertCanChangeAccountStatus(target, actor, 'suspend');
+    } else if (dto.status?.toUpperCase() === 'ACTIVE') {
+      this.assertCanChangeAccountStatus(target, actor, 'reactivate');
+    } else if (dto.status) {
+      // Any other status is a separate right from editing a profile.
       assertSchoolAccess(actor, 'users:suspend', target.assignments.map((a) => a.schoolId));
     }
 
@@ -485,23 +586,13 @@ export class IdentityAndAccessService {
       }
     }
 
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: {
-        ...(dto.email && { email: dto.email.trim().toLowerCase() }),
-        ...(dto.fullName && { fullName: dto.fullName.trim() }),
-        ...(dto.status && { status: dto.status.toUpperCase() as UserStatus }),
-      },
-    });
-    if (updated.status === 'SUSPENDED') {
-      await this.sessions.revokeAllForUser(
-        id,
-        'user_suspended',
-        { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
-        auditContext,
-      );
-    }
-    return UserMapper.toEntity(updated);
+    const data: Prisma.UserUpdateInput = {
+      ...(dto.email && { email: dto.email.trim().toLowerCase() }),
+      ...(dto.fullName && { fullName: dto.fullName.trim() }),
+      ...(dto.status && !suspending && { status: dto.status.toUpperCase() as UserStatus }),
+    };
+    const updated = Object.keys(data).length > 0 ? await this.prisma.user.update({ where: { id }, data }) : target;
+    return suspending ? this.applySuspension(updated, actor, auditContext) : UserMapper.toEntity(updated);
   }
 
   /**
