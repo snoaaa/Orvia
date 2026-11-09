@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-/** A user's role in a school, optionally in one of its groups (POST /assignments, #47). */
+/** A user's role in a school, optionally in one of its groups (POST /assignments #47, PATCH /assignments/:id #48). */
 export class AssignmentEntity {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174005' })
   id: string;
@@ -28,6 +28,12 @@ export class AssignmentEntity {
 
   @ApiProperty({ example: '2026-11-09T12:00:00.000Z' })
   createdAt: Date;
+
+  @ApiProperty({
+    example: '2026-11-09T12:00:00.000Z',
+    description: 'Moves only on a real change of role or group, so the next mobile sync picks the change up',
+  })
+  updatedAt: Date;
 
   constructor(partial: Partial<AssignmentEntity>) {
     Object.assign(this, partial);

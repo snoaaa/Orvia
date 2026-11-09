@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Post, Query, Req } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateAssignmentDto, ListAssignableRolesQueryDto } from '../dto/index.js';
+import { CreateAssignmentDto, ListAssignableRolesQueryDto, UpdateAssignmentDto } from '../dto/index.js';
 import { AssignableRoleEntity, AssignmentEntity } from '../entities/index.js';
 import { AssignmentsService } from '../services/assignments.service.js';
 
@@ -45,6 +45,41 @@ export class AssignmentsController {
     @Req() req: Request,
   ): Promise<AssignmentEntity> {
     return this.assignmentsService.createAssignment(dto, actor, auditContextFromRequest(req));
+  }
+
+  @Patch(':id')
+  @RequirePermission('users:assign_role')
+  @ApiOperation({
+    summary: "Change an assignment's role and/or group",
+    description:
+      'The school of an assignment cannot be changed here: only `role` and `groupId`. To move a user to another ' +
+      'school, create an assignment there with POST /assignments. Re-runs the checks of POST /assignments: the new ' +
+      'role must be at or below your own level, the group must belong to the assignment school, a platform role ' +
+      'cannot have a group, and you cannot edit a user who outranks you. A new group moves the user from the old ' +
+      'group members to the new one; `groupId: null` removes the group. Without a real change nothing is written ' +
+      'and `updatedAt` stays the same; otherwise `updatedAt` moves so the next mobile sync picks it up. Records ' +
+      'identity_access/assignment_updated.',
+  })
+  @ApiParam({ name: 'id', description: 'Assignment id (UUID)' })
+  @ApiResponse({ status: 200, description: 'The assignment after the change (unchanged when nothing changed)', type: AssignmentEntity })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Invalid body (empty, unknown field such as schoolId, invalid UUID), unknown role, deactivated school, ' +
+      'group of another school, or a group on a platform role',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Missing permission, another school, a role above your level, or a user who outranks you',
+  })
+  @ApiResponse({ status: 404, description: 'Assignment or group not found' })
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateAssignmentDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<AssignmentEntity> {
+    return this.assignmentsService.updateAssignment(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Get('assignable-roles')

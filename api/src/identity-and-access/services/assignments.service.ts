@@ -7,12 +7,13 @@ import { ASSIGN_ROLE_PERMISSION, assertCanGrantRole, grantableRoleLevel } from '
 import { highestRoleLevel, roleScopeLevel } from '../../auth/utils/role-level.util.js';
 import { assertSchoolAccess } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateAssignmentDto } from '../dto/index.js';
+import type { CreateAssignmentDto, UpdateAssignmentDto } from '../dto/index.js';
 import { AssignableRoleEntity, AssignmentEntity } from '../entities/index.js';
 
 /**
  * Assignments (Sections 4.5 and 4.7): a user's role in a school, optionally in one of its groups.
- * A user has at most one assignment per school; changing it goes through PATCH /identity/users/:id/role.
+ * A user has at most one assignment per school. Its role and group change through PATCH /assignments/:id
+ * (or the role alone through PATCH /identity/users/:id/role); its school never changes.
  */
 @Injectable()
 export class AssignmentsService {
@@ -60,9 +61,7 @@ export class AssignmentsService {
     }
 
     assertCanGrantRole(actor, role, dto.schoolId);
-    if (highestRoleLevel(target.assignments.map((a) => a.role.scope)) > grantableRoleLevel(actor, dto.schoolId)) {
-      throw new ForbiddenException('You cannot assign a user who holds a higher-level role');
-    }
+    this.assertCanActOnUser(actor, target.assignments, dto.schoolId);
 
     const group = dto.groupId ? await this.findGroupOfSchool(dto.groupId, dto.schoolId, role.scope) : null;
 
@@ -115,7 +114,145 @@ export class AssignmentsService {
       role: role.name,
       roleScope: role.scope,
       createdAt: created.createdAt,
+      updatedAt: created.updatedAt,
     });
+  }
+
+  /**
+   * PATCH /assignments/:id (#48): changes the role and/or the group of an assignment, never its school.
+   * Re-runs the checks of POST /assignments:
+   *
+   *  - 404: unknown assignment or group. 400: empty body, unknown role, deactivated school, group of another
+   *    school, or a group on a platform role (also when only the role changes and the current group is kept).
+   *  - 403: another school, a role above the admin's own level, or a user who outranks the admin.
+   *  - No change → no write and no audit event, so `updated_at` only moves on a real change (the mobile sync
+   *    relies on it, Section 4.7).
+   *  - A new group: the user leaves the old group's members and joins the new one; `groupId: null` only
+   *    removes the old membership. The assignment is the only source of a membership in its school (a group
+   *    belongs to one school, a user has one assignment per school), so the old one can go.
+   */
+  async updateAssignment(
+    id: string,
+    dto: UpdateAssignmentDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<AssignmentEntity> {
+    if (dto.role === undefined && dto.groupId === undefined) {
+      throw new BadRequestException('Nothing to update: give a role and/or a groupId');
+    }
+
+    const assignment = await this.prisma.userAssignment.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        groupId: true,
+        createdAt: true,
+        updatedAt: true,
+        user: {
+          select: { id: true, email: true, assignments: { select: { role: { select: { scope: true } } } } },
+        },
+        school: { select: { id: true, name: true, status: true } },
+        role: { select: { id: true, name: true, scope: true } },
+        group: { select: { id: true, name: true } },
+      },
+    });
+    if (!assignment) {
+      throw new NotFoundException(`Assignment with ID ${id} not found`);
+    }
+    const { user, school } = assignment;
+
+    assertSchoolAccess(actor, ASSIGN_ROLE_PERMISSION, school.id);
+    if (school.status === 'deactivated') {
+      throw new BadRequestException('Cannot change an assignment in a deactivated school');
+    }
+    this.assertCanActOnUser(actor, user.assignments, school.id);
+
+    let role = assignment.role;
+    if (dto.role !== undefined && dto.role !== role.name) {
+      const found = await this.prisma.role.findUnique({
+        where: { name: dto.role },
+        select: { id: true, name: true, scope: true },
+      });
+      if (!found) {
+        throw new BadRequestException(`Unknown role '${dto.role}'`);
+      }
+      assertCanGrantRole(actor, found, school.id);
+      role = found;
+    }
+
+    const groupId = dto.groupId === undefined ? assignment.groupId : dto.groupId;
+    const toEntity = (group: { id: string; name: string } | null, updatedAt: Date) =>
+      new AssignmentEntity({
+        id: assignment.id,
+        userId: user.id,
+        schoolId: school.id,
+        schoolName: school.name,
+        groupId: group?.id ?? null,
+        groupName: group?.name ?? null,
+        role: role.name,
+        roleScope: role.scope,
+        createdAt: assignment.createdAt,
+        updatedAt,
+      });
+
+    if (role.id === assignment.role.id && groupId === assignment.groupId) {
+      return toEntity(assignment.group, assignment.updatedAt);
+    }
+    const group = groupId ? await this.findGroupOfSchool(groupId, school.id, role.scope) : null;
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`;
+      // Re-read under the lock, so a concurrent PATCH cannot leave a stale group membership behind.
+      const current = await tx.userAssignment.findUnique({
+        where: { id: assignment.id },
+        select: { groupId: true, updatedAt: true, role: { select: { id: true, name: true } } },
+      });
+      if (!current) {
+        throw new NotFoundException(`Assignment with ID ${id} not found`);
+      }
+      if (current.role.id === role.id && current.groupId === groupId) {
+        return { changed: false as const, updatedAt: current.updatedAt };
+      }
+      const updated = await tx.userAssignment.update({
+        where: { id: assignment.id },
+        data: { roleId: role.id, groupId },
+        select: { updatedAt: true },
+      });
+      if (current.groupId !== groupId) {
+        if (current.groupId) {
+          await tx.groupMember.deleteMany({ where: { groupId: current.groupId, userId: user.id } });
+        }
+        if (groupId) {
+          await tx.groupMember.upsert({
+            where: { groupId_userId: { groupId, userId: user.id } },
+            create: { groupId, userId: user.id },
+            update: {},
+          });
+        }
+      }
+      return { changed: true as const, updatedAt: updated.updatedAt, previous: current };
+    });
+
+    if (result.changed) {
+      await this.audit.record(
+        AuditEvents.assignmentUpdated(
+          {
+            assignmentId: assignment.id,
+            userId: user.id,
+            email: user.email,
+            schoolId: school.id,
+            role: role.name,
+            previousRole: result.previous.role.name,
+            groupId,
+            previousGroupId: result.previous.groupId,
+            updatedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+      );
+    }
+
+    return toEntity(group, result.updatedAt);
   }
 
   /**
@@ -132,6 +269,17 @@ export class AssignmentsService {
       .map((r) => new AssignableRoleEntity({ ...r, level: roleScopeLevel(r.scope) }))
       .filter((r) => r.level <= maxLevel)
       .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name));
+  }
+
+  /** 403 when the user already holds a role above the admin's own level in that school (no acting on a superior). */
+  private assertCanActOnUser(
+    actor: AuthenticatedUser,
+    targetAssignments: readonly { role: { scope: string } }[],
+    schoolId: string,
+  ): void {
+    if (highestRoleLevel(targetAssignments.map((a) => a.role.scope)) > grantableRoleLevel(actor, schoolId)) {
+      throw new ForbiddenException('You cannot assign a user who holds a higher-level role');
+    }
   }
 
   /** The group must exist (404) and belong to the school (400); a platform role is never limited to a group (400). */
