@@ -335,7 +335,7 @@ unknown school → 404, deactivated school → 400.
 ## Assignments
 
 `src/identity-and-access/controllers/assignments.controller.ts`, under the **Assignments** tag in Swagger
-(Sections 4.5 and 4.7). An assignment gives a user a role in a school, optionally in one of its groups. Both
+(Sections 4.5 and 4.7). An assignment gives a user a role in a school, optionally in one of its groups. All
 routes need `users:assign_role` (platform and school admins).
 
 **Role level** (`src/auth/utils/role-level.util.ts`) comes from the role scope: platform 3 > school 2 > group 1
@@ -350,15 +350,44 @@ refuses a role above it, here and in `PATCH /identity/users/{id}/role`.
 ```
 
 - One assignment per user per school, enforced by the service (the user row is locked while checking): a second
-  one → 409; change it with `PATCH /identity/users/{id}/role`. The database has no unique index on it yet.
+  one → 409; change it with `PATCH /assignments/{id}` (or `PATCH /identity/users/{id}/role`). The database has no unique index on it yet.
 - The group must belong to the school (400) and exist (404); a platform role cannot have a group (400). With a
   group, the user is also added to its members (`group_members`), so it shows under `groups` in `GET /users/{id}`.
 - 403: another school, a role above the admin's level, or a user who already holds a higher-level role.
 - Unknown user, school or group → 404; unknown role or deactivated school → 400.
 
 Answer 201 with `id`, `userId`, `schoolId`, `schoolName`, `groupId`, `groupName`, `role`, `roleScope`,
-`createdAt`. Audited as `identity_access/role_assigned` (with `groupId`, `previousRole: null`). The assignment
-appears in `GET /users/{id}`.
+`createdAt`, `updatedAt`. Audited as `identity_access/role_assigned` (with `groupId`, `previousRole: null`). The
+assignment appears in `GET /users/{id}`.
+
+### Update an assignment: `PATCH /assignments/{id}` (#48)
+
+```json
+{ "role": "STAFF", "groupId": "<uuid> | null" }
+```
+
+Both fields are optional, but at least one is required (empty body → 400). **The school is not editable**:
+`schoolId` is not a field (sending it → 400); to move a user to another school, create an assignment there.
+
+- `role` left out keeps the role; `groupId` left out keeps the group, `null` removes it.
+- Same checks as `POST /assignments`: another school, a role above the admin's level, or a user who already holds
+  a higher-level role → 403; unknown role, deactivated school, group of another school, or a group on a platform
+  role → 400 (also when only the role becomes a platform role and the current group is kept: send
+  `groupId: null` with it); unknown assignment or group → 404.
+- **Group members**: a new group removes the user from the old group's members and adds them to the new one;
+  `groupId: null` only removes the old membership. The assignment is the only source of a membership in its school
+  (a group belongs to one school, a user has one assignment per school).
+- **`updated_at`** (Section 4.7): moves only on a real change, so the next mobile sync picks it up. When the role
+  and group stay the same, nothing is written, nothing is audited, and `updatedAt` is unchanged. Nothing is written
+  to `sync_changes` yet (the mobile sync is still a stub).
+- The user row is locked during the write and the assignment re-read under the lock, so two simultaneous changes
+  cannot leave a stale group membership.
+
+Answer 200 with the assignment (same shape as `POST`). Audited as `identity_access/assignment_updated`.
+
+`PATCH /identity/users/{id}/role` also changes a role, keyed by user and `schoolId`: it changes the role only
+(and creates the assignment if missing), never touches the group or `group_members`, and does not yet check the
+target user's level or a deactivated school. Prefer `PATCH /assignments/{id}` to edit an existing assignment.
 
 ### Assignable roles: `GET /assignments/assignable-roles` (#47)
 
@@ -434,6 +463,7 @@ roles get 403. The older `POST /identity/roles`, used by the web role editor, ru
 | `authentication` | `session_revoked` | A session is revoked (admin action, suspension, token reuse) | the admin, or anonymous if automatic | `session` | `ownerUserId`, `reason` |
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
+| `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `security` | `access_denied` | Any HTTP 403 | the user if authenticated | `route` (`METHOD /path`) | `reason`, `requiredPermission` |
 | `security` | `account_locked` | An account is locked (e.g. too many failed logins) | anonymous | `user` | `email`, `reason`, `failedAttempts`, `lockedUntil` |
 

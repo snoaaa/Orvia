@@ -12,4 +12,5 @@ export * from './update-user-profile.dto.js';
 export * from './assign-role.dto.js';
 export * from './query-permission-overview.dto.js';
 export * from './create-assignment.dto.js';
+export * from './update-assignment.dto.js';
 export * from './list-assignable-roles-query.dto.js';

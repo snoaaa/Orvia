@@ -7,8 +7,8 @@ import { TokenService } from '../src/auth/services/token.service.js';
 import { PrismaService } from '../src/database/prisma.service.js';
 
 /**
- * POST /assignments and GET /assignments/assignable-roles (#47), plus PATCH /identity/users/:id/role,
- * which now uses the same role-level check.
+ * POST /assignments and GET /assignments/assignable-roles (#47), PATCH /assignments/:id (#48), plus
+ * PATCH /identity/users/:id/role, which now uses the same role-level check.
  */
 describe('Assignments (e2e)', () => {
   let app: INestApplication<App>;
@@ -16,7 +16,7 @@ describe('Assignments (e2e)', () => {
   let tokens: TokenService;
   const stamp = Date.now();
   const schools = { A: '', B: '', Off: '' };
-  const groups = { A1: '', B1: '' };
+  const groups = { A1: '', A2: '', B1: '' };
   const ids: Record<string, string> = {};
   let platformAdminId: string;
 
@@ -30,6 +30,8 @@ describe('Assignments (e2e)', () => {
       .set('Authorization', await bearer(as));
   const patchRole = async (as: string, id: string, body: object) =>
     request(app.getHttpServer()).patch(`/identity/users/${id}/role`).set('Authorization', await bearer(as)).send(body);
+  const patchAssignment = async (as: string, id: string, body: object) =>
+    request(app.getHttpServer()).patch(`/assignments/${id}`).set('Authorization', await bearer(as)).send(body);
   /** Asserts the HTTP status (with the body in the failure message) and returns the response. */
   const check = <T extends { status: number; body: unknown }>(res: T, status: number): T => {
     expect({ status: res.status, body: res.body }).toMatchObject({ status });
@@ -63,6 +65,7 @@ describe('Assignments (e2e)', () => {
       await prisma.school.create({ data: { name: `Test E2E Assign School Off ${stamp}`, status: 'deactivated' } })
     ).id;
     groups.A1 = (await prisma.group.create({ data: { schoolId: schools.A, name: 'A1' } })).id;
+    groups.A2 = (await prisma.group.create({ data: { schoolId: schools.A, name: 'A2' } })).id;
     groups.B1 = (await prisma.group.create({ data: { schoolId: schools.B, name: 'B1' } })).id;
 
     await user('AdminA', 'SCHOOL_ADMIN');
@@ -210,6 +213,129 @@ describe('Assignments (e2e)', () => {
     it('scopes to a school: own school 200, another school 403', async () => {
       check(await assignable(ids.AdminA, schools.A), 200);
       check(await assignable(ids.AdminA, schools.B), 403);
+    });
+  });
+
+  describe('PATCH /assignments/:id (#48)', () => {
+    const past = new Date('2026-01-01T00:00:00.000Z');
+    let seq = 0;
+
+    /** A fresh user with an assignment in `schoolId` (school A by default), its updated_at set in the past. */
+    async function edited(roleName: string, groupId: string | null, schoolId = schools.A) {
+      const key = `Edit${++seq}`;
+      await user(key);
+      const role = await prisma.role.findUniqueOrThrow({ where: { name: roleName } });
+      const row = await prisma.userAssignment.create({
+        data: { userId: ids[key], schoolId, groupId, roleId: role.id, updatedAt: past },
+      });
+      if (groupId) await prisma.groupMember.create({ data: { groupId, userId: ids[key] } });
+      return { id: row.id, userId: ids[key] };
+    }
+    const row = (id: string) => prisma.userAssignment.findUniqueOrThrow({ where: { id }, include: { role: true } });
+    const memberships = async (userId: string) =>
+      (await prisma.groupMember.findMany({ where: { userId } })).map((m) => m.groupId);
+
+    it('requires a token and users:assign_role (content manager 403)', async () => {
+      const a = await edited('STUDENT', groups.A1);
+      await request(app.getHttpServer()).patch(`/assignments/${a.id}`).send({ role: 'STAFF' }).expect(401);
+      check(await patchAssignment(ids.ManagerA, a.id, { role: 'STAFF' }), 403);
+      expect((await row(a.id)).role.name).toBe('STUDENT');
+    });
+
+    it('a school admin changes the role: updated_at moves, the change is audited', async () => {
+      const a = await edited('STUDENT', groups.A1);
+      const res = check(await patchAssignment(ids.AdminA, a.id, { role: 'staff' }), 200);
+      expect(res.body).toMatchObject({ id: a.id, schoolId: schools.A, groupId: groups.A1, role: 'STAFF', roleScope: 'school' });
+      expect(new Date(res.body.updatedAt).getTime()).toBeGreaterThan(past.getTime());
+      expect((await row(a.id)).updatedAt.getTime()).toBeGreaterThan(past.getTime());
+
+      const event = await prisma.auditEvent.findFirst({
+        where: { action: 'assignment_updated', entityId: a.userId },
+        orderBy: { seq: 'desc' },
+      });
+      expect(event?.details).toMatchObject({
+        assignmentId: a.id,
+        role: 'STAFF',
+        previousRole: 'STUDENT',
+        groupId: groups.A1,
+        previousGroupId: groups.A1,
+      });
+    });
+
+    it('a new group replaces the old group membership; GET /users/:id shows it', async () => {
+      const a = await edited('STUDENT', groups.A1);
+      const res = check(await patchAssignment(ids.AdminA, a.id, { groupId: groups.A2 }), 200);
+      expect(res.body).toMatchObject({ groupId: groups.A2, groupName: 'A2', role: 'STUDENT' });
+      expect(await memberships(a.userId)).toEqual([groups.A2]);
+
+      const detail = check(
+        await request(app.getHttpServer()).get(`/users/${a.userId}`).set('Authorization', await bearer(ids.AdminA)),
+        200,
+      );
+      expect(detail.body.groups).toEqual([expect.objectContaining({ groupId: groups.A2 })]);
+    });
+
+    it('groupId: null removes the group and the old membership', async () => {
+      const a = await edited('STUDENT', groups.A1);
+      const res = check(await patchAssignment(ids.AdminA, a.id, { groupId: null }), 200);
+      expect(res.body).toMatchObject({ groupId: null, groupName: null });
+      expect((await row(a.id)).groupId).toBeNull();
+      expect(await memberships(a.userId)).toEqual([]);
+    });
+
+    it('no real change: no write, updated_at stays the same, nothing audited', async () => {
+      const a = await edited('STUDENT', groups.A1);
+      const res = check(await patchAssignment(ids.AdminA, a.id, { role: 'STUDENT', groupId: groups.A1 }), 200);
+      expect(res.body.updatedAt).toBe(past.toISOString());
+      expect((await row(a.id)).updatedAt).toEqual(past);
+      expect(await prisma.auditEvent.count({ where: { action: 'assignment_updated', entityId: a.userId } })).toBe(0);
+    });
+
+    it('a platform admin edits in any school, and can grant a platform role once the group is cleared', async () => {
+      const a = await edited('STUDENT', groups.B1, schools.B);
+      const kept = check(await patchAssignment(platformAdminId, a.id, { role: 'PLATFORM_ADMIN' }), 400);
+      expect(kept.body.message).toBe('A platform role cannot be limited to a group');
+      const res = check(await patchAssignment(platformAdminId, a.id, { role: 'PLATFORM_ADMIN', groupId: null }), 200);
+      expect(res.body).toMatchObject({ schoolId: schools.B, role: 'PLATFORM_ADMIN', roleScope: 'platform', groupId: null });
+    });
+
+    it('a school admin cannot edit another school, grant a platform role, or edit a user who outranks them', async () => {
+      const inB = await edited('STUDENT', groups.B1, schools.B);
+      check(await patchAssignment(ids.AdminA, inB.id, { role: 'STAFF' }), 403);
+
+      const a = await edited('STAFF', null);
+      const res = check(await patchAssignment(ids.AdminA, a.id, { role: 'PLATFORM_ADMIN' }), 403);
+      expect(res.body.message).toBe('Only a platform administrator can assign the PLATFORM_ADMIN role');
+
+      const boss = await edited('PLATFORM_ADMIN', null);
+      const outranked = check(await patchAssignment(ids.AdminA, boss.id, { role: 'STUDENT' }), 403);
+      expect(outranked.body.message).toMatch(/higher-level role/);
+
+      expect((await row(inB.id)).role.name).toBe('STUDENT');
+      expect((await row(a.id)).role.name).toBe('STAFF');
+      expect((await row(boss.id)).role.name).toBe('PLATFORM_ADMIN');
+    });
+
+    it('rejects invalid changes and leaves the assignment as it was', async () => {
+      const a = await edited('STUDENT', groups.A1);
+      const otherSchool = check(await patchAssignment(ids.AdminA, a.id, { groupId: groups.B1 }), 400);
+      expect(otherSchool.body.message).toBe('The group does not belong to this school');
+      check(await patchAssignment(ids.AdminA, a.id, { role: 'NOPE' }), 400);
+      check(await patchAssignment(ids.AdminA, a.id, {}), 400);
+      check(await patchAssignment(ids.AdminA, a.id, { schoolId: schools.B }), 400);
+      check(await patchAssignment(ids.AdminA, a.id, { groupId: 'g' }), 400);
+      check(await patchAssignment(ids.AdminA, a.id, { groupId: '00000000-0000-4000-8000-000000000000' }), 404);
+      check(await patchAssignment(ids.AdminA, '00000000-0000-4000-8000-000000000000', { role: 'STAFF' }), 404);
+      check(await patchAssignment(ids.AdminA, 'abc', { role: 'STAFF' }), 400);
+
+      const after = await row(a.id);
+      expect([after.schoolId, after.groupId, after.role.name, after.updatedAt]).toEqual([schools.A, groups.A1, 'STUDENT', past]);
+      expect(await memberships(a.userId)).toEqual([groups.A1]);
+    });
+
+    it('rejects a change in a deactivated school', async () => {
+      const a = await edited('STAFF', null, schools.Off);
+      check(await patchAssignment(platformAdminId, a.id, { role: 'STUDENT' }), 400);
     });
   });
 
