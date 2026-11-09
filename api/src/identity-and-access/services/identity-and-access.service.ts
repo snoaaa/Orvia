@@ -242,15 +242,15 @@ export class IdentityAndAccessService {
   }
 
   /**
-   * Rules for changing another user's account status (Section 4.6), shared by every suspension path
-   * so none can bypass them:
+   * Rules for changing another user's account status (Section 4.6), shared by every suspension and
+   * reactivation path so none can bypass them:
    *  - nobody can act on their own account;
    *  - platform-wide `users:suspend` reaches every user; otherwise the actor must hold it in ALL of
    *    the target's schools (the status applies to the whole account), and a user without any
    *    school is out of reach;
    *  - the target must not hold a higher-level role than the actor (see role-level.util.ts).
    */
-  private assertCanChangeAccountStatus(target: UserWithAssignments, actor: AuthenticatedUser, action: 'suspend'): void {
+  private assertCanChangeAccountStatus(target: UserWithAssignments, actor: AuthenticatedUser, action: 'suspend' | 'reactivate'): void {
     if (target.id === actor.id) {
       throw new ForbiddenException(`You cannot ${action} your own account`);
     }
@@ -284,6 +284,24 @@ export class IdentityAndAccessService {
     const target = await this.findUserWithAssignments(id);
     this.assertCanChangeAccountStatus(target, actor, 'suspend');
     return this.applySuspension(target, actor, auditContext);
+  }
+
+  /**
+   * PATCH /users/:id/reactivate (#42): sets a SUSPENDED user back to ACTIVE so they can sign in again.
+   * Sessions revoked by the suspension stay revoked: the user signs in again to get new ones.
+   * Idempotent for an ACTIVE user; an INVITED user is refused (409), so the invitation flow is not skipped.
+   */
+  async reactivateUser(id: string, actor: AuthenticatedUser): Promise<UserEntity> {
+    const target = await this.findUserWithAssignments(id);
+    this.assertCanChangeAccountStatus(target, actor, 'reactivate');
+    if (target.status === 'INVITED') {
+      throw new ConflictException('Only a suspended user can be reactivated (this user is still INVITED)');
+    }
+    const user =
+      target.status === 'ACTIVE'
+        ? target
+        : await this.prisma.user.update({ where: { id }, data: { status: 'ACTIVE' } });
+    return UserMapper.toEntity(user);
   }
 
   /**
@@ -530,12 +548,14 @@ export class IdentityAndAccessService {
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<UserEntity> {
     const target = await this.findUserInScope(id, actor, 'users:update');
-    // Suspending goes through the same rules as PATCH /users/:id/suspend, checked before any write.
+    // Suspending and reactivating go through the same rules as their PATCH /users/:id/* routes, before any write.
     const suspending = dto.status?.toUpperCase() === 'SUSPENDED';
     if (suspending) {
       this.assertCanChangeAccountStatus(target, actor, 'suspend');
+    } else if (dto.status?.toUpperCase() === 'ACTIVE') {
+      this.assertCanChangeAccountStatus(target, actor, 'reactivate');
     } else if (dto.status) {
-      // Reactivating is a separate right from editing a profile (its own rules come with #42).
+      // Any other status is a separate right from editing a profile.
       assertSchoolAccess(actor, 'users:suspend', target.assignments.map((a) => a.schoolId));
     }
 
