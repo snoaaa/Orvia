@@ -86,7 +86,10 @@ export class IdentityAndAccessController {
   @RequirePermission('users:update')
   @ApiOperation({
     summary: 'Update an existing user (changing the status also needs users:suspend)',
-    description: 'For profile edits, use PATCH /users/{id}, which replaces this route.',
+    description:
+      'For profile edits, use PATCH /users/{id}; to suspend, use PATCH /users/{id}/suspend. Both replace this route. ' +
+      'status SUSPENDED applies the same rules as PATCH /users/{id}/suspend (not your own account, only users whose ' +
+      'schools are all yours, never a higher-level role) and revokes all the sessions.',
   })
   @ApiParam({ name: 'id', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User updated', type: UserEntity })
