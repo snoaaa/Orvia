@@ -17,6 +17,7 @@ import {
   PaginatedSchoolsEntity,
   PaginatedUsersEntity,
   PermissionHolderEntity,
+  PermissionEntity,
   PermissionOverviewEntity,
   RoleEntity,
   SchoolEntity,
@@ -932,43 +933,43 @@ export class IdentityAndAccessService {
     });
   }
 
-  async createRole(dto: CreateRoleDto): Promise<RoleEntity> {
+  /**
+   * POST /roles (#44), also behind the older POST /identity/roles: creates a custom role with its scope and
+   * permission codes. Platform admins only: the guard checks system:manage, and this also refuses a
+   * school-scoped role that would hold it. The role and its permissions are written in one transaction.
+   */
+  async createRole(dto: CreateRoleDto, actor: AuthenticatedUser): Promise<RoleEntity> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may create roles');
+    }
     const roleName = dto.name.trim().toUpperCase();
     if (isBaseRoleName(roleName)) {
       throw new BadRequestException(`Role name '${roleName}' is reserved for system base roles`);
     }
-    const existing = await this.prisma.role.findUnique({
-      where: { name: roleName },
-    });
-    if (existing) {
-      throw new ConflictException(`Role '${roleName}' already exists`);
+
+    const codes = [...new Set(dto.permissions)];
+    const permissions = await this.prisma.permission.findMany({ where: { code: { in: codes } }, select: { id: true, code: true } });
+    const unknown = codes.filter((code) => !permissions.some((p) => p.code === code));
+    if (unknown.length > 0) {
+      throw new BadRequestException(`Unknown permission code(s): ${unknown.join(', ')}`);
     }
 
-    const id = randomUUID();
-    const role = await this.prisma.role.create({
-      data: {
-        id,
-        name: roleName,
-        scope: dto.scope || 'school',
-      },
-    });
-
-    if (dto.permissions && dto.permissions.length > 0) {
-      const perms = await this.prisma.permission.findMany({
-        where: { code: { in: dto.permissions } },
-      });
-      if (perms.length > 0) {
-        await this.prisma.rolePermission.createMany({
-          data: perms.map((p) => ({
-            roleId: role.id,
-            permissionId: p.id,
-          })),
-          skipDuplicates: true,
+    try {
+      const role = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.role.create({ data: { id: randomUUID(), name: roleName, scope: dto.scope } });
+        await tx.rolePermission.createMany({
+          data: permissions.map((p) => ({ roleId: created.id, permissionId: p.id })),
         });
+        return created;
+      });
+      return await this.findRoleById(role.id);
+    } catch (error) {
+      // The unique index on roles.name decides, so two simultaneous requests cannot both succeed.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Role '${roleName}' already exists`);
       }
+      throw error;
     }
-
-    return this.findRoleById(role.id);
   }
 
   async updateRole(id: string, dto: UpdateRoleDto): Promise<RoleEntity> {
@@ -1055,6 +1056,20 @@ export class IdentityAndAccessService {
       success: true,
       message: `Role '${role.name}' was successfully deleted`,
     };
+  }
+
+  /**
+   * GET /permissions: the permission catalogue, sorted by category then code. Platform admins only:
+   * the guard checks system:manage, and this also refuses a school-scoped role that would hold it.
+   */
+  async listPermissions(actor: AuthenticatedUser): Promise<PermissionEntity[]> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may list permissions');
+    }
+    const rows = await this.prisma.permission.findMany({ select: { code: true, description: true } });
+    return rows
+      .map((p) => new PermissionEntity({ code: p.code, description: p.description, category: p.code.split(':')[0] }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
   }
 
   /**

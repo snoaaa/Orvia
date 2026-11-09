@@ -331,6 +331,26 @@ Body: `schoolId`, `name` and optionally `type` (`class` by default, `department`
 unique within a school, ignoring case (409), enforced by a database index. Another school → 403,
 unknown school → 404, deactivated school → 400.
 
+## Roles
+
+`src/identity-and-access/controllers/roles.controller.ts`, under the **Roles** tag in Swagger (Section 4.5).
+Platform admins only: the route needs `system:manage`, and the service also refuses a school-scoped role holding it.
+
+### Create a role: `POST /roles` (#44, `system:manage`)
+
+```json
+{ "name": "TEACHING_ASSISTANT", "scope": "school", "permissions": ["documents:read", "rag:query"] }
+```
+
+- `name`: 2–50 letters, digits, `_` or `-`, stored in upper case. Unique ignoring case (409, enforced by the
+  unique index, so two simultaneous requests cannot both succeed). The six base role names are reserved (400).
+- `scope`: the documentary scope, `platform`, `school` or `group`.
+- `permissions`: at least one permission **code**, as listed by `GET /permissions`, no repeats. An unknown code
+  is 400 and nothing is created. The role and its permissions are written in one transaction.
+
+Answer 201 with the role (`id`, `name`, `scope`, sorted `permissions`, `assignedUsersCount`, `isBase`). Other
+roles get 403. The older `POST /identity/roles`, used by the web role editor, runs the same code.
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of
