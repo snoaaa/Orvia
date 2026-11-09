@@ -8,3 +8,4 @@ export * from './permission-overview.entity.js';
 export * from './user-list-item.entity.js';
 export * from './user-detail.entity.js';
 export * from './permission.entity.js';
+export * from './assignment.entity.js';
