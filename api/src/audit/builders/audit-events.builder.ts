@@ -156,6 +156,8 @@ export const AuditEvents = {
       schoolId: string;
       role: string;
       previousRole?: string | null;
+      /** Group of the assignment (POST /assignments); left out of the details when not given. */
+      groupId?: string | null;
       assignedBy?: AuditActor | null;
     },
     context: AuditRequestContext,
@@ -168,8 +170,45 @@ export const AuditEvents = {
       details: {
         email: p.email.trim().toLowerCase(),
         schoolId: p.schoolId,
+        ...(p.groupId !== undefined ? { groupId: p.groupId } : {}),
         role: p.role,
         previousRole: p.previousRole ?? null,
+      },
+      context,
+    };
+  },
+
+  /**
+   * The role and/or group of an existing assignment changed (PATCH /assignments/:id, #48).
+   * The school of an assignment never changes, so only the role and the group have a previous value.
+   */
+  assignmentUpdated(
+    p: {
+      assignmentId: string;
+      userId: string;
+      email: string;
+      schoolId: string;
+      role: string;
+      previousRole: string;
+      groupId: string | null;
+      previousGroupId: string | null;
+      updatedBy: AuditActor;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ASSIGNMENT_UPDATED,
+      actor: p.updatedBy,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        assignmentId: p.assignmentId,
+        email: p.email.trim().toLowerCase(),
+        schoolId: p.schoolId,
+        role: p.role,
+        previousRole: p.previousRole,
+        groupId: p.groupId,
+        previousGroupId: p.previousGroupId,
       },
       context,
     };
