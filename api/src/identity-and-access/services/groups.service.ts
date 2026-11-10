@@ -195,6 +195,30 @@ export class GroupsService {
   }
 
   /**
+   * DELETE /groups/:id/members/:userId (#37): 404 if the user is not a member. In one transaction the
+   * membership is deleted, the user's assignments pointing to the group lose it (the school role stays),
+   * and the group's `updated_at` moves so the next mobile sync sees the change.
+   */
+  async removeMember(id: string, userId: string, actor: AuthenticatedUser): Promise<void> {
+    const group = await this.findGroup(id);
+    assertSchoolAccess(actor, 'groups:manage_members', group.schoolId);
+    if (group.school.status === 'deactivated') {
+      throw new BadRequestException('Cannot change the members of a group of a deactivated school');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockGroup(tx, id);
+      // The count decides: of two simultaneous removals, the second finds nothing and answers 404.
+      const { count } = await tx.groupMember.deleteMany({ where: { groupId: id, userId } });
+      if (count === 0) {
+        throw new NotFoundException(`User ${userId} is not a member of this group`);
+      }
+      await tx.userAssignment.updateMany({ where: { groupId: id, userId }, data: { groupId: null } });
+      await tx.group.update({ where: { id }, data: { updatedAt: new Date() } });
+    });
+  }
+
+  /**
    * Locks the group row until the transaction ends, so membership changes of one group run one at a time:
    * without it, two simultaneous requests can deadlock (inserting members, then updating the group).
    * 404 if the group was deleted since it was loaded, so members are never changed on a deleted group.

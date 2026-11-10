@@ -371,6 +371,12 @@ same answer, so ids of other schools are not revealed). Invited and suspended us
 the group are skipped. Answer: `{ added, alreadyMembers, memberCount }`. The group's `updated_at` moves when
 someone is added. Deleted group → 404, deactivated school → 400.
 
+### Remove a member: `DELETE /groups/{id}/members/{userId}` (#37, `groups:manage_members`)
+
+Answered with 204. In one transaction the membership is deleted, the user's assignments pointing to the group
+lose it (the school role stays), and the group's `updated_at` moves for the next mobile sync. A user who is
+not a member → 404 `User <id> is not a member of this group`. Deleted group → 404, deactivated school → 400.
+
 > Content managers got `groups:read` in #34: re-run `npm run seed` on existing databases (safe to repeat).
 
 ## Audit trail

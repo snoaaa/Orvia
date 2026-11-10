@@ -122,4 +122,26 @@ export class GroupsController {
   ): Promise<AddGroupMembersResultEntity> {
     return this.groupsService.addMembers(id, dto, actor);
   }
+
+  @Delete(':id/members/:userId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('groups:manage_members')
+  @ApiOperation({
+    summary: 'Remove a member from a group',
+    description:
+      'The user loses the access that came from the group (membership, and the group on their assignments) but keeps ' +
+      "their school role. The group's updated_at changes so the next mobile sync sees it.",
+  })
+  @ApiParam({ name: 'id', description: 'Group UUID' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 204, description: 'Member removed' })
+  @ApiResponse({ status: 400, description: 'Invalid id or deactivated school' })
+  @ApiResponse({ status: 404, description: 'Group not found or deleted, or the user is not a member of the group' })
+  async removeMember(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.groupsService.removeMember(id, userId, actor);
+  }
 }
