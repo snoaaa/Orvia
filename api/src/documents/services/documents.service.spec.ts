@@ -2,14 +2,18 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import type { PrismaService } from '../../database/prisma.service.js';
+import type { StorageService } from '../../storage/storage.service.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentsService } from './documents.service.js';
 import type { FileValidationService } from './file-validation.service.js';
+import type { ProcessingQueueService } from './processing-queue.service.js';
 
 describe('DocumentsService', () => {
   let service: DocumentsService;
   let mockPrisma: any;
   let mockFileValidationService: any;
+  let mockStorageService: any;
+  let mockProcessingQueueService: any;
 
   const platformAdmin: AuthenticatedUser = {
     id: 'user-platform-admin',
@@ -67,22 +71,51 @@ describe('DocumentsService', () => {
       document: {
         findUnique: vi.fn(),
         findMany: vi.fn(),
-        create: vi.fn(),
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          ...data,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          deletedAt: null,
+        })),
         update: vi.fn(),
         count: vi.fn(),
       },
       documentVersion: {
         findFirst: vi.fn(),
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          ...data,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })),
       },
+      processingJob: {
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          ...data,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })),
+      },
+      $transaction: vi.fn().mockImplementation(async (cb) => cb(mockPrisma)),
     };
 
     mockFileValidationService = {
       validateFile: vi.fn(),
     };
 
+    mockStorageService = {
+      save: vi.fn().mockResolvedValue({ key: 'test', size: 100 }),
+      delete: vi.fn().mockResolvedValue(true),
+    };
+
+    mockProcessingQueueService = {
+      enqueueJob: vi.fn(),
+    };
+
     service = new DocumentsService(
       mockPrisma as unknown as PrismaService,
       mockFileValidationService as unknown as FileValidationService,
+      mockStorageService as unknown as StorageService,
+      mockProcessingQueueService as unknown as ProcessingQueueService,
     );
   });
 
@@ -188,6 +221,366 @@ describe('DocumentsService', () => {
       const doc = await service.findDocumentById('doc-1', schoolAdmin);
       expect(doc.id).toBe('doc-1');
       expect(doc.title).toBe('Notes');
+    });
+  });
+
+  describe('uploadPdf', () => {
+    const validPdfFile = {
+      buffer: Buffer.from('%PDF-1.4\nNative or scanned PDF stream payload'),
+      originalname: 'Operating-Systems-101.pdf',
+      mimetype: 'application/pdf',
+      size: 45,
+    } as UploadedFile;
+
+    it('throws NotFoundException if target space does not exist', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+
+      await expect(
+        service.uploadPdf('space-missing', validPdfFile, {}, schoolAdmin),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException if user lacks documents:create permission in space school', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-2',
+        schoolId: 'school-2', // Out of scope for schoolAdmin (school-1)
+      });
+
+      await expect(
+        service.uploadPdf('space-2', validPdfFile, {}, schoolAdmin),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws BadRequestException if file is missing or empty buffer', async () => {
+      mockPrisma.space.findUnique.mockResolvedValue({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      await expect(
+        service.uploadPdf('space-1', null as unknown as UploadedFile, {}, schoolAdmin),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.uploadPdf('space-1', { buffer: Buffer.alloc(0) } as UploadedFile, {}, schoolAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException if validated file is an image and directs to image endpoint', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'checksum123',
+        mimeType: 'image/png',
+        extension: 'png',
+        size: 50,
+      });
+
+      const imageFile = {
+        buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        originalname: 'image.png',
+        mimetype: 'image/png',
+      } as UploadedFile;
+
+      await expect(
+        service.uploadPdf('space-1', imageFile, {}, schoolAdmin),
+      ).rejects.toThrow(/Images should be uploaded via the dedicated image upload endpoint/);
+    });
+
+    it('successfully uploads an enterprise Word document (.docx) and queues office_extraction', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'docx-checksum-hex',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extension: 'docx',
+        size: 1024,
+      });
+
+      let createdJobStep = '';
+      mockPrisma.document.create.mockImplementation(async ({ data }: any) => ({
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
+      }));
+      mockPrisma.documentVersion.create.mockImplementation(async ({ data }: any) => ({
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+      mockPrisma.processingJob.create.mockImplementation(async ({ data }: any) => {
+        createdJobStep = data.step;
+        return {
+          ...data,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+      });
+
+      const docxFile = {
+        buffer: Buffer.from('PK\x03\x04...word/document.xml...'),
+        originalname: 'Assignment-1.docx',
+        mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      } as UploadedFile;
+
+      const result = await service.uploadPdf('space-1', docxFile, {}, schoolAdmin);
+
+      expect(result.title).toBe('Assignment-1');
+      expect(result.currentVersion?.mimeType).toBe(
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      );
+      expect(createdJobStep).toBe('office_extraction');
+      expect(mockStorageService.save).toHaveBeenCalledWith(
+        expect.stringMatching(/^spaces\/space-1\/docs\/[a-f0-9-]+\/v1\.docx$/),
+        docxFile.buffer,
+      );
+    });
+
+    it('successfully uploads an enterprise PowerPoint (.pptx) and queues slide_extraction', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'pptx-checksum-hex',
+        mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        extension: 'pptx',
+        size: 2048,
+      });
+
+      let createdJobStep = '';
+      mockPrisma.processingJob.create.mockImplementation(async ({ data }: any) => {
+        createdJobStep = data.step;
+        return { ...data, createdAt: new Date(), updatedAt: new Date() };
+      });
+
+      const pptxFile = {
+        buffer: Buffer.from('PK\x03\x04...ppt/presentation.xml...'),
+        originalname: 'Lecture-01.pptx',
+        mimetype: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      } as UploadedFile;
+
+      await service.uploadPdf('space-1', pptxFile, {}, schoolAdmin);
+
+      expect(createdJobStep).toBe('slide_extraction');
+      expect(mockStorageService.save).toHaveBeenCalledWith(
+        expect.stringMatching(/^spaces\/space-1\/docs\/[a-f0-9-]+\/v1\.pptx$/),
+        pptxFile.buffer,
+      );
+    });
+
+    it('successfully uploads an enterprise Excel (.xlsx) and queues tabular_extraction', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'xlsx-checksum-hex',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        extension: 'xlsx',
+        size: 512,
+      });
+
+      let createdJobStep = '';
+      mockPrisma.processingJob.create.mockImplementation(async ({ data }: any) => {
+        createdJobStep = data.step;
+        return { ...data, createdAt: new Date(), updatedAt: new Date() };
+      });
+
+      const xlsxFile = {
+        buffer: Buffer.from('PK\x03\x04...xl/workbook.xml...'),
+        originalname: 'Grades.xlsx',
+        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      } as UploadedFile;
+
+      await service.uploadPdf('space-1', xlsxFile, {}, schoolAdmin);
+
+      expect(createdJobStep).toBe('tabular_extraction');
+      expect(mockStorageService.save).toHaveBeenCalledWith(
+        expect.stringMatching(/^spaces\/space-1\/docs\/[a-f0-9-]+\/v1\.xlsx$/),
+        xlsxFile.buffer,
+      );
+    });
+
+    it('successfully uploads a Markdown (.md) or Text document and queues text_chunking', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'md-checksum-hex',
+        mimeType: 'text/markdown',
+        extension: 'md',
+        size: 256,
+      });
+
+      let createdJobStep = '';
+      mockPrisma.processingJob.create.mockImplementation(async ({ data }: any) => {
+        createdJobStep = data.step;
+        return { ...data, createdAt: new Date(), updatedAt: new Date() };
+      });
+
+      const mdFile = {
+        buffer: Buffer.from('# Chapter 1: Introduction\n\nContent here.'),
+        originalname: 'README.md',
+        mimetype: 'text/markdown',
+      } as UploadedFile;
+
+      await service.uploadPdf('space-1', mdFile, {}, schoolAdmin);
+
+      expect(createdJobStep).toBe('text_chunking');
+      expect(mockStorageService.save).toHaveBeenCalledWith(
+        expect.stringMatching(/^spaces\/space-1\/docs\/[a-f0-9-]+\/v1\.md$/),
+        mdFile.buffer,
+      );
+    });
+
+    it('successfully uploads a native PDF, stores file, creates version with status pending, and enqueues job', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'sha256-checksum-hex',
+        mimeType: 'application/pdf',
+        extension: 'pdf',
+        size: validPdfFile.buffer.length,
+      });
+
+      mockPrisma.document.create.mockImplementation(async ({ data }: any) => ({
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
+      }));
+
+      mockPrisma.documentVersion.create.mockImplementation(async ({ data }: any) => ({
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+
+      mockPrisma.processingJob.create.mockImplementation(async ({ data }: any) => ({
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+
+      const result = await service.uploadPdf(
+        'space-1',
+        validPdfFile,
+        {
+          title: 'Custom OS Syllabus',
+          author: 'Prof. Tanenbaum',
+          tags: 'os,minix,kernel',
+        },
+        schoolAdmin,
+      );
+
+      // Verify returned document entity
+      expect(result.title).toBe('Custom OS Syllabus');
+      expect(result.author).toBe('Prof. Tanenbaum');
+      expect(result.tags).toBe('os,minix,kernel');
+      expect(result.spaceId).toBe('space-1');
+
+      // Verify version 1 status is pending
+      expect(result.currentVersion).toBeDefined();
+      expect(result.currentVersion?.versionNo).toBe(1);
+      expect(result.currentVersion?.status).toBe('pending');
+      expect(result.currentVersion?.checksum).toBe('sha256-checksum-hex');
+      expect(result.currentVersion?.mimeType).toBe('application/pdf');
+
+      // Verify file was saved via StorageService
+      expect(mockStorageService.save).toHaveBeenCalledWith(
+        expect.stringMatching(/^spaces\/space-1\/docs\/[a-f0-9-]+\/v1\.pdf$/),
+        validPdfFile.buffer,
+      );
+
+      // Verify processing job was enqueued
+      expect(mockProcessingQueueService.enqueueJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: expect.any(String),
+          versionId: expect.any(String),
+          documentId: expect.any(String),
+          spaceId: 'space-1',
+          mimeType: 'application/pdf',
+        }),
+      );
+    });
+
+    it('uploads a scanned PDF and sanitizes title from originalname when title not provided', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'scanned-pdf-checksum',
+        mimeType: 'application/pdf',
+        extension: 'pdf',
+        size: 100,
+      });
+
+      mockPrisma.document.create.mockImplementation(async ({ data }: any) => ({
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
+      }));
+
+      mockPrisma.documentVersion.create.mockImplementation(async ({ data }: any) => ({
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+
+      const scannedFile = {
+        buffer: Buffer.from('%PDF-1.5 scanned image wrapper'),
+        originalname: 'Scanned-Math-Exam-2026.pdf',
+        mimetype: 'application/pdf',
+      } as UploadedFile;
+
+      const result = await service.uploadPdf('space-1', scannedFile, {}, schoolAdmin);
+
+      expect(result.title).toBe('Scanned-Math-Exam-2026');
+      expect(result.author).toBe('School Admin'); // Falls back to actor fullName
+      expect(result.currentVersion?.status).toBe('pending');
+    });
+
+    it('cleans up written storage file if database transaction fails', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+      });
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'sha256-hex',
+        mimeType: 'application/pdf',
+        extension: 'pdf',
+        size: 50,
+      });
+
+      mockPrisma.$transaction.mockRejectedValueOnce(new Error('Deadlock in MySQL'));
+
+      await expect(
+        service.uploadPdf('space-1', validPdfFile, {}, schoolAdmin),
+      ).rejects.toThrow('Deadlock in MySQL');
+
+      // Verifies storage was cleaned up
+      expect(mockStorageService.delete).toHaveBeenCalledWith(
+        expect.stringMatching(/^spaces\/space-1\/docs\/[a-f0-9-]+\/v1\.pdf$/),
+      );
     });
   });
 });

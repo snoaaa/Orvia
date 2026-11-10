@@ -26,3 +26,4 @@ export class ValidatedFileEntity {
     Object.assign(this, partial);
   }
 }
+

@@ -1,20 +1,27 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto } from '../dto/index.js';
+import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
+import { StorageService } from '../../storage/storage.service.js';
+import { buildDocumentStorageKey } from '../../storage/utils/storage-key.util.js';
+import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
 import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
+import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { FileValidationService } from './file-validation.service.js';
+import { ProcessingQueueService } from './processing-queue.service.js';
 
 @Injectable()
 export class DocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fileValidationService: FileValidationService,
+    @Inject(STORAGE_SERVICE) private readonly storageService: StorageService,
+    private readonly processingQueueService: ProcessingQueueService,
   ) {}
 
   /**
@@ -200,5 +207,133 @@ export class DocumentsService {
       extension: validated.extension,
       size: validated.size,
     });
+  }
+
+  /**
+   * Uploads a PDF to a space (§4.1, §6 Scalabilité, §9, #102):
+   * 1. Validates space exists and verifies caller has `documents:create` access to space's school.
+   * 2. Runs pre-ingestion validation (size, magic bytes, antivirus, duplicates).
+   * 3. Confirms verified MIME type is `application/pdf`.
+   * 4. Atomically writes file to storage via `StorageService`.
+   * 5. Atomically creates Document, DocumentVersion (v1, status: 'pending'), and ProcessingJob in DB.
+   * 6. Enqueues background job to `ProcessingQueueService` asynchronously.
+   * 7. Returns `DocumentEntity` with `currentVersion`.
+   */
+  async uploadPdf(
+    spaceId: string,
+    file: UploadedFile,
+    dto: UploadDocumentDto,
+    actor: AuthenticatedUser,
+  ): Promise<DocumentEntity> {
+    const space = await this.prisma.space.findUnique({
+      where: { id: spaceId },
+      select: { id: true, schoolId: true },
+    });
+    if (!space) {
+      throw new NotFoundException(`Space with ID ${spaceId} not found`);
+    }
+
+    assertSchoolAccess(actor, 'documents:create', space.schoolId);
+
+    if (!file || !file.buffer || file.buffer.length === 0) {
+      throw new BadRequestException('A PDF file must be uploaded under the "file" field');
+    }
+
+    // Run pre-ingestion validation (size, magic bytes, antivirus, duplicates)
+    const validated = await this.fileValidationService.validateFile({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      declaredMimeType: file.mimetype,
+      spaceId,
+    });
+
+    if (isImageMimeType(validated.mimeType)) {
+      throw new BadRequestException(
+        'Images should be uploaded via the dedicated image upload endpoint (POST /documents/spaces/:spaceId/upload-image) for OCR processing.',
+      );
+    }
+
+    const documentId = randomUUID();
+    const versionId = randomUUID();
+    const jobId = randomUUID();
+    const versionNo = 1;
+    const storageKey = buildDocumentStorageKey({
+      spaceId,
+      documentId,
+      version: versionNo,
+      extension: validated.extension,
+    });
+
+    // 1. Save file to storage
+    await this.storageService.save(storageKey, file.buffer);
+
+    // 2. Determine initial processing step based on document format (§4.1, §9, #150)
+    const step = determineInitialProcessingStep(validated.mimeType);
+
+    // 3. Perform DB transaction
+    try {
+      const defaultTitle = file.originalname
+        ? file.originalname.replace(/\.[^/.]+$/, '').trim()
+        : 'Untitled Document';
+      const title = dto?.title?.trim() || defaultTitle || 'Untitled Document';
+      const author = dto?.author?.trim() || actor.fullName || '';
+      const tags = dto?.tags?.trim() || '';
+
+      const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
+        const doc = await tx.document.create({
+          data: {
+            id: documentId,
+            spaceId,
+            title,
+            author,
+            tags,
+          },
+        });
+
+        const ver = await tx.documentVersion.create({
+          data: {
+            id: versionId,
+            documentId,
+            versionNo,
+            storageKey,
+            mimeType: validated.mimeType,
+            checksum: validated.checksum,
+            status: 'pending',
+            pageCount: 0,
+          },
+        });
+
+        await tx.processingJob.create({
+          data: {
+            id: jobId,
+            versionId,
+            step,
+            status: 'pending',
+            durationMs: 0,
+            ocrConfidence: 1.0,
+            pageCount: 0,
+            chunkCount: 0,
+          },
+        });
+
+        return { createdDoc: doc, createdVersion: ver };
+      });
+
+      // 4. Dispatch background processing job
+      this.processingQueueService.enqueueJob({
+        jobId,
+        versionId,
+        documentId,
+        spaceId,
+        storageKey,
+        mimeType: validated.mimeType,
+      });
+
+      return DocumentMapper.toEntity(createdDoc, createdVersion);
+    } catch (err) {
+      // Clean up written file from storage if DB transaction failed
+      await this.storageService.delete(storageKey).catch(() => {});
+      throw err;
+    }
   }
 }

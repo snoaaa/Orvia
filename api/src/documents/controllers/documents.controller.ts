@@ -3,7 +3,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto } from '../dto/index.js';
+import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
 import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
 import type { UploadedFile as IUploadedFile } from '../interfaces/index.js';
 import { DocumentsService } from '../services/documents.service.js';
@@ -127,5 +127,58 @@ export class DocumentsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ValidatedFileEntity> {
     return this.documentsService.validateUploadedFile(spaceId, file, actor);
+  }
+
+  @Post('spaces/:spaceId/upload')
+  @RequirePermission('documents:create')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({
+    summary: 'Upload a document to a space (§4.1, §6 Scalabilité, §9, #102, #150)',
+    description:
+      'Uploads a document (PDF, Word DOCX/DOC, PowerPoint PPTX/PPT, Excel XLSX/XLS, OpenDocument ODT/ODS/ODP, Text TXT/MD/CSV) ' +
+      'into a space, creating the document and its first version with status pending, ' +
+      'then pushes a format-specific processing job to the async queue. Enforces school access, format validation, ' +
+      'size limit, antivirus scanning, and duplicate detection.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiParam({ name: 'spaceId', description: 'Target space UUID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Document file (PDF, Office, OpenDocument, or Text)',
+        },
+        title: {
+          type: 'string',
+          description: 'Document title (optional, defaults to filename)',
+        },
+        author: {
+          type: 'string',
+          description: 'Author or lecturer name (optional)',
+        },
+        tags: {
+          type: 'string',
+          description: 'Comma-separated tags (optional)',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Document uploaded and queued for processing', type: DocumentEntity })
+  @ApiResponse({ status: 400, description: 'Invalid format, image uploaded to document endpoint, infected, or invalid payload' })
+  @ApiResponse({ status: 403, description: 'Insufficient rights or another school' })
+  @ApiResponse({ status: 404, description: 'Space not found' })
+  @ApiResponse({ status: 409, description: 'Duplicate file in space' })
+  @ApiResponse({ status: 413, description: 'File exceeds maximum size' })
+  async uploadPdf(
+    @Param('spaceId') spaceId: string,
+    @UploadedFile() file: IUploadedFile,
+    @Body() dto: UploadDocumentDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentEntity> {
+    return this.documentsService.uploadPdf(spaceId, file, dto, actor);
   }
 }
