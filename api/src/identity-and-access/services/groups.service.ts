@@ -176,6 +176,7 @@ export class GroupsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await this.lockGroup(tx, id);
       const existing = await tx.groupMember.findMany({ where: { groupId: id, userId: { in: userIds } }, select: { userId: true } });
       const existingIds = new Set(existing.map((m) => m.userId));
       const added = userIds.filter((userId) => !existingIds.has(userId));
@@ -190,6 +191,14 @@ export class GroupsService {
         memberCount: await tx.groupMember.count({ where: { groupId: id } }),
       });
     });
+  }
+
+  /**
+   * Locks the group row until the transaction ends, so membership changes of one group run one at a time:
+   * without it, two simultaneous requests can deadlock (inserting members, then updating the group).
+   */
+  private async lockGroup(tx: Prisma.TransactionClient, id: string): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM \`groups\` WHERE id = ${id} FOR UPDATE`;
   }
 
   /** Loads a group that is not deleted, or throws 404. */

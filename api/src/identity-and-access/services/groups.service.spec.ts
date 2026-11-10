@@ -23,6 +23,7 @@ describe('GroupsService', () => {
     documentAccess: { deleteMany: vi.fn() },
     userAssignment: { updateMany: vi.fn() },
     $transaction: vi.fn(),
+    $queryRaw: vi.fn(),
   };
   const service = new GroupsService(prisma as unknown as PrismaService);
   const dto = { schoolId: 'school-a', name: 'Class 4-A' };
@@ -283,6 +284,14 @@ describe('GroupsService', () => {
       });
       expect(prisma.group.update.mock.calls[0][0].where).toEqual({ id: 'g1' });
       expect(prisma.user.findMany.mock.calls[0][0].where.assignments).toEqual({ some: { schoolId: 'school-a' } });
+    });
+
+    it('locks the group row before reading the members', async () => {
+      await service.addMembers('g1', { userIds: ['ok-2'] }, admin);
+      const [sql, groupId] = prisma.$queryRaw.mock.calls[0];
+      expect(sql.join('?')).toBe('SELECT id FROM `groups` WHERE id = ? FOR UPDATE');
+      expect(groupId).toBe('g1');
+      expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.groupMember.findMany.mock.invocationCallOrder[0]);
     });
 
     it('writes nothing when everyone is already a member', async () => {
