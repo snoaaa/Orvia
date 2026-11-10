@@ -45,6 +45,7 @@ describe('DocumentsController', () => {
       uploadImage: vi.fn(),
       getDocumentVersionStream: vi.fn(),
       replaceDocumentVersion: vi.fn(),
+      listDocumentVersions: vi.fn(),
     };
 
     controller = new DocumentsController(mockDocumentsService as unknown as DocumentsService);
@@ -174,13 +175,19 @@ describe('DocumentsController', () => {
 
       mockDocumentsService.uploadPdf.mockResolvedValueOnce(expectedDoc);
 
-      const result = await controller.uploadPdf('space-1', mockFile, dto, mockActor);
+      const mockReq = {
+        ip: '127.0.0.1',
+        header: vi.fn().mockReturnValue(undefined),
+      } as any;
+
+      const result = await controller.uploadPdf('space-1', mockFile, dto, mockActor, mockReq);
 
       expect(mockDocumentsService.uploadPdf).toHaveBeenCalledWith(
         'space-1',
         mockFile,
         dto,
         mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
       );
       expect(result).toBe(expectedDoc);
     });
@@ -213,13 +220,19 @@ describe('DocumentsController', () => {
 
       mockDocumentsService.uploadImage.mockResolvedValueOnce(expectedDoc);
 
-      const result = await controller.uploadImage('space-1', mockFile, dto, mockActor);
+      const mockReq = {
+        ip: '127.0.0.1',
+        header: vi.fn().mockReturnValue(undefined),
+      } as any;
+
+      const result = await controller.uploadImage('space-1', mockFile, dto, mockActor, mockReq);
 
       expect(mockDocumentsService.uploadImage).toHaveBeenCalledWith(
         'space-1',
         mockFile,
         dto,
         mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
       );
       expect(result).toBe(expectedDoc);
     });
@@ -286,6 +299,52 @@ describe('DocumentsController', () => {
         expect.objectContaining({ ip: '127.0.0.1' }),
       );
       expect(res).toBe(expectedDoc);
+    });
+  });
+
+  describe('listDocumentVersions', () => {
+    it('delegates to documentsService.listDocumentVersions', async () => {
+      const mockVersions = [
+        {
+          id: 'ver-2',
+          documentId: 'doc-1',
+          versionNumber: 2,
+          versionNo: 2,
+          date: new Date('2026-10-20T10:00:00Z'),
+          createdAt: new Date('2026-10-20T10:00:00Z'),
+          uploader: { id: 'usr-1', name: 'Admin', email: 'admin@school.org' },
+          size: 2048,
+          checksum: 'abc2',
+          status: 'pending',
+          mimeType: 'application/pdf',
+          storageKey: 'spaces/space-1/docs/doc-1/v2.pdf',
+          pageCount: 0,
+          isCurrent: true,
+        },
+        {
+          id: 'ver-1',
+          documentId: 'doc-1',
+          versionNumber: 1,
+          versionNo: 1,
+          date: new Date('2026-10-10T10:00:00Z'),
+          createdAt: new Date('2026-10-10T10:00:00Z'),
+          uploader: { id: 'usr-1', name: 'Admin', email: 'admin@school.org' },
+          size: 1024,
+          checksum: 'abc1',
+          status: 'indexed',
+          mimeType: 'application/pdf',
+          storageKey: 'spaces/space-1/docs/doc-1/v1.pdf',
+          pageCount: 5,
+          isCurrent: false,
+        },
+      ];
+
+      mockDocumentsService.listDocumentVersions.mockResolvedValueOnce(mockVersions);
+
+      const result = await controller.listDocumentVersions('doc-1', mockActor);
+
+      expect(mockDocumentsService.listDocumentVersions).toHaveBeenCalledWith('doc-1', mockActor);
+      expect(result).toBe(mockVersions);
     });
   });
 
