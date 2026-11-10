@@ -49,7 +49,7 @@ export class FileValidationService {
    * Throws clear HTTP exceptions (400, 404, 409, 413) on validation refusal.
    */
   async validateFile(options: ValidateUploadOptions): Promise<ValidatedFileResult> {
-    const { buffer, spaceId, allowDuplicates = false } = options;
+    const { buffer, originalName, spaceId, allowDuplicates = false } = options;
 
     if (!buffer || buffer.length === 0) {
       throw new BadRequestException('Uploaded file cannot be empty');
@@ -67,10 +67,10 @@ export class FileValidationService {
     }
 
     // 2. Detect MIME type from magic bytes (do not trust extension or header alone)
-    const detected = detectMimeTypeFromBuffer(buffer);
+    const detected = detectMimeTypeFromBuffer(buffer, originalName);
     if (!detected) {
       throw new BadRequestException(
-        'Unsupported file type. Only PDF, JPEG, PNG, and HEIC files are allowed.',
+        'Unsupported file type. Only PDF, Office documents (Word, Excel, PowerPoint), text, and images are allowed.',
       );
     }
 

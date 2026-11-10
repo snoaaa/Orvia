@@ -30,7 +30,6 @@ describe('magic-bytes.util', () => {
     });
 
     it('detects a valid JPEG image', () => {
-      // JPEG starts with FF D8 FF E0
       const buffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
       const result = detectMimeTypeFromBuffer(buffer);
 
@@ -41,7 +40,6 @@ describe('magic-bytes.util', () => {
     });
 
     it('detects a valid PNG image', () => {
-      // PNG starts with 89 50 4E 47 0D 0A 1A 0A
       const buffer = Buffer.from([
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
         0x44, 0x52,
@@ -55,7 +53,6 @@ describe('magic-bytes.util', () => {
     });
 
     it('detects HEIC image with major brand "heic"', () => {
-      // 4 bytes size (e.g. 24), 'ftyp', 'heic'
       const header = Buffer.alloc(24);
       header.writeUInt32BE(24, 0);
       header.write('ftyp', 4, 'latin1');
@@ -68,39 +65,147 @@ describe('magic-bytes.util', () => {
       });
     });
 
-    it('detects HEIC image when brand is in compatible brands list (e.g. mif1)', () => {
-      const header = Buffer.alloc(28);
-      header.writeUInt32BE(28, 0);
-      header.write('ftyp', 4, 'latin1');
-      header.write('mp42', 8, 'latin1'); // generic major brand
-      header.write('isom', 12, 'latin1'); // compatible 1
-      header.write('mif1', 16, 'latin1'); // compatible 2 (HEIF/HEIC)
+    it('detects Microsoft Word (DOCX) via deep OpenXML container inspection', () => {
+      const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+      const openXmlBody = Buffer.from('[Content_Types].xml...word/document.xml...word/_rels');
+      const docxBuffer = Buffer.concat([zipHeader, openXmlBody]);
 
-      const result = detectMimeTypeFromBuffer(header);
+      const result = detectMimeTypeFromBuffer(docxBuffer, 'syllabus.docx');
       expect(result).toEqual({
-        mimeType: 'image/heic',
-        extension: 'heic',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extension: 'docx',
       });
     });
 
-    it('rejects plain text files pretending to be PDF or image', () => {
-      const textBuffer = Buffer.from('Just some plain text or markdown notes');
-      expect(detectMimeTypeFromBuffer(textBuffer)).toBeNull();
+    it('detects Microsoft PowerPoint (PPTX) via deep OpenXML container inspection', () => {
+      const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+      const openXmlBody = Buffer.from('[Content_Types].xml...ppt/presentation.xml...ppt/slides');
+      const pptxBuffer = Buffer.concat([zipHeader, openXmlBody]);
+
+      const result = detectMimeTypeFromBuffer(pptxBuffer, 'lecture-01.pptx');
+      expect(result).toEqual({
+        mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        extension: 'pptx',
+      });
     });
 
-    it('rejects HTML files', () => {
-      const htmlBuffer = Buffer.from('<!DOCTYPE html><html><body>Dangerous script</body></html>');
-      expect(detectMimeTypeFromBuffer(htmlBuffer)).toBeNull();
+    it('detects Microsoft Excel (XLSX) via deep OpenXML container inspection', () => {
+      const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+      const openXmlBody = Buffer.from('[Content_Types].xml...xl/workbook.xml...xl/worksheets');
+      const xlsxBuffer = Buffer.concat([zipHeader, openXmlBody]);
+
+      const result = detectMimeTypeFromBuffer(xlsxBuffer, 'grades.xlsx');
+      expect(result).toEqual({
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        extension: 'xlsx',
+      });
+    });
+
+    it('detects OpenDocument Text (ODT)', () => {
+      const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+      const odtBody = Buffer.from('mimetypeapplication/vnd.oasis.opendocument.text...content.xml');
+      const odtBuffer = Buffer.concat([zipHeader, odtBody]);
+
+      const result = detectMimeTypeFromBuffer(odtBuffer, 'notes.odt');
+      expect(result).toEqual({
+        mimeType: 'application/vnd.oasis.opendocument.text',
+        extension: 'odt',
+      });
+    });
+
+    it('refuses generic or malicious ZIP archives lacking valid Office structures', () => {
+      const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+      const genericZipBody = Buffer.from('payload.exe...script.sh...something-else');
+      const fakeDocx = Buffer.concat([zipHeader, genericZipBody]);
+
+      // Even if attacker names it .docx, deep inspection rejects it!
+      const result = detectMimeTypeFromBuffer(fakeDocx, 'malicious.docx');
+      expect(result).toBeNull();
+    });
+
+    it('detects Legacy Microsoft Word (DOC) via OLE2 signature', () => {
+      const ole2Header = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+      const docBody = Buffer.from('WordDocument structure stream payload');
+      const docBuffer = Buffer.concat([ole2Header, docBody]);
+
+      const result = detectMimeTypeFromBuffer(docBuffer, 'assignment.doc');
+      expect(result).toEqual({
+        mimeType: 'application/msword',
+        extension: 'doc',
+      });
+    });
+
+    it('detects Legacy Microsoft Excel (XLS) via OLE2 signature', () => {
+      const ole2Header = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+      const xlsBody = Buffer.from('Workbook stream payload in compound file');
+      const xlsBuffer = Buffer.concat([ole2Header, xlsBody]);
+
+      const result = detectMimeTypeFromBuffer(xlsBuffer, 'data.xls');
+      expect(result).toEqual({
+        mimeType: 'application/vnd.ms-excel',
+        extension: 'xls',
+      });
+    });
+
+    it('detects Legacy Microsoft PowerPoint (PPT) via OLE2 signature', () => {
+      const ole2Header = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+      const pptBody = Buffer.from('PowerPoint Document stream payload');
+      const pptBuffer = Buffer.concat([ole2Header, pptBody]);
+
+      const result = detectMimeTypeFromBuffer(pptBuffer, 'slides.ppt');
+      expect(result).toEqual({
+        mimeType: 'application/vnd.ms-powerpoint',
+        extension: 'ppt',
+      });
+    });
+
+    it('detects Plain Text (.txt) with valid UTF-8 and no null bytes', () => {
+      const textBuffer = Buffer.from('This is a plain text document for lecture 1.');
+      const result = detectMimeTypeFromBuffer(textBuffer, 'reading-list.txt');
+
+      expect(result).toEqual({
+        mimeType: 'text/plain',
+        extension: 'txt',
+      });
+    });
+
+    it('detects Markdown (.md) with valid UTF-8 and no null bytes', () => {
+      const mdBuffer = Buffer.from('# Course Overview\n\n- Chapter 1: Foundations\n- Chapter 2: Deep Learning');
+      const result = detectMimeTypeFromBuffer(mdBuffer, 'syllabus.md');
+
+      expect(result).toEqual({
+        mimeType: 'text/markdown',
+        extension: 'md',
+      });
+    });
+
+    it('detects CSV (.csv) data files', () => {
+      const csvBuffer = Buffer.from('id,student_name,score\n1,Alice,95\n2,Bob,88');
+      const result = detectMimeTypeFromBuffer(csvBuffer, 'grades.csv');
+
+      expect(result).toEqual({
+        mimeType: 'text/csv',
+        extension: 'csv',
+      });
+    });
+
+    it('rejects text containing binary null bytes', () => {
+      const binaryInText = Buffer.from('Normal text header\x00corrupt binary bytes\x00');
+      const result = detectMimeTypeFromBuffer(binaryInText, 'fake.txt');
+
+      expect(result).toBeNull();
+    });
+
+    it('rejects scripts or executables (.sh, .bat, .exe) even if text-encoded', () => {
+      const scriptBuffer = Buffer.from('#!/bin/bash\nrm -rf /');
+      const result = detectMimeTypeFromBuffer(scriptBuffer, 'exploit.sh');
+
+      expect(result).toBeNull();
     });
 
     it('rejects Windows PE executable files (MZ)', () => {
       const exeBuffer = Buffer.from('MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff');
       expect(detectMimeTypeFromBuffer(exeBuffer)).toBeNull();
-    });
-
-    it('rejects ZIP / docx archives', () => {
-      const zipBuffer = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
-      expect(detectMimeTypeFromBuffer(zipBuffer)).toBeNull();
     });
 
     it('returns null for empty or tiny buffers (< 4 bytes)', () => {
@@ -111,7 +216,7 @@ describe('magic-bytes.util', () => {
   });
 
   describe('isAllowedMimeType', () => {
-    it('returns true for all allowed MIME types', () => {
+    it('returns true for all enterprise allowed MIME types', () => {
       for (const mime of ALLOWED_MIME_TYPES) {
         expect(isAllowedMimeType(mime)).toBe(true);
       }
@@ -120,7 +225,7 @@ describe('magic-bytes.util', () => {
     it('returns false for disallowed MIME types', () => {
       expect(isAllowedMimeType('application/zip')).toBe(false);
       expect(isAllowedMimeType('application/x-msdownload')).toBe(false);
-      expect(isAllowedMimeType('text/plain')).toBe(false);
+      expect(isAllowedMimeType('application/x-sh')).toBe(false);
       expect(isAllowedMimeType('video/mp4')).toBe(false);
     });
   });

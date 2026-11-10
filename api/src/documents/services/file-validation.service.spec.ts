@@ -67,14 +67,74 @@ describe('FileValidationService', () => {
   });
 
   it('rejects unsupported file type with BadRequestException', async () => {
-    const textBuffer = Buffer.from('This is a plain text file, not a PDF or image.');
+    const scriptBuffer = Buffer.from('#!/bin/bash\necho dangerous script');
     await expect(
       service.validateFile({
-        buffer: textBuffer,
-        originalName: 'test.txt',
-        declaredMimeType: 'text/plain',
+        buffer: scriptBuffer,
+        originalName: 'exploit.sh',
+        declaredMimeType: 'application/x-sh',
       }),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('validates a legitimate Word (DOCX) file and returns its checksum and mime type', async () => {
+    const docxBuffer = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.from('[Content_Types].xml...word/document.xml...word/_rels'),
+    ]);
+    const result = await service.validateFile({
+      buffer: docxBuffer,
+      originalName: 'syllabus.docx',
+    });
+
+    expect(result.mimeType).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(result.extension).toBe('docx');
+    expect(result.checksum).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('validates a legitimate PowerPoint (PPTX) file and returns its checksum and mime type', async () => {
+    const pptxBuffer = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.from('[Content_Types].xml...ppt/presentation.xml'),
+    ]);
+    const result = await service.validateFile({
+      buffer: pptxBuffer,
+      originalName: 'lecture-01.pptx',
+    });
+
+    expect(result.mimeType).toBe(
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    );
+    expect(result.extension).toBe('pptx');
+  });
+
+  it('validates a legitimate Excel (XLSX) file and returns its checksum and mime type', async () => {
+    const xlsxBuffer = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.from('[Content_Types].xml...xl/workbook.xml'),
+    ]);
+    const result = await service.validateFile({
+      buffer: xlsxBuffer,
+      originalName: 'grades.xlsx',
+    });
+
+    expect(result.mimeType).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(result.extension).toBe('xlsx');
+  });
+
+  it('validates a legitimate plain text document and returns its checksum and mime type', async () => {
+    const textBuffer = Buffer.from('Plain text study notes for class.');
+    const result = await service.validateFile({
+      buffer: textBuffer,
+      originalName: 'notes.txt',
+    });
+
+    expect(result.mimeType).toBe('text/plain');
+    expect(result.extension).toBe('txt');
   });
 
   it('refuses spoofed files pretending to be PDF by file extension', async () => {
