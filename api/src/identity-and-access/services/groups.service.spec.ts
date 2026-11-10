@@ -18,7 +18,8 @@ describe('GroupsService', () => {
   const prisma = {
     school: { findUnique: vi.fn() },
     group: { create: vi.fn(), count: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
-    groupMember: { deleteMany: vi.fn() },
+    groupMember: { deleteMany: vi.fn(), findMany: vi.fn(), createMany: vi.fn(), count: vi.fn() },
+    user: { findMany: vi.fn() },
     documentAccess: { deleteMany: vi.fn() },
     userAssignment: { updateMany: vi.fn() },
     $transaction: vi.fn(),
@@ -246,6 +247,66 @@ describe('GroupsService', () => {
       prisma.group.findMany.mockResolvedValue([]);
       await service.listGroups(actor('platform', ['groups:read']));
       expect(prisma.group.findMany.mock.calls[0][0].where).toEqual({ deletedAt: null });
+    });
+  });
+
+  describe('addMembers', () => {
+    const existing = (overrides: Record<string, unknown> = {}) => ({
+      id: 'g1',
+      schoolId: 'school-a',
+      name: 'Class 4-A',
+      type: 'class',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      school: { name: 'School A', status: 'active' },
+      _count: { members: 1 },
+      ...overrides,
+    });
+    const admin = actor('school', ['groups:manage_members']);
+
+    beforeEach(() => {
+      prisma.group.findFirst.mockResolvedValue(existing());
+      prisma.user.findMany.mockImplementation(({ where }) =>
+        Promise.resolve(where.id.in.filter((id: string) => id.startsWith('ok')).map((id: string) => ({ id }))),
+      );
+      prisma.groupMember.findMany.mockResolvedValue([{ userId: 'ok-1' }]);
+      prisma.groupMember.count.mockResolvedValue(3);
+      prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => Promise<unknown>) => run(prisma));
+    });
+
+    it('adds the new users, skips existing members and repeated ids, and touches the group', async () => {
+      const result = await service.addMembers('g1', { userIds: ['ok-1', 'ok-2', 'ok-2', 'ok-3'] }, admin);
+      expect(result).toEqual({ added: ['ok-2', 'ok-3'], alreadyMembers: ['ok-1'], memberCount: 3 });
+      expect(prisma.groupMember.createMany).toHaveBeenCalledWith({
+        data: [{ groupId: 'g1', userId: 'ok-2' }, { groupId: 'g1', userId: 'ok-3' }],
+        skipDuplicates: true,
+      });
+      expect(prisma.group.update.mock.calls[0][0].where).toEqual({ id: 'g1' });
+      expect(prisma.user.findMany.mock.calls[0][0].where.assignments).toEqual({ some: { schoolId: 'school-a' } });
+    });
+
+    it('writes nothing when everyone is already a member', async () => {
+      const result = await service.addMembers('g1', { userIds: ['ok-1'] }, admin);
+      expect(result.added).toEqual([]);
+      expect(prisma.groupMember.createMany).not.toHaveBeenCalled();
+      expect(prisma.group.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects the whole request when a user is outside the school, listing only those users', async () => {
+      await expect(service.addMembers('g1', { userIds: ['ok-2', 'other'] }, admin)).rejects.toThrow(
+        'These users do not belong to the school of the group: other',
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects another school, a deactivated school and an unknown group', async () => {
+      prisma.group.findFirst.mockResolvedValueOnce(existing({ schoolId: 'school-b' }));
+      await expect(service.addMembers('g1', { userIds: ['ok-2'] }, admin)).rejects.toBeInstanceOf(ForbiddenException);
+      prisma.group.findFirst.mockResolvedValueOnce(existing({ school: { name: 'School A', status: 'deactivated' } }));
+      await expect(service.addMembers('g1', { userIds: ['ok-2'] }, admin)).rejects.toBeInstanceOf(BadRequestException);
+      prisma.group.findFirst.mockResolvedValueOnce(null);
+      await expect(service.addMembers('g1', { userIds: ['ok-2'] }, admin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
     });
   });
 });

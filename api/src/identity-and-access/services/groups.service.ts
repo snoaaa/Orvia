@@ -3,8 +3,8 @@ import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateGroupDto, ListGroupsQueryDto, UpdateGroupDto } from '../dto/index.js';
-import { GroupDetailEntity, GroupEntity, PaginatedGroupsEntity } from '../entities/index.js';
+import type { AddGroupMembersDto, CreateGroupDto, ListGroupsQueryDto, UpdateGroupDto } from '../dto/index.js';
+import { AddGroupMembersResultEntity, GroupDetailEntity, GroupEntity, PaginatedGroupsEntity } from '../entities/index.js';
 
 /** What every group read loads: the school name and the number of members. */
 const detailInclude = {
@@ -149,6 +149,46 @@ export class GroupsService {
       await tx.groupMember.deleteMany({ where: { groupId: id } });
       await tx.documentAccess.deleteMany({ where: { groupId: id } });
       await tx.userAssignment.updateMany({ where: { groupId: id }, data: { groupId: null } });
+    });
+  }
+
+  /**
+   * POST /groups/:id/members (#36): all or nothing. Every user must have an assignment in the group's school
+   * (an unknown id gets the same 400, so ids of other schools are not revealed); users already in the group
+   * are skipped. The group's `updated_at` moves when someone is added, for the mobile sync.
+   */
+  async addMembers(id: string, dto: AddGroupMembersDto, actor: AuthenticatedUser): Promise<AddGroupMembersResultEntity> {
+    const group = await this.findGroup(id);
+    assertSchoolAccess(actor, 'groups:manage_members', group.schoolId);
+    if (group.school.status === 'deactivated') {
+      throw new BadRequestException('Cannot change the members of a group of a deactivated school');
+    }
+
+    const userIds = [...new Set(dto.userIds)];
+    const eligible = await this.prisma.user.findMany({
+      where: { id: { in: userIds }, assignments: { some: { schoolId: group.schoolId } } },
+      select: { id: true },
+    });
+    const eligibleIds = new Set(eligible.map((u) => u.id));
+    const rejected = userIds.filter((userId) => !eligibleIds.has(userId));
+    if (rejected.length > 0) {
+      throw new BadRequestException(`These users do not belong to the school of the group: ${rejected.join(', ')}`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.groupMember.findMany({ where: { groupId: id, userId: { in: userIds } }, select: { userId: true } });
+      const existingIds = new Set(existing.map((m) => m.userId));
+      const added = userIds.filter((userId) => !existingIds.has(userId));
+      if (added.length > 0) {
+        // skipDuplicates relies on the (group_id, user_id) unique index, so a simultaneous request cannot duplicate.
+        await tx.groupMember.createMany({ data: added.map((userId) => ({ groupId: id, userId })), skipDuplicates: true });
+        await tx.group.update({ where: { id }, data: { updatedAt: new Date() } });
+      }
+      return new AddGroupMembersResultEntity({
+        added,
+        alreadyMembers: userIds.filter((userId) => existingIds.has(userId)),
+        memberCount: await tx.groupMember.count({ where: { groupId: id } }),
+      });
     });
   }
 

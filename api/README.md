@@ -362,6 +362,14 @@ Deleted groups are hidden everywhere: `GET /groups` skips them, and `GET` / `PAT
 and `GET /users?groupId=` answer 404. Deactivated school → 400. Run `npm run db:migrate` after pulling
 (migration `8_groups_soft_delete`).
 
+### Add members: `POST /groups/{id}/members` (#36, `groups:manage_members`)
+
+Body `{ "userIds": [...] }` (1 to 100 UUIDs, repeated ids count once). All or nothing: every user must have
+an assignment in the group's school, otherwise 400 listing those ids and nobody is added (an unknown id gets the
+same answer, so ids of other schools are not revealed). Invited and suspended users can be added. Users already in
+the group are skipped. Answer: `{ added, alreadyMembers, memberCount }`. The group's `updated_at` moves when
+someone is added. Deleted group → 404, deactivated school → 400.
+
 > Content managers got `groups:read` in #34: re-run `npm run seed` on existing databases (safe to repeat).
 
 ## Audit trail
