@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto } from '../dto/index.js';
-import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity } from '../entities/index.js';
+import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
+import type { UploadedFile as IUploadedFile } from '../interfaces/index.js';
 import { DocumentsService } from '../services/documents.service.js';
 
 @ApiTags('Documents')
@@ -87,5 +89,43 @@ export class DocumentsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DocumentEntity> {
     return this.documentsService.updateDocument(id, dto, actor);
+  }
+
+  @Post('spaces/:spaceId/validate-file')
+  @RequirePermission('documents:create')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({
+    summary: 'Validate an uploaded file for ingestion (§5.2, #100)',
+    description:
+      'Pre-ingestion validation: checks MIME type via magic bytes (PDF, JPEG, PNG, HEIC), ' +
+      'enforces configured max file size, scans for malware (EICAR & ClamAV), ' +
+      'computes SHA-256 content checksum, and ensures no duplicate checksum exists in the target space.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiParam({ name: 'spaceId', description: 'Target space UUID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Document or image file (PDF, JPEG, PNG, HEIC)',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 200, description: 'File validated successfully', type: ValidatedFileEntity })
+  @ApiResponse({ status: 400, description: 'Non-allowed type, infected file, or invalid payload' })
+  @ApiResponse({ status: 404, description: 'Space not found' })
+  @ApiResponse({ status: 409, description: 'Duplicate file in space' })
+  @ApiResponse({ status: 413, description: 'Oversized file' })
+  async validateFile(
+    @Param('spaceId') spaceId: string,
+    @UploadedFile() file: IUploadedFile,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<ValidatedFileEntity> {
+    return this.documentsService.validateUploadedFile(spaceId, file, actor);
   }
 }

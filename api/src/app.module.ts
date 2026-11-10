@@ -5,7 +5,7 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { AuditModule } from './audit/audit.module.js';
 import { AuthModule } from './auth/auth.module.js';
-import { appConfig, authConfig, databaseConfig, storageConfig, swaggerEnvConfig } from './config/index.js';
+import { appConfig, authConfig, databaseConfig, storageConfig, swaggerEnvConfig, uploadConfig } from './config/index.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
 import { PrismaModule } from './database/prisma.module.js';
 import { DocumentsModule } from './documents/documents.module.js';
@@ -19,7 +19,7 @@ import { StorageModule } from './storage/storage.module.js';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, authConfig, databaseConfig, storageConfig, swaggerEnvConfig],
+      load: [appConfig, authConfig, databaseConfig, storageConfig, swaggerEnvConfig, uploadConfig],
     }),
     ScheduleModule.forRoot(),
     PrismaModule,
