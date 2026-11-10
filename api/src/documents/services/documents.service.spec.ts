@@ -1,9 +1,11 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Readable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import type { PrismaService } from '../../database/prisma.service.js';
 import type { StorageService } from '../../storage/storage.service.js';
 import type { UploadedFile } from '../interfaces/index.js';
+import { RangeNotSatisfiableException } from '../utils/http-range.util.js';
 import { DocumentsService } from './documents.service.js';
 import type { FileValidationService } from './file-validation.service.js';
 import type { ImageConversionService } from './image-conversion.service.js';
@@ -61,6 +63,72 @@ describe('DocumentsService', () => {
     sessionId: 'session-2',
   };
 
+  const studentUser: AuthenticatedUser = {
+    id: 'user-student-1',
+    email: 'student@school1.edu',
+    fullName: 'Student Alice',
+    status: 'ACTIVE',
+    assignments: [
+      {
+        role: 'student',
+        scope: 'school',
+        schoolId: 'school-1',
+        groupId: 'group-class-a',
+        permissions: [],
+      },
+    ],
+    permissions: [],
+    schoolIds: ['school-1'],
+    isPlatformAdmin: false,
+    role: 'student',
+    schoolId: 'school-1',
+    sessionId: 'session-3',
+  };
+
+  const staffUser: AuthenticatedUser = {
+    id: 'user-staff-1',
+    email: 'staff@school1.edu',
+    fullName: 'Staff Bob',
+    status: 'ACTIVE',
+    assignments: [
+      {
+        role: 'staff',
+        scope: 'school',
+        schoolId: 'school-1',
+        groupId: null,
+        permissions: [],
+      },
+    ],
+    permissions: [],
+    schoolIds: ['school-1'],
+    isPlatformAdmin: false,
+    role: 'staff',
+    schoolId: 'school-1',
+    sessionId: 'session-4',
+  };
+
+  const otherSchoolUser: AuthenticatedUser = {
+    id: 'user-other-school',
+    email: 'user@school2.edu',
+    fullName: 'Other School User',
+    status: 'ACTIVE',
+    assignments: [
+      {
+        role: 'student',
+        scope: 'school',
+        schoolId: 'school-2',
+        groupId: null,
+        permissions: [],
+      },
+    ],
+    permissions: [],
+    schoolIds: ['school-2'],
+    isPlatformAdmin: false,
+    role: 'student',
+    schoolId: 'school-2',
+    sessionId: 'session-5',
+  };
+
   beforeEach(() => {
     mockPrisma = {
       space: {
@@ -90,6 +158,9 @@ describe('DocumentsService', () => {
           updatedAt: new Date(),
         })),
       },
+      messageReference: {
+        findFirst: vi.fn(),
+      },
       processingJob: {
         create: vi.fn().mockImplementation(async ({ data }: any) => ({
           ...data,
@@ -107,6 +178,9 @@ describe('DocumentsService', () => {
     mockStorageService = {
       save: vi.fn().mockResolvedValue({ key: 'test', size: 100 }),
       delete: vi.fn().mockResolvedValue(true),
+      read: vi.fn().mockImplementation(async () => Readable.from([Buffer.from('streamed file content bytes')])),
+      getMetadata: vi.fn().mockResolvedValue({ size: 1000, lastModified: new Date('2026-11-10T12:00:00Z') }),
+      exists: vi.fn().mockResolvedValue(true),
     };
 
     mockProcessingQueueService = {
@@ -866,6 +940,331 @@ describe('DocumentsService', () => {
       expect(mockStorageService.delete).toHaveBeenCalledWith(
         expect.stringMatching(/^spaces\/space-1\/docs\/[a-f0-9-]+\/v1\.jpg$/),
       );
+    });
+  });
+
+  describe('getDocumentVersionStream', () => {
+    const mockDocument = {
+      id: 'doc-123',
+      spaceId: 'space-1',
+      title: 'Advanced Computer Architecture',
+      deletedAt: null,
+      space: { id: 'space-1', schoolId: 'school-1', privacy: 'public' },
+      access: [],
+    };
+
+    const mockVersion1 = {
+      id: 'ver-v1',
+      documentId: 'doc-123',
+      versionNo: 1,
+      storageKey: 'spaces/space-1/docs/doc-123/v1.pdf',
+      mimeType: 'application/pdf',
+      checksum: 'sha256-v1-checksum',
+      updatedAt: new Date('2026-11-01T10:00:00Z'),
+    };
+
+    const mockVersion2 = {
+      id: 'ver-v2',
+      documentId: 'doc-123',
+      versionNo: 2,
+      storageKey: 'spaces/space-1/docs/doc-123/v2.pdf',
+      mimeType: 'application/pdf',
+      checksum: 'sha256-v2-checksum',
+      updatedAt: new Date('2026-11-05T10:00:00Z'),
+    };
+
+    it('throws NotFoundException if document does not exist', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getDocumentVersionStream({
+          documentId: 'doc-missing',
+          actor: platformAdmin,
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException if document is soft-deleted', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...mockDocument,
+        deletedAt: new Date(),
+      });
+
+      await expect(
+        service.getDocumentVersionStream({
+          documentId: 'doc-123',
+          actor: platformAdmin,
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException if requested version is not found', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getDocumentVersionStream({
+          documentId: 'doc-123',
+          versionRef: '99',
+          actor: platformAdmin,
+        }),
+      ).rejects.toThrow(/Version 99 not found/);
+    });
+
+    it('platform admin can download any version of any document without restriction', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        versionRef: '1',
+        actor: platformAdmin,
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['Content-Type']).toBe('application/pdf');
+      expect(result.headers['Content-Length']).toBe(1000);
+      expect(result.headers['Accept-Ranges']).toBe('bytes');
+      expect(result.filename).toBe('Advanced Computer Architecture.pdf');
+      expect(mockStorageService.read).toHaveBeenCalledWith(mockVersion1.storageKey, {
+        start: 0,
+        end: 999,
+      });
+    });
+
+    it('school admin can download any version (current or historical) of documents in their school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      // Historical version 1 requested
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        versionRef: '1',
+        actor: schoolAdmin,
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.filename).toBe('Advanced Computer Architecture.pdf');
+    });
+
+    it('throws ForbiddenException if user belongs to a different school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion2);
+
+      await expect(
+        service.getDocumentVersionStream({
+          documentId: 'doc-123',
+          actor: otherSchoolUser,
+        }),
+      ).rejects.toThrow(/You do not have access to documents in this school/);
+    });
+
+    it('student can download current version when document has no restrictive rules in their school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      // Resolving latest version:
+      mockPrisma.documentVersion.findFirst
+        .mockResolvedValueOnce(mockVersion2) // target version resolution
+        .mockResolvedValueOnce(mockVersion2); // latestVersion comparison check
+
+      mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        actor: studentUser,
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['Content-Disposition']).toContain('attachment');
+    });
+
+    it('student can download current version when document is published to their group', async () => {
+      const groupPublishedDoc = {
+        ...mockDocument,
+        access: [
+          { schoolId: 'school-1', roleId: null, groupId: 'group-class-a' },
+        ],
+      };
+
+      mockPrisma.document.findUnique.mockResolvedValueOnce(groupPublishedDoc);
+      mockPrisma.documentVersion.findFirst
+        .mockResolvedValueOnce(mockVersion2) // target version
+        .mockResolvedValueOnce(mockVersion2); // latest version
+
+      mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        actor: studentUser,
+      });
+
+      expect(result.statusCode).toBe(200);
+    });
+
+    it('staff without document management rights can download current version when published to staff role', async () => {
+      const staffDoc = {
+        ...mockDocument,
+        access: [
+          { schoolId: 'school-1', roleId: 'staff', groupId: null },
+        ],
+      };
+
+      mockPrisma.document.findUnique.mockResolvedValueOnce(staffDoc);
+      mockPrisma.documentVersion.findFirst
+        .mockResolvedValueOnce(mockVersion2)
+        .mockResolvedValueOnce(mockVersion2);
+
+      mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        actor: staffUser,
+      });
+
+      expect(result.statusCode).toBe(200);
+    });
+
+    it('throws ForbiddenException if document has access rules that do not match student group or role', async () => {
+      const restrictedDoc = {
+        ...mockDocument,
+        access: [
+          { schoolId: 'school-1', roleId: null, groupId: 'group-different-class' },
+        ],
+      };
+
+      mockPrisma.document.findUnique.mockResolvedValueOnce(restrictedDoc);
+      mockPrisma.documentVersion.findFirst
+        .mockResolvedValueOnce(mockVersion2)
+        .mockResolvedValueOnce(mockVersion2);
+
+      mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getDocumentVersionStream({
+          documentId: 'doc-123',
+          actor: studentUser,
+        }),
+      ).rejects.toThrow(/This document is not published to your school, role, or group/);
+    });
+
+    it('throws ForbiddenException if non-manager tries to download historical version not cited in their answers', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      // Requesting historical version 1:
+      mockPrisma.documentVersion.findFirst
+        .mockResolvedValueOnce(mockVersion1) // target version 1
+        .mockResolvedValueOnce(mockVersion2); // latest version is version 2!
+
+      // Not cited:
+      mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getDocumentVersionStream({
+          documentId: 'doc-123',
+          versionRef: '1',
+          actor: studentUser,
+        }),
+      ).rejects.toThrow(
+        /Historical document versions can only be accessed by document managers or when cited in your conversations/,
+      );
+    });
+
+    it('student can download historical version when it is cited in their conversation answer', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      // Cited in user's own answers!
+      mockPrisma.messageReference.findFirst.mockResolvedValueOnce({ id: 'ref-1' });
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        versionRef: '1',
+        actor: studentUser,
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.filename).toBe('Advanced Computer Architecture.pdf');
+    });
+
+    it('handles HTTP range request with 206 Partial Content (bytes=0-499)', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        actor: platformAdmin,
+        rangeHeader: 'bytes=0-499',
+      });
+
+      expect(result.statusCode).toBe(206);
+      expect(result.headers['Content-Range']).toBe('bytes 0-499/1000');
+      expect(result.headers['Content-Length']).toBe(500);
+      expect(mockStorageService.read).toHaveBeenCalledWith(mockVersion1.storageKey, {
+        start: 0,
+        end: 499,
+      });
+    });
+
+    it('handles open-ended range request (bytes=500-)', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        actor: platformAdmin,
+        rangeHeader: 'bytes=500-',
+      });
+
+      expect(result.statusCode).toBe(206);
+      expect(result.headers['Content-Range']).toBe('bytes 500-999/1000');
+      expect(result.headers['Content-Length']).toBe(500);
+      expect(mockStorageService.read).toHaveBeenCalledWith(mockVersion1.storageKey, {
+        start: 500,
+        end: 999,
+      });
+    });
+
+    it('handles suffix range request (bytes=-200)', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        actor: platformAdmin,
+        rangeHeader: 'bytes=-200',
+      });
+
+      expect(result.statusCode).toBe(206);
+      expect(result.headers['Content-Range']).toBe('bytes 800-999/1000');
+      expect(result.headers['Content-Length']).toBe(200);
+      expect(mockStorageService.read).toHaveBeenCalledWith(mockVersion1.storageKey, {
+        start: 800,
+        end: 999,
+      });
+    });
+
+    it('throws RangeNotSatisfiableException when range is beyond file bounds', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      await expect(
+        service.getDocumentVersionStream({
+          documentId: 'doc-123',
+          actor: platformAdmin,
+          rangeHeader: 'bytes=2000-',
+        }),
+      ).rejects.toThrow(RangeNotSatisfiableException);
+    });
+
+    it('sets inline Content-Disposition when disposition is inline for viewer streaming', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      const result = await service.getDocumentVersionStream({
+        documentId: 'doc-123',
+        actor: platformAdmin,
+        disposition: 'inline',
+      });
+
+      expect(result.headers['Content-Disposition']).toMatch(/^inline;/);
     });
   });
 });
