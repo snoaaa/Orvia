@@ -221,9 +221,10 @@ platform admin (403 otherwise). Unknown role or `role` without `schoolId` → 40
 **Changing a role** (`PATCH /identity/users/{id}/role`, `users:assign_role`) with
 `{ "role": "SCHOOL_ADMIN", "schoolId": "<uuid>" }` creates or replaces the user's assignment in that
 school; their other schools are untouched. Re-assigning the role already held is a no-op. Unknown
-role → 400, unknown user or school → 404, a platform-scoped role (or a target school outside the
-actor's own) without platform-wide `users:assign_role` → 403. Audited as `identity_access/role_assigned`
-with the previous role.
+role → 400, unknown user or school → 404, a target school outside the actor's own → 403, and a role
+above the actor's own level → 403 (`assertCanGrantRole`, the same check as `POST /assignments`, see
+[Assignments](#assignments); only a platform admin can grant a platform role). Audited as
+`identity_access/role_assigned` with the previous role.
 
 **Email domains** are per school (`school_domains`). `POST /identity/schools` takes
 `allowedDomains: "polytechnic.edu,yahoo.org"`; `PATCH /identity/schools/{id}` replaces the list
@@ -331,6 +332,119 @@ Body: `schoolId`, `name` and optionally `type` (`class` by default, `department`
 unique within a school, ignoring case (409), enforced by a database index. Another school → 403,
 unknown school → 404, deactivated school → 400.
 
+## Assignments
+
+`src/identity-and-access/controllers/assignments.controller.ts`, under the **Assignments** tag in Swagger
+(Sections 4.5 and 4.7). An assignment gives a user a role in a school, optionally in one of its groups. All
+routes need `users:assign_role` (platform and school admins).
+
+**Role level** (`src/auth/utils/role-level.util.ts`) comes from the role scope: platform 3 > school 2 > group 1
+(another scope 0). An admin's level is the highest level of their own roles that carry `users:assign_role` in
+the target school (platform roles count everywhere). `assertCanGrantRole` (`src/auth/utils/role-grant.util.ts`)
+refuses a role above it, here and in `PATCH /identity/users/{id}/role`.
+
+### Assign a user: `POST /assignments` (#47)
+
+```json
+{ "userId": "<uuid>", "schoolId": "<uuid>", "groupId": "<uuid, optional>", "role": "STUDENT" }
+```
+
+- One assignment per user per school, enforced by the service (the user row is locked while checking): a second
+  one → 409; change it with `PATCH /assignments/{id}` (or `PATCH /identity/users/{id}/role`). The database has no unique index on it yet.
+- The group must belong to the school (400) and exist (404); a platform role cannot have a group (400). With a
+  group, the user is also added to its members (`group_members`), so it shows under `groups` in `GET /users/{id}`.
+- 403: another school, a role above the admin's level, or a user who already holds a higher-level role.
+- Unknown user, school or group → 404; unknown role or deactivated school → 400.
+
+Answer 201 with `id`, `userId`, `schoolId`, `schoolName`, `groupId`, `groupName`, `role`, `roleScope`,
+`createdAt`, `updatedAt`. Audited as `identity_access/role_assigned` (with `groupId`, `previousRole: null`). The
+assignment appears in `GET /users/{id}`.
+
+### Update an assignment: `PATCH /assignments/{id}` (#48)
+
+```json
+{ "role": "STAFF", "groupId": "<uuid> | null" }
+```
+
+Both fields are optional, but at least one is required (empty body → 400). **The school is not editable**:
+`schoolId` is not a field (sending it → 400); to move a user to another school, create an assignment there.
+
+- `role` left out keeps the role; `groupId` left out keeps the group, `null` removes it.
+- Same checks as `POST /assignments`: another school, a role above the admin's level, or a user who already holds
+  a higher-level role → 403; unknown role, deactivated school, group of another school, or a group on a platform
+  role → 400 (also when only the role becomes a platform role and the current group is kept: send
+  `groupId: null` with it); unknown or removed assignment, or unknown group → 404.
+- **Group members**: a new group removes the user from the old group's members and adds them to the new one;
+  `groupId: null` only removes the old membership. The assignment is the only source of a membership in its school
+  (a group belongs to one school, a user has one assignment per school).
+- **`updated_at`** (Section 4.7): moves only on a real change, so the next mobile sync picks it up. When the role
+  and group stay the same, nothing is written, nothing is audited, and `updatedAt` is unchanged. Nothing is written
+  to `sync_changes` yet (the mobile sync is still a stub).
+- The user row is locked during the write and the assignment re-read under the lock, so two simultaneous changes
+  cannot leave a stale group membership.
+
+Answer 200 with the assignment (same shape as `POST`). Audited as `identity_access/assignment_updated`.
+
+`PATCH /identity/users/{id}/role` also changes a role, keyed by user and `schoolId`: it changes the role only
+(and creates the assignment if missing, also when the previous one was removed), never touches the group or
+`group_members`, and does not yet check the target user's level or a deactivated school. Prefer
+`PATCH /assignments/{id}` to edit an existing assignment.
+
+### Remove an assignment: `DELETE /assignments/{id}` (#49)
+
+Ends the link between the user and the school, group and role of the assignment. Answer **204** (no body).
+
+- **Soft delete**: the row is kept with `deleted_at` set, and `updated_at` set to the same instant (migration
+  `8_user_assignments_soft_delete`). A future mobile sync reading `updated_at > lastSync` *without* the active filter
+  gets the row with its `deletedAt` and drops that access on the device (Section 4.7). Nothing is written to
+  `sync_changes` yet.
+- **Every reader ignores removed rows** through `ACTIVE_ASSIGNMENT` (`src/auth/utils/active-assignment.util.ts`,
+  `{ deletedAt: null }`; raw SQL uses `deleted_at IS NULL`): the per-request user loading (`AuthUserService`, so
+  the guards and school scoping), admin/Google login, refresh, password setup, user list/detail/edit, sessions admin,
+  the assignment routes, `PATCH /identity/users/{id}/role`, role counts and deletion, the permission overview, the
+  dashboard overview, the seed and the dev fixtures. The access is therefore gone on the user's **very next
+  request**, with the same token. Any new query on `user_assignments` must use it.
+- Same checks as `PATCH`: another school, a role above the admin's level (a school admin cannot remove a platform
+  role), or a user who already holds a higher-level role → 403; deactivated school → 400; unknown or **already
+  removed** assignment → 404 (a repeat is not audited again); invalid UUID → 400.
+- **Last school admin → 409**. A school admin is an active assignment in that school whose role is
+  school-scoped and grants `users:assign_role` (today `SCHOOL_ADMIN`; a custom admin role counts too; platform roles
+  do not). Only admins whose user is not `SUSPENDED` count (an `INVITED` one can still activate). Removing a
+  suspended admin is always allowed, since it takes no working admin away.
+- **Concurrency**: the school row, then the user row, is locked (`SELECT … FOR UPDATE`) and the assignment
+  re-read under the locks, so two simultaneous removals of the last two admins give one 204 and one 409.
+- **Group members**: the user leaves the members of every group of that school (the assignment was their only
+  source, see `PATCH`), unless another active assignment in that school remains.
+- A removed assignment does not block a new `POST /assignments` in the same school: it creates a new row.
+
+Audited as `identity_access/assignment_removed`.
+
+### Assignable roles: `GET /assignments/assignable-roles` (#47)
+
+The roles the current admin may assign, as `{ id, name, scope, level }`, highest level first. A school admin
+gets school and group roles, a platform admin every role. With `?schoolId=`, only the admin's roles in that school
+(and platform roles) count; a school outside their scope → 403.
+
+## Roles
+
+`src/identity-and-access/controllers/roles.controller.ts`, under the **Roles** tag in Swagger (Section 4.5).
+Platform admins only: the route needs `system:manage`, and the service also refuses a school-scoped role holding it.
+
+### Create a role: `POST /roles` (#44, `system:manage`)
+
+```json
+{ "name": "TEACHING_ASSISTANT", "scope": "school", "permissions": ["documents:read", "rag:query"] }
+```
+
+- `name`: 2–50 letters, digits, `_` or `-`, stored in upper case. Unique ignoring case (409, enforced by the
+  unique index, so two simultaneous requests cannot both succeed). The six base role names are reserved (400).
+- `scope`: the documentary scope, `platform`, `school` or `group`.
+- `permissions`: at least one permission **code**, as listed by `GET /permissions`, no repeats. An unknown code
+  is 400 and nothing is created. The role and its permissions are written in one transaction.
+
+Answer 201 with the role (`id`, `name`, `scope`, sorted `permissions`, `assignedUsersCount`, `isBase`). Other
+roles get 403. The older `POST /identity/roles`, used by the web role editor, runs the same code.
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of
@@ -378,7 +492,9 @@ unknown school → 404, deactivated school → 400.
 | `authentication` | `token_refresh_failure` | Refresh token rejected (invalid, expired, revoked, reused, suspended user) | the user if known | `session` | `reason` — **never the token** |
 | `authentication` | `session_revoked` | A session is revoked (admin action, suspension, token reuse) | the admin, or anonymous if automatic | `session` | `ownerUserId`, `reason` |
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
-| `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `role`, `previousRole` |
+| `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
+| `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
+| `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `security` | `access_denied` | Any HTTP 403 | the user if authenticated | `route` (`METHOD /path`) | `reason`, `requiredPermission` |
 | `security` | `account_locked` | An account is locked (e.g. too many failed logins) | anonymous | `user` | `email`, `reason`, `failedAttempts`, `lockedUntil` |
 

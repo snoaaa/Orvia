@@ -153,6 +153,9 @@ model UserAssignment {
   roleId    String   @map("role_id")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
+  /// Soft delete (#49): a removed assignment is kept with its removal time, so the mobile sync can see it.
+  /// Every reader must filter on `deletedAt: null` (ACTIVE_ASSIGNMENT in src/auth/utils/active-assignment.util.ts).
+  deletedAt DateTime? @map("deleted_at") @db.DateTime(3)
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
@@ -161,6 +164,7 @@ model UserAssignment {
 
   @@index([userId])
   @@index([schoolId])
+  @@index([schoolId, deletedAt])
   @@index([groupId])
   @@index([roleId])
   @@map("user_assignments")

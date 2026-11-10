@@ -819,57 +819,7 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       });
     });
 
-    describe('createRole', () => {
-      it('creates custom role and links requested permissions', async () => {
-        mockPrisma.role.findUnique.mockResolvedValueOnce(null);
-        mockPrisma.permission.findMany.mockResolvedValueOnce([{ id: 'p1', code: 'documents:read' }]);
-        mockPrisma.role.findFirst.mockResolvedValueOnce({
-          id: 'new-role-id',
-          name: 'TA_MATH',
-          scope: 'school',
-          rolePermissions: [{ permission: { code: 'documents:read' } }],
-          _count: { assignments: 0 },
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-
-        const result = await service.createRole({
-          name: 'ta_math',
-          scope: 'school',
-          permissions: ['documents:read'],
-        });
-
-        expect(mockPrisma.role.create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: expect.objectContaining({
-              name: 'TA_MATH',
-              scope: 'school',
-            }),
-          }),
-        );
-        expect(mockPrisma.rolePermission.createMany).toHaveBeenCalled();
-        expect(result.name).toBe('TA_MATH');
-      });
-
-      it('rejects creating role with reserved base role name', async () => {
-        await expect(
-          service.createRole({
-            name: 'PLATFORM_ADMIN',
-            scope: 'platform',
-          }),
-        ).rejects.toBeInstanceOf(BadRequestException);
-      });
-
-      it('rejects duplicate role name with 409 ConflictException', async () => {
-        mockPrisma.role.findUnique.mockResolvedValueOnce({ id: 'existing', name: 'TA_MATH' });
-        await expect(
-          service.createRole({
-            name: 'TA_MATH',
-            scope: 'school',
-          }),
-        ).rejects.toBeInstanceOf(ConflictException);
-      });
-    });
+    // createRole (POST /roles, #44) is covered in roles-create.service.spec.ts.
 
     describe('updateRole', () => {
       it('updates custom role and resyncs permissions', async () => {

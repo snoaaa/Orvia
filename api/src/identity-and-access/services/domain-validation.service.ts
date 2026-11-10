@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service.js';
+import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 
 /**
  * Result of a school domain validation check.
@@ -159,7 +160,7 @@ export class DomainValidationService {
     userId: string,
   ): Promise<{ allowed: boolean; matchedSchoolId?: string | null }> {
     const assignments = await this.prisma.userAssignment.findMany({
-      where: { userId },
+      where: { userId, ...ACTIVE_ASSIGNMENT },
       select: { schoolId: true },
     });
     return this.validateDomainForUser(

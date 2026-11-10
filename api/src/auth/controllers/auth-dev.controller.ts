@@ -10,6 +10,7 @@ import { Public } from '../decorators/auth.decorators.js';
 import { DevTokenDto } from '../dto/index.js';
 import { SessionCleanupService } from '../services/session-cleanup.service.js';
 import { SessionService, type TokenPair } from '../services/session.service.js';
+import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
 
 /** Hidden (404) unless AUTH_DEV_TOOLS=true and not in production. */
 @Injectable()
@@ -81,7 +82,7 @@ export class AuthDevController {
         create: { email: u.email, fullName: u.fullName, status: u.status },
       });
       const assigned = await this.prisma.userAssignment.findFirst({
-        where: { userId: user.id, roleId: role.id, schoolId },
+        where: { userId: user.id, roleId: role.id, schoolId, ...ACTIVE_ASSIGNMENT },
       });
       if (!assigned) {
         await this.prisma.userAssignment.create({ data: { userId: user.id, roleId: role.id, schoolId } });
