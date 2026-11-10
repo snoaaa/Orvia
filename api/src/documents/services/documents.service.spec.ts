@@ -54,10 +54,10 @@ describe('DocumentsService', () => {
         scope: 'school',
         schoolId: 'school-1',
         groupId: null,
-        permissions: ['documents:create', 'documents:read', 'documents:update', 'spaces:read', 'spaces:create'],
+        permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', 'spaces:read', 'spaces:create'],
       },
     ],
-    permissions: ['documents:create', 'documents:read', 'documents:update', 'spaces:read', 'spaces:create'],
+    permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', 'spaces:read', 'spaces:create'],
     schoolIds: ['school-1'],
     isPlatformAdmin: false,
     role: 'school_admin',
@@ -155,6 +155,7 @@ describe('DocumentsService', () => {
       documentVersion: {
         findFirst: vi.fn(),
         findMany: vi.fn(),
+        count: vi.fn(),
         create: vi.fn().mockImplementation(async ({ data }: any) => ({
           ...data,
           createdAt: new Date(),
@@ -1885,6 +1886,123 @@ describe('DocumentsService', () => {
 
       expect(result).toHaveLength(1);
       expect(result[0].uploader).toBeNull();
+    });
+  });
+
+  describe('deleteDocument (#108)', () => {
+    const existingDoc = {
+      id: 'doc-1',
+      spaceId: 'space-1',
+      title: 'Operating Systems',
+      author: 'Prof. Tanenbaum',
+      tags: 'os,systems',
+      deletedAt: null,
+      createdAt: new Date('2026-10-10T10:00:00Z'),
+      updatedAt: new Date('2026-10-10T10:00:00Z'),
+      space: { schoolId: 'school-1' },
+    };
+
+    it('successfully soft-deletes a document and records an immutable audit event', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.count.mockResolvedValueOnce(3);
+      mockPrisma.document.update.mockResolvedValueOnce({
+        ...existingDoc,
+        deletedAt: new Date(),
+      });
+
+      const result = await service.deleteDocument('doc-1', schoolAdmin, { ip: '127.0.0.1' });
+
+      expect(mockPrisma.document.update).toHaveBeenCalledWith({
+        where: { id: 'doc-1' },
+        data: { deletedAt: expect.any(Date) },
+      });
+
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: 'documents',
+          action: 'document_deleted',
+          entity: { type: 'document', id: 'doc-1' },
+          details: expect.objectContaining({
+            spaceId: 'space-1',
+            schoolId: 'school-1',
+            title: 'Operating Systems',
+            versionsCount: 3,
+          }),
+        }),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        id: 'doc-1',
+        message: 'Document successfully soft-deleted',
+      });
+    });
+
+    it('throws NotFoundException if document does not exist', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.deleteDocument('nonexistent-doc', schoolAdmin)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws NotFoundException if document is already soft-deleted', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...existingDoc,
+        deletedAt: new Date(),
+      });
+
+      await expect(service.deleteDocument('doc-1', schoolAdmin)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws ForbiddenException if mobile student user attempts deletion', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(service.deleteDocument('doc-1', studentUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws ForbiddenException if user lacks documents:delete in the space school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(service.deleteDocument('doc-1', otherSchoolUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('allows platform admin to delete document across any school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.count.mockResolvedValueOnce(1);
+      mockPrisma.document.update.mockResolvedValueOnce({
+        ...existingDoc,
+        deletedAt: new Date(),
+      });
+
+      const result = await service.deleteDocument('doc-1', platformAdmin);
+
+      expect(result.success).toBe(true);
+      expect(mockPrisma.document.update).toHaveBeenCalledWith({
+        where: { id: 'doc-1' },
+        data: { deletedAt: expect.any(Date) },
+      });
+    });
+
+    it('findAllDocuments excludes soft-deleted documents by filtering deletedAt: null', async () => {
+      mockPrisma.document.count.mockResolvedValueOnce(0);
+      mockPrisma.document.findMany.mockResolvedValueOnce([]);
+
+      await service.findAllDocuments(schoolAdmin);
+
+      expect(mockPrisma.document.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            deletedAt: null,
+          }),
+        }),
+      );
     });
   });
 });

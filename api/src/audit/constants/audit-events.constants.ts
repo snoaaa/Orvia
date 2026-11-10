@@ -28,6 +28,7 @@ export const AuditAction = {
   DOCUMENT_UPLOADED: 'document_uploaded',
   DOCUMENT_UPDATED: 'document_updated',
   DOCUMENT_REPLACED: 'document_replaced',
+  DOCUMENT_DELETED: 'document_deleted',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
@@ -46,6 +47,7 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.DOCUMENT_UPLOADED]: AuditCategory.DOCUMENTS,
   [AuditAction.DOCUMENT_UPDATED]: AuditCategory.DOCUMENTS,
   [AuditAction.DOCUMENT_REPLACED]: AuditCategory.DOCUMENTS,
+  [AuditAction.DOCUMENT_DELETED]: AuditCategory.DOCUMENTS,
 };
 
 /** Primary key of the single audit_chain_head row. */

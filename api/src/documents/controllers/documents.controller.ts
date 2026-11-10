@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpStatus,
   Param,
@@ -122,6 +123,29 @@ export class DocumentsController {
   ): Promise<DocumentEntity> {
     const auditContext = auditContextFromRequest(req);
     return this.documentsService.updateDocument(id, dto, actor, auditContext);
+  }
+
+  @Delete(':id')
+  @RequirePermission('documents:delete')
+  @ApiOperation({
+    summary: 'Delete a document (soft delete) (§4.1, §9, #108)',
+    description:
+      'Logically deletes a document so it is no longer retrievable, searchable, or downloadable. ' +
+      'Existing citations in chat answers reflect the source as unavailable. ' +
+      'Restricted to platform administrators, school administrators, and staff holding documents:delete. ' +
+      'Records an immutable hash-chained audit event.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiResponse({ status: 200, description: 'Document soft-deleted' })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks documents:delete in this school' })
+  @ApiResponse({ status: 404, description: 'Document not found or already deleted' })
+  async deleteDocument(
+    @Param('id') id: string,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<{ success: boolean; id: string; message: string }> {
+    const auditContext = auditContextFromRequest(req);
+    return this.documentsService.deleteDocument(id, actor, auditContext);
   }
 
   @Post(':id/replace')
