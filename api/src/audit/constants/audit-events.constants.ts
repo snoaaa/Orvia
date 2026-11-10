@@ -21,6 +21,8 @@ export const AuditAction = {
   USER_INVITED: 'user_invited',
   PASSWORD_SETUP: 'password_setup',
   ROLE_ASSIGNED: 'role_assigned',
+  PERMISSION_GRANTED: 'permission_granted',
+  PERMISSION_REVOKED: 'permission_revoked',
   // security
   ACCESS_DENIED: 'access_denied',
   ACCOUNT_LOCKED: 'account_locked',
@@ -42,6 +44,8 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.USER_INVITED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.PASSWORD_SETUP]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.ROLE_ASSIGNED]: AuditCategory.IDENTITY_ACCESS,
+  [AuditAction.PERMISSION_GRANTED]: AuditCategory.IDENTITY_ACCESS,
+  [AuditAction.PERMISSION_REVOKED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.ACCESS_DENIED]: AuditCategory.SECURITY,
   [AuditAction.ACCOUNT_LOCKED]: AuditCategory.SECURITY,
   [AuditAction.DOCUMENT_UPLOADED]: AuditCategory.DOCUMENTS,

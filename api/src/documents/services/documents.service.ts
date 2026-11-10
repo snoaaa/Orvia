@@ -104,7 +104,7 @@ export class DocumentsService {
     if (!space) {
       throw new NotFoundException(`Space with ID ${dto.spaceId} not found`);
     }
-    assertSchoolAccess(actor, 'documents:create', space.schoolId);
+    assertSchoolAccess(actor, 'documents:manage', space.schoolId);
     const id = randomUUID();
     const data = DocumentMapper.fromDtoToCreateInput(dto, id);
     const created = await this.prisma.document.create({
@@ -123,7 +123,7 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
-    const doc = await this.findDocumentInScope(id, actor, 'documents:update');
+    const doc = await this.findDocumentInScope(id, actor, 'documents:manage');
 
     if (dto.title !== undefined && dto.title.trim().length === 0) {
       throw new BadRequestException('Document title cannot be empty');
@@ -204,7 +204,7 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext?: AuditRequestContext,
   ): Promise<{ success: boolean; id: string; message: string }> {
-    const doc = await this.findDocumentInScope(id, actor, 'documents:delete');
+    const doc = await this.findDocumentInScope(id, actor, 'documents:manage');
 
     const versionsCount = await this.prisma.documentVersion.count({
       where: { documentId: doc.id },
@@ -256,7 +256,7 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
-    const doc = await this.findDocumentInScope(documentId, actor, 'documents:update');
+    const doc = await this.findDocumentInScope(documentId, actor, 'documents:manage');
 
     if (!file || !file.buffer || file.buffer.length === 0) {
       throw new BadRequestException('A replacement file must be uploaded under the "file" field');
@@ -422,8 +422,8 @@ export class DocumentsService {
   /** School-scoped users must create the space in one of their schools. */
   async createSpace(dto: CreateSpaceDto, actor: AuthenticatedUser): Promise<SpaceEntity> {
     if (dto.schoolId) {
-      assertSchoolAccess(actor, 'spaces:create', dto.schoolId);
-    } else if (schoolsWithPermission(actor, 'spaces:create') !== 'all') {
+      assertSchoolAccess(actor, 'documents:manage', dto.schoolId);
+    } else if (schoolsWithPermission(actor, 'documents:manage') !== 'all') {
       throw new BadRequestException('schoolId is required: you can only create spaces in your own school');
     }
     const id = randomUUID();
@@ -468,7 +468,7 @@ export class DocumentsService {
     if (!space) {
       throw new NotFoundException(`Space with ID ${spaceId} not found`);
     }
-    assertSchoolAccess(actor, 'documents:create', space.schoolId);
+    assertSchoolAccess(actor, 'documents:manage', space.schoolId);
 
     if (!file || !file.buffer) {
       throw new BadRequestException('A file must be uploaded under the "file" field');
@@ -515,7 +515,7 @@ export class DocumentsService {
       throw new NotFoundException(`Space with ID ${spaceId} not found`);
     }
 
-    assertSchoolAccess(actor, 'documents:create', space.schoolId);
+    assertSchoolAccess(actor, 'documents:manage', space.schoolId);
 
     if (!file || !file.buffer || file.buffer.length === 0) {
       throw new BadRequestException('A PDF file must be uploaded under the "file" field');
@@ -662,7 +662,7 @@ export class DocumentsService {
       throw new NotFoundException(`Space with ID ${spaceId} not found`);
     }
 
-    assertSchoolAccess(actor, 'documents:create', space.schoolId);
+    assertSchoolAccess(actor, 'documents:manage', space.schoolId);
 
     if (!file || !file.buffer || file.buffer.length === 0) {
       throw new BadRequestException('An image file must be uploaded under the "file" field');
@@ -1009,7 +1009,7 @@ export class DocumentsService {
     documentId: string,
     actor: AuthenticatedUser,
   ): Promise<DocumentVersionItemEntity[]> {
-    const doc = await this.findDocumentInScope(documentId, actor, 'documents:update');
+    const doc = await this.findDocumentInScope(documentId, actor, 'documents:manage');
 
     const versions = await this.prisma.documentVersion.findMany({
       where: { documentId: doc.id },

@@ -175,6 +175,60 @@ export const AuditEvents = {
     };
   },
 
+  /**
+   * Document-management or other fine-grained permission granted to a staff member in a school (§4.5, #88).
+   */
+  permissionGranted(
+    p: {
+      userId: string;
+      email?: string | null;
+      schoolId: string;
+      permission: string;
+      grantedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.PERMISSION_GRANTED,
+      actor: p.grantedBy ?? anonymous,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        permission: p.permission,
+        schoolId: p.schoolId,
+        ...(p.email ? { email: p.email.trim().toLowerCase() } : {}),
+      },
+      context,
+    };
+  },
+
+  /**
+   * Document-management or other fine-grained permission revoked from a staff member in a school (§4.5, #88).
+   */
+  permissionRevoked(
+    p: {
+      userId: string;
+      email?: string | null;
+      schoolId: string;
+      permission: string;
+      revokedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.PERMISSION_REVOKED,
+      actor: p.revokedBy ?? anonymous,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        permission: p.permission,
+        schoolId: p.schoolId,
+        ...(p.email ? { email: p.email.trim().toLowerCase() } : {}),
+      },
+      context,
+    };
+  },
+
   accessDenied(
     p: { actor?: AuditActor | null; method: string; path: string; requiredPermission?: string; reason?: string },
     context: AuditRequestContext,
