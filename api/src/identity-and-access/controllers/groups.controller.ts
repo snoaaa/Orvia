@@ -1,5 +1,5 @@
-import { Body, Controller, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { CreateGroupDto } from '../dto/index.js';
@@ -14,6 +14,38 @@ import { GroupsService } from '../services/groups.service.js';
 @Controller('groups')
 export class GroupsController {
   constructor(private readonly groupsService: GroupsService) {}
+
+  @Get()
+  @RequirePermission('groups:read')
+  @ApiOperation({
+    summary: 'List groups of your school(s) (§4.5, §4.7, #89)',
+    description: 'School admins only get groups belonging to their assigned schools.',
+  })
+  @ApiQuery({ name: 'schoolId', required: false, description: 'Filter groups by school UUID' })
+  @ApiResponse({ status: 200, description: 'List of groups', type: [GroupEntity] })
+  async getGroups(
+    @Query('schoolId') schoolId: string | undefined,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<GroupEntity[]> {
+    return this.groupsService.findAllGroups(actor, schoolId);
+  }
+
+  @Get(':id')
+  @RequirePermission('groups:read')
+  @ApiOperation({
+    summary: 'Get group by ID (scoped to school) (§4.5, §4.7, #89)',
+    description: 'Retrieves a single group. Throws 403 if belonging to another school.',
+  })
+  @ApiParam({ name: 'id', description: 'Group UUID' })
+  @ApiResponse({ status: 200, description: 'The group', type: GroupEntity })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks access to this school' })
+  @ApiResponse({ status: 404, description: 'Group not found' })
+  async getGroupById(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<GroupEntity> {
+    return this.groupsService.findGroupById(id, actor);
+  }
 
   @Post()
   @RequirePermission('groups:create')

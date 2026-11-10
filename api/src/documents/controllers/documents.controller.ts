@@ -84,6 +84,20 @@ export class DocumentsController {
     return this.documentsService.createSpace(dto, actor);
   }
 
+  @Get('spaces/:id')
+  @RequirePermission('spaces:read')
+  @ApiOperation({
+    summary: 'Get document space by ID (scoped to school) (§4.5, #89)',
+    description: 'Retrieves space details. Caller must hold spaces:read in the space school, otherwise 403.',
+  })
+  @ApiParam({ name: 'id', description: 'Space UUID' })
+  @ApiResponse({ status: 200, description: 'Space retrieved successfully', type: SpaceEntity })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks access to space school' })
+  @ApiResponse({ status: 404, description: 'Space not found' })
+  async getSpaceById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
+    return this.documentsService.findSpaceById(id, actor);
+  }
+
   @Get(':id')
   @RequirePermission('documents:read')
   @ApiOperation({ summary: 'Get document details by ID' })

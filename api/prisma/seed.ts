@@ -120,6 +120,7 @@ export const ROLE_PERMISSIONS_MATRIX: Record<string, string[]> = {
     'sync:execute',
     'offline:select',
     'audit:read',
+    'metrics:view',
   ],
   CONTENT_MANAGER: [
     'spaces:create',
