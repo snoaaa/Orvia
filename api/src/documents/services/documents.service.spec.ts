@@ -335,6 +335,68 @@ describe('DocumentsService', () => {
     });
   });
 
+  describe('findSpaceById (#89)', () => {
+    it('throws NotFoundException if space does not exist', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.findSpaceById('space-missing', platformAdmin)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('returns space when school admin has access to the space school', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-1',
+        schoolId: 'school-1',
+        name: 'Computer Science',
+        privacy: 'public',
+        description: 'CS Docs',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        school: { id: 'school-1', name: 'Engineering College' },
+      });
+
+      const space = await service.findSpaceById('space-1', schoolAdmin);
+      expect(space.id).toBe('space-1');
+      expect(space.name).toBe('Computer Science');
+      expect(space.schoolId).toBe('school-1');
+    });
+
+    it('returns space for platform admin regardless of school', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-2',
+        schoolId: 'school-other',
+        name: 'Biology',
+        privacy: 'public',
+        description: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        school: { id: 'school-other', name: 'Medical School' },
+      });
+
+      const space = await service.findSpaceById('space-2', platformAdmin);
+      expect(space.id).toBe('space-2');
+      expect(space.schoolId).toBe('school-other');
+    });
+
+    it('throws ForbiddenException when caller accesses space of another school', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-other',
+        schoolId: 'school-other',
+        name: 'Law',
+        privacy: 'public',
+        description: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        school: { id: 'school-other', name: 'Law School' },
+      });
+
+      await expect(service.findSpaceById('space-other', schoolAdmin)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+  });
+
   describe('updateDocument', () => {
     const existingDoc = {
       id: 'doc-1',

@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { assertSchoolAccess } from '../../auth/utils/school-scope.util.js';
+import { assertSchoolAccess, schoolIdFilter } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { CreateGroupDto } from '../dto/index.js';
 import { GroupEntity } from '../entities/index.js';
@@ -35,5 +35,35 @@ export class GroupsService {
       }
       throw error;
     }
+  }
+
+  /** GET /groups/:id (§4.5, §4.7, #89): 403 outside caller's schools. */
+  async findGroupById(id: string, actor: AuthenticatedUser): Promise<GroupEntity> {
+    const group = await this.prisma.group.findUnique({
+      where: { id },
+    });
+    if (!group) {
+      throw new NotFoundException(`Group with ID ${id} not found`);
+    }
+    assertSchoolAccess(actor, 'groups:read', group.schoolId);
+    return new GroupEntity(group);
+  }
+
+  /** GET /groups (§4.5, §4.7, #89): list groups filtered at query level by caller's schools. */
+  async findAllGroups(actor: AuthenticatedUser, schoolId?: string): Promise<GroupEntity[]> {
+    if (schoolId) {
+      assertSchoolAccess(actor, 'groups:read', schoolId);
+    }
+    const allowed = schoolIdFilter(actor, 'groups:read');
+    const where: Prisma.GroupWhereInput = schoolId
+      ? { schoolId }
+      : allowed
+        ? { schoolId: allowed }
+        : {};
+    const groups = await this.prisma.group.findMany({
+      where,
+      orderBy: { name: 'asc' },
+    });
+    return groups.map((g) => new GroupEntity(g));
   }
 }

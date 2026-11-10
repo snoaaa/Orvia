@@ -451,6 +451,18 @@ export class DocumentsService {
     return SpaceMapper.toEntity(created);
   }
 
+  /** Get a single space by ID, scoped to caller's school access (§4.5, §4.7, #89). */
+  async findSpaceById(id: string, actor: AuthenticatedUser): Promise<SpaceEntity> {
+    const space = await this.prisma.space.findUnique({
+      where: { id },
+    });
+    if (!space) {
+      throw new NotFoundException(`Space with ID ${id} not found`);
+    }
+    assertSchoolAccess(actor, 'spaces:read', space.schoolId);
+    return SpaceMapper.toEntity(space);
+  }
+
   /**
    * Validates an uploaded file prior to storage and ingestion (§5.2 Ingestion, #100).
    * Verifies school access to the space, checks MIME magic bytes, size limit,

@@ -31,12 +31,15 @@ export class AuthUserService {
       permissions: a.role.rolePermissions.map((rp) => rp.permission.code),
     }));
 
+    const roles = [...new Set(assignments.map((a) => a.role))];
+
     return {
       id: user.id,
       email: user.email,
       fullName: user.fullName,
       status: user.status,
       assignments,
+      roles,
       permissions: [...new Set(assignments.flatMap((a) => a.permissions))].sort(),
       schoolIds: [...new Set(assignments.map((a) => a.schoolId))],
       isPlatformAdmin: assignments.some((a) => a.scope === 'platform'),

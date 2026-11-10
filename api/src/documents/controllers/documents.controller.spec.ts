@@ -40,6 +40,7 @@ describe('DocumentsController', () => {
       updateDocument: vi.fn(),
       findAllSpaces: vi.fn(),
       createSpace: vi.fn(),
+      findSpaceById: vi.fn(),
       validateUploadedFile: vi.fn(),
       uploadPdf: vi.fn(),
       uploadImage: vi.fn(),
@@ -97,6 +98,40 @@ describe('DocumentsController', () => {
       const res = await controller.getDocuments(query, mockActor);
       expect(mockDocumentsService.findAllDocuments).toHaveBeenCalledWith(mockActor, query);
       expect(res.total).toBe(0);
+    });
+  });
+
+  describe('spaces endpoints (#89)', () => {
+    it('delegates getSpaces to documentsService.findAllSpaces', async () => {
+      const query = { page: 1, limit: 10 };
+      mockDocumentsService.findAllSpaces.mockResolvedValueOnce({
+        data: [],
+        total: 0,
+        page: 1,
+        limit: 10,
+        totalPages: 1,
+      });
+
+      const res = await controller.getSpaces(query, mockActor);
+      expect(mockDocumentsService.findAllSpaces).toHaveBeenCalledWith(mockActor, query);
+      expect(res.total).toBe(0);
+    });
+
+    it('delegates createSpace to documentsService.createSpace', async () => {
+      const dto = { name: 'New Space', schoolId: 'school-1' };
+      mockDocumentsService.createSpace.mockResolvedValueOnce({ id: 'space-1', name: 'New Space' });
+
+      const res = await controller.createSpace(dto as any, mockActor);
+      expect(mockDocumentsService.createSpace).toHaveBeenCalledWith(dto, mockActor);
+      expect(res.id).toBe('space-1');
+    });
+
+    it('delegates getSpaceById to documentsService.findSpaceById', async () => {
+      mockDocumentsService.findSpaceById.mockResolvedValueOnce({ id: 'space-1', name: 'New Space' });
+
+      const res = await controller.getSpaceById('space-1', mockActor);
+      expect(mockDocumentsService.findSpaceById).toHaveBeenCalledWith('space-1', mockActor);
+      expect(res.id).toBe('space-1');
     });
   });
 
