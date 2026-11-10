@@ -51,4 +51,41 @@ describe('school scope', () => {
     expect(() => assertSchoolAccess(adminA, 'users:read', [])).toThrow(ForbiddenException);
     expect(() => assertSchoolAccess(adminA, 'users:read', ['B', 'A'])).not.toThrow();
   });
+
+  describe('documents:manage permission scoping (#88)', () => {
+    const staffWithDocManage = userWith({
+      role: 'CONTENT_MANAGER',
+      scope: 'school',
+      schoolId: 'A',
+      groupId: null,
+      permissions: ['documents:manage'],
+    });
+
+    const staffWithoutDocManage = userWith({
+      role: 'STAFF',
+      scope: 'school',
+      schoolId: 'A',
+      groupId: null,
+      permissions: ['spaces:read', 'documents:read'],
+    });
+
+    it('allows staff with documents:manage to manage documents and spaces in their school', () => {
+      expect(canInSchool(staffWithDocManage, 'documents:manage', 'A')).toBe(true);
+      expect(canInSchool(staffWithDocManage, 'documents:create', 'A')).toBe(true);
+      expect(canInSchool(staffWithDocManage, 'documents:update', 'A')).toBe(true);
+      expect(canInSchool(staffWithDocManage, 'documents:delete', 'A')).toBe(true);
+      expect(canInSchool(staffWithDocManage, 'spaces:create', 'A')).toBe(true);
+      expect(() => assertSchoolAccess(staffWithDocManage, 'documents:manage', 'A')).not.toThrow();
+    });
+
+    it('denies staff with documents:manage in School A on School B spaces/documents (403)', () => {
+      expect(canInSchool(staffWithDocManage, 'documents:manage', 'B')).toBe(false);
+      expect(() => assertSchoolAccess(staffWithDocManage, 'documents:manage', 'B')).toThrow(ForbiddenException);
+    });
+
+    it('denies staff without documents:manage on all management endpoints (403)', () => {
+      expect(canInSchool(staffWithoutDocManage, 'documents:manage', 'A')).toBe(false);
+      expect(() => assertSchoolAccess(staffWithoutDocManage, 'documents:manage', 'A')).toThrow(ForbiddenException);
+    });
+  });
 });

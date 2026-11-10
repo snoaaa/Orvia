@@ -2005,4 +2005,132 @@ describe('DocumentsService', () => {
       );
     });
   });
+
+  describe('Document-Management Permission Scoping (#88)', () => {
+    const staffWithDocManage: AuthenticatedUser = {
+      id: 'staff-with-manage-id',
+      email: 'staff.manage@school1.edu',
+      fullName: 'Staff Content Manager',
+      status: 'ACTIVE',
+      assignments: [
+        {
+          role: 'CONTENT_MANAGER',
+          scope: 'school',
+          schoolId: 'school-1',
+          groupId: null,
+          permissions: ['documents:manage'],
+        },
+      ],
+      permissions: ['documents:manage'],
+      schoolIds: ['school-1'],
+      isPlatformAdmin: false,
+      role: 'CONTENT_MANAGER',
+      schoolId: 'school-1',
+      sessionId: 'session-cm-1',
+    };
+
+    const staffWithoutDocManage: AuthenticatedUser = {
+      id: 'staff-without-manage-id',
+      email: 'staff.regular@school1.edu',
+      fullName: 'Regular Staff',
+      status: 'ACTIVE',
+      assignments: [
+        {
+          role: 'STAFF',
+          scope: 'school',
+          schoolId: 'school-1',
+          groupId: null,
+          permissions: ['spaces:read', 'documents:read'],
+        },
+      ],
+      permissions: ['spaces:read', 'documents:read'],
+      schoolIds: ['school-1'],
+      isPlatformAdmin: false,
+      role: 'STAFF',
+      schoolId: 'school-1',
+      sessionId: 'session-staff-1',
+    };
+
+    const existingDoc = {
+      id: 'doc-1',
+      spaceId: 'space-1',
+      title: 'Operating Systems',
+      author: 'Prof. Tanenbaum',
+      tags: 'cs,os',
+      createdAt: new Date('2026-09-01T08:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T08:00:00.000Z'),
+      deletedAt: null,
+      space: { schoolId: 'school-1' },
+      versions: [],
+    };
+
+    it('allows a staff member with documents:manage to manage spaces in their school', async () => {
+      mockPrisma.space.create.mockResolvedValueOnce({
+        id: 'new-space-id',
+        schoolId: 'school-1',
+        name: 'Math Department',
+        description: null,
+        language: 'en',
+        privacy: 'public',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const result = await service.createSpace(
+        { schoolId: 'school-1', name: 'Math Department' },
+        staffWithDocManage,
+      );
+      expect(result).toBeDefined();
+      expect(result.id).toBe('new-space-id');
+    });
+
+    it('denies staff with documents:manage creating spaces in another school (403)', async () => {
+      await expect(
+        service.createSpace(
+          { schoolId: 'other-school-99', name: 'Other Space' },
+          staffWithDocManage,
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('denies staff without documents:manage creating spaces in their school (403)', async () => {
+      await expect(
+        service.createSpace(
+          { schoolId: 'school-1', name: 'Unauthorized Space' },
+          staffWithoutDocManage,
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('allows staff with documents:manage to delete a document in their school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.count.mockResolvedValueOnce(1);
+      mockPrisma.document.update.mockResolvedValueOnce({
+        ...existingDoc,
+        deletedAt: new Date(),
+      });
+
+      const result = await service.deleteDocument('doc-1', staffWithDocManage);
+      expect(result.success).toBe(true);
+    });
+
+    it('denies staff with documents:manage deleting a document in another school (403)', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...existingDoc,
+        space: { schoolId: 'school-2' },
+      });
+
+      await expect(
+        service.deleteDocument('doc-1', staffWithDocManage),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('denies staff without documents:manage deleting a document in their school (403)', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(
+        service.deleteDocument('doc-1', staffWithoutDocManage),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
 });

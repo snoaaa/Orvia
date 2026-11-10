@@ -77,7 +77,7 @@ export class DocumentsController {
   }
 
   @Post('spaces')
-  @RequirePermission('spaces:create')
+  @RequirePermission('documents:manage')
   @ApiOperation({ summary: 'Create a new document space in one of your schools' })
   @ApiResponse({ status: 201, description: 'Space created', type: SpaceEntity })
   async createSpace(@Body() dto: CreateSpaceDto, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
@@ -95,7 +95,7 @@ export class DocumentsController {
   }
 
   @Post()
-  @RequirePermission('documents:create')
+  @RequirePermission('documents:manage')
   @ApiOperation({ summary: 'Create and register a new document' })
   @ApiResponse({ status: 201, description: 'Document registered', type: DocumentEntity })
   async createDocument(@Body() dto: CreateDocumentDto, @CurrentUser() actor: AuthenticatedUser): Promise<DocumentEntity> {
@@ -103,7 +103,7 @@ export class DocumentsController {
   }
 
   @Patch(':id')
-  @RequirePermission('documents:update')
+  @RequirePermission('documents:manage')
   @ApiOperation({
     summary: 'Edit document metadata (§4.1, #105)',
     description:
@@ -126,7 +126,7 @@ export class DocumentsController {
   }
 
   @Delete(':id')
-  @RequirePermission('documents:delete')
+  @RequirePermission('documents:manage')
   @ApiOperation({
     summary: 'Delete a document (soft delete) (§4.1, §9, #108)',
     description:
@@ -149,7 +149,7 @@ export class DocumentsController {
   }
 
   @Post(':id/replace')
-  @RequirePermission('documents:update')
+  @RequirePermission('documents:manage')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
     summary: 'Replace document with a new version (§4.1, §4.3, §5.2, #106)',
@@ -188,7 +188,7 @@ export class DocumentsController {
   }
 
   @Post(':id/versions')
-  @RequirePermission('documents:update')
+  @RequirePermission('documents:manage')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
     summary: 'Upload a new version for a document (REST alias for replace, #106)',
@@ -221,7 +221,7 @@ export class DocumentsController {
   }
 
   @Post('spaces/:spaceId/validate-file')
-  @RequirePermission('documents:create')
+  @RequirePermission('documents:manage')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
     summary: 'Validate an uploaded file for ingestion (§5.2, #100)',
@@ -259,7 +259,7 @@ export class DocumentsController {
   }
 
   @Post('spaces/:spaceId/upload')
-  @RequirePermission('documents:create')
+  @RequirePermission('documents:manage')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
     summary: 'Upload a document to a space (§4.1, §6 Scalabilité, §9, #102, #150)',
@@ -314,7 +314,7 @@ export class DocumentsController {
   }
 
   @Post('spaces/:spaceId/upload-image')
-  @RequirePermission('documents:create')
+  @RequirePermission('documents:manage')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
     summary: 'Upload an image (JPEG, PNG, HEIC) to a space (§4.1, §9, #103)',
@@ -428,7 +428,7 @@ export class DocumentsController {
   }
 
   @Get(':id/versions')
-  @RequirePermission('documents:update')
+  @RequirePermission('documents:manage')
   @ApiOperation({
     summary: 'List version history of a document (§4.5, #107)',
     description:
