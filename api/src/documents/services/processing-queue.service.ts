@@ -8,6 +8,7 @@ export interface EnqueueProcessingJobInput {
   spaceId: string;
   storageKey: string;
   mimeType: string;
+  targetStep?: 'ingestion' | 'ocr';
 }
 
 @Injectable()
@@ -50,16 +51,17 @@ export class ProcessingQueueService {
    */
   private async processNext(job: EnqueueProcessingJobInput): Promise<void> {
     try {
-      // Transition processing job state to mark ingestion received
+      const nextStep = job.targetStep === 'ocr' ? 'ocr_queued' : 'ingestion_queued';
+      // Transition processing job state to mark step received
       await this.prisma.processingJob.update({
         where: { id: job.jobId },
         data: {
-          step: 'ingestion_queued',
+          step: nextStep,
           updatedAt: new Date(),
         },
       });
 
-      this.logger.log(`Background worker dispatched ingestion_queued for job ${job.jobId}`);
+      this.logger.log(`Background worker dispatched ${nextStep} for job ${job.jobId}`);
     } catch (err: any) {
       this.logger.warn(`Could not update processing job ${job.jobId}: ${err?.message}`);
     } finally {
@@ -70,3 +72,4 @@ export class ProcessingQueueService {
     }
   }
 }
+

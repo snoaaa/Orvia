@@ -41,6 +41,7 @@ describe('DocumentsController', () => {
       createSpace: vi.fn(),
       validateUploadedFile: vi.fn(),
       uploadPdf: vi.fn(),
+      uploadImage: vi.fn(),
     };
 
     controller = new DocumentsController(mockDocumentsService as unknown as DocumentsService);
@@ -136,6 +137,45 @@ describe('DocumentsController', () => {
       const result = await controller.uploadPdf('space-1', mockFile, dto, mockActor);
 
       expect(mockDocumentsService.uploadPdf).toHaveBeenCalledWith(
+        'space-1',
+        mockFile,
+        dto,
+        mockActor,
+      );
+      expect(result).toBe(expectedDoc);
+    });
+  });
+
+  describe('uploadImage', () => {
+    it('delegates image upload to documentsService.uploadImage', async () => {
+      const mockFile = {
+        buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+        originalname: 'whiteboard.jpg',
+        mimetype: 'image/jpeg',
+      } as UploadedFile;
+
+      const dto = {
+        title: 'Whiteboard',
+        author: 'Lecturer',
+        tags: 'math',
+      };
+
+      const expectedDoc = {
+        id: 'doc-456',
+        spaceId: 'space-1',
+        title: 'Whiteboard',
+        currentVersion: {
+          versionNo: 1,
+          status: 'pending',
+          mimeType: 'image/jpeg',
+        },
+      } as any;
+
+      mockDocumentsService.uploadImage.mockResolvedValueOnce(expectedDoc);
+
+      const result = await controller.uploadImage('space-1', mockFile, dto, mockActor);
+
+      expect(mockDocumentsService.uploadImage).toHaveBeenCalledWith(
         'space-1',
         mockFile,
         dto,
