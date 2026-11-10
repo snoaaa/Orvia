@@ -11,6 +11,7 @@ import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpac
 import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
+import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { FileValidationService } from './file-validation.service.js';
 import { ImageConversionService } from './image-conversion.service.js';
 import { ProcessingQueueService } from './processing-queue.service.js';
@@ -248,9 +249,9 @@ export class DocumentsService {
       spaceId,
     });
 
-    if (validated.mimeType !== 'application/pdf') {
+    if (isImageMimeType(validated.mimeType)) {
       throw new BadRequestException(
-        `Only PDF documents are supported by this endpoint (detected: ${validated.mimeType}). For images, use the image upload endpoint.`,
+        'Images should be uploaded via the dedicated image upload endpoint (POST /documents/spaces/:spaceId/upload-image) for OCR processing.',
       );
     }
 
@@ -262,13 +263,16 @@ export class DocumentsService {
       spaceId,
       documentId,
       version: versionNo,
-      extension: 'pdf',
+      extension: validated.extension,
     });
 
     // 1. Save file to storage
     await this.storageService.save(storageKey, file.buffer);
 
-    // 2. Perform DB transaction
+    // 2. Determine initial processing step based on document format (§4.1, §9, #150)
+    const step = determineInitialProcessingStep(validated.mimeType);
+
+    // 3. Perform DB transaction
     try {
       const defaultTitle = file.originalname
         ? file.originalname.replace(/\.[^/.]+$/, '').trim()
@@ -294,7 +298,7 @@ export class DocumentsService {
             documentId,
             versionNo,
             storageKey,
-            mimeType: 'application/pdf',
+            mimeType: validated.mimeType,
             checksum: validated.checksum,
             status: 'pending',
             pageCount: 0,
@@ -305,7 +309,7 @@ export class DocumentsService {
           data: {
             id: jobId,
             versionId,
-            step: 'ingestion',
+            step,
             status: 'pending',
             durationMs: 0,
             ocrConfidence: 1.0,
@@ -317,14 +321,14 @@ export class DocumentsService {
         return { createdDoc: doc, createdVersion: ver };
       });
 
-      // 3. Dispatch background processing job
+      // 4. Dispatch background processing job
       this.processingQueueService.enqueueJob({
         jobId,
         versionId,
         documentId,
         spaceId,
         storageKey,
-        mimeType: 'application/pdf',
+        mimeType: validated.mimeType,
       });
 
       return DocumentMapper.toEntity(createdDoc, createdVersion);
