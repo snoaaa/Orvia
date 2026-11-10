@@ -100,3 +100,4 @@ export function detectMimeTypeFromBuffer(buffer: Buffer): DetectedFileType | nul
 
   return null;
 }
+

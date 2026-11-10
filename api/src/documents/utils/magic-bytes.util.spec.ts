@@ -125,3 +125,4 @@ describe('magic-bytes.util', () => {
     });
   });
 });
+

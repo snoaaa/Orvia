@@ -22,3 +22,4 @@ export const uploadConfig = (): { upload: UploadConfig } => ({
     },
   },
 });
+

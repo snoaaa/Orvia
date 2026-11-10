@@ -40,6 +40,7 @@ describe('DocumentsController', () => {
       findAllSpaces: vi.fn(),
       createSpace: vi.fn(),
       validateUploadedFile: vi.fn(),
+      uploadPdf: vi.fn(),
     };
 
     controller = new DocumentsController(mockDocumentsService as unknown as DocumentsService);
@@ -103,6 +104,44 @@ describe('DocumentsController', () => {
       const res = await controller.getDocumentById('doc-1', mockActor);
       expect(mockDocumentsService.findDocumentById).toHaveBeenCalledWith('doc-1', mockActor);
       expect(res.id).toBe('doc-1');
+    });
+  });
+
+  describe('uploadPdf', () => {
+    it('delegates PDF upload to documentsService.uploadPdf', async () => {
+      const mockFile = {
+        buffer: Buffer.from('%PDF-1.4\ncontent'),
+        originalname: 'lecture.pdf',
+        mimetype: 'application/pdf',
+      } as UploadedFile;
+
+      const dto = {
+        title: 'Lecture 1',
+        author: 'Prof',
+        tags: 'math',
+      };
+
+      const expectedDoc = {
+        id: 'doc-123',
+        spaceId: 'space-1',
+        title: 'Lecture 1',
+        currentVersion: {
+          versionNo: 1,
+          status: 'pending',
+        },
+      } as any;
+
+      mockDocumentsService.uploadPdf.mockResolvedValueOnce(expectedDoc);
+
+      const result = await controller.uploadPdf('space-1', mockFile, dto, mockActor);
+
+      expect(mockDocumentsService.uploadPdf).toHaveBeenCalledWith(
+        'space-1',
+        mockFile,
+        dto,
+        mockActor,
+      );
+      expect(result).toBe(expectedDoc);
     });
   });
 });
