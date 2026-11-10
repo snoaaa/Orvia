@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
@@ -80,6 +80,37 @@ export class AssignmentsController {
     @Req() req: Request,
   ): Promise<AssignmentEntity> {
     return this.assignmentsService.updateAssignment(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  @RequirePermission('users:assign_role')
+  @ApiOperation({
+    summary: 'Remove an assignment (soft delete)',
+    description:
+      'Ends the link between the user and the school, group and role of this assignment. The row is kept with ' +
+      '`deletedAt` set (and `updatedAt` moved) so the next mobile sync sees the removal; the access is gone on the ' +
+      "user's very next request. The user also leaves the members of that school's groups. Same checks as PATCH: " +
+      'your school only (platform admins: all), a role at or below your level, and not a user who outranks you. ' +
+      'The last school admin of a school (a school-scoped role with users:assign_role, held by a user who is not ' +
+      'suspended) cannot be removed. Removing an already removed assignment is 404. Records ' +
+      'identity_access/assignment_removed.',
+  })
+  @ApiParam({ name: 'id', description: 'Assignment id (UUID)' })
+  @ApiResponse({ status: 204, description: 'The assignment was removed' })
+  @ApiResponse({ status: 400, description: 'Invalid UUID or deactivated school' })
+  @ApiResponse({
+    status: 403,
+    description: 'Missing permission, another school, a role above your level, or a user who outranks you',
+  })
+  @ApiResponse({ status: 404, description: 'Assignment not found or already removed' })
+  @ApiResponse({ status: 409, description: 'The last school administrator of the school cannot be removed' })
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<void> {
+    await this.assignmentsService.removeAssignment(id, actor, auditContextFromRequest(req));
   }
 
   @Get('assignable-roles')

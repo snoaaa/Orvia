@@ -305,6 +305,7 @@ async function main(): Promise<void> {
       where: {
         userId: adminUser.id,
         roleId: platformAdminRoleId,
+        deletedAt: null,
       },
     });
 

@@ -14,6 +14,7 @@ import {
   OverviewSpaceEntity,
   OverviewUsersEntity,
 } from '../entities/overview.entity.js';
+import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 
 /** `all` = platform-wide; otherwise `schoolIds` restricts, and an empty list means "no school". */
 interface Scope {
@@ -74,7 +75,7 @@ export class OverviewService {
 
     const where: Prisma.UserWhereInput = scope.all
       ? {}
-      : { assignments: { some: { schoolId: { in: scope.schoolIds } } } };
+      : { assignments: { some: { ...ACTIVE_ASSIGNMENT, schoolId: { in: scope.schoolIds } } } };
     const grouped = await this.prisma.user.groupBy({ by: ['status'], where, _count: true });
     const countOf = (status: string) => grouped.find((g) => g.status === status)?._count ?? 0;
 
@@ -108,7 +109,7 @@ export class OverviewService {
     const where: Prisma.SessionWhereInput = {
       revokedAt: null,
       expiresAt: { gt: new Date() },
-      ...(scope.all ? {} : { user: { assignments: { some: { schoolId: { in: scope.schoolIds } } } } }),
+      ...(scope.all ? {} : { user: { assignments: { some: { ...ACTIVE_ASSIGNMENT, schoolId: { in: scope.schoolIds } } } } }),
     };
     return new OverviewSessionsEntity({ active: await this.prisma.session.count({ where }) });
   }
@@ -184,7 +185,8 @@ export class OverviewService {
             sessionScope.all
               ? Prisma.empty
               : Prisma.sql`AND user_id IN (
-                  SELECT user_id FROM user_assignments WHERE school_id IN (${Prisma.join(sessionScope.schoolIds)})
+                  SELECT user_id FROM user_assignments
+                  WHERE deleted_at IS NULL AND school_id IN (${Prisma.join(sessionScope.schoolIds)})
                 )`
           }
           GROUP BY bucket
