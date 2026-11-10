@@ -74,3 +74,4 @@ describe('ProcessingQueueService', () => {
     expect(service.getPendingJobCount()).toBe(0);
   });
 });
+

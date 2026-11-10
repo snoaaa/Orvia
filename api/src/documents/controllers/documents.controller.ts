@@ -181,4 +181,56 @@ export class DocumentsController {
   ): Promise<DocumentEntity> {
     return this.documentsService.uploadPdf(spaceId, file, dto, actor);
   }
+
+  @Post('spaces/:spaceId/upload-image')
+  @RequirePermission('documents:create')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({
+    summary: 'Upload an image (JPEG, PNG, HEIC) to a space (§4.1, §9, #103)',
+    description:
+      'Uploads an image into a space for downstream OCR processing. Validates file format (magic bytes), ' +
+      'enforces size limit, runs malware scan, converts HEIC to JPEG if needed, creates document and version 1 ' +
+      'with status pending, and queues OCR processing.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiParam({ name: 'spaceId', description: 'Target space UUID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Image file (JPEG, PNG, or HEIC)',
+        },
+        title: {
+          type: 'string',
+          description: 'Document title (optional, defaults to filename)',
+        },
+        author: {
+          type: 'string',
+          description: 'Author or photographer name (optional)',
+        },
+        tags: {
+          type: 'string',
+          description: 'Comma-separated tags (optional)',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Image uploaded and queued for OCR', type: DocumentEntity })
+  @ApiResponse({ status: 400, description: 'Unsupported format, infected, or invalid payload' })
+  @ApiResponse({ status: 403, description: 'Insufficient rights or another school' })
+  @ApiResponse({ status: 404, description: 'Space not found' })
+  @ApiResponse({ status: 409, description: 'Duplicate file in space' })
+  @ApiResponse({ status: 413, description: 'File exceeds maximum size' })
+  async uploadImage(
+    @Param('spaceId') spaceId: string,
+    @UploadedFile() file: IUploadedFile,
+    @Body() dto: UploadDocumentDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentEntity> {
+    return this.documentsService.uploadImage(spaceId, file, dto, actor);
+  }
 }
