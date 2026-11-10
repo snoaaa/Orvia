@@ -5,12 +5,17 @@ import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto } from '../dto/index.js';
-import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity } from '../entities/index.js';
+import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
+import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
+import { FileValidationService } from './file-validation.service.js';
 
 @Injectable()
 export class DocumentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fileValidationService: FileValidationService,
+  ) {}
 
   /**
    * Platform-wide readers see every document; others only the documents of spaces in their schools.
@@ -156,5 +161,44 @@ export class DocumentsService {
       data,
     });
     return SpaceMapper.toEntity(created);
+  }
+
+  /**
+   * Validates an uploaded file prior to storage and ingestion (§5.2 Ingestion, #100).
+   * Verifies school access to the space, checks MIME magic bytes, size limit,
+   * runs malware scanning, and checks for duplicates within the target space.
+   */
+  async validateUploadedFile(
+    spaceId: string,
+    file: UploadedFile,
+    actor: AuthenticatedUser,
+  ): Promise<ValidatedFileEntity> {
+    const space = await this.prisma.space.findUnique({
+      where: { id: spaceId },
+      select: { schoolId: true },
+    });
+    if (!space) {
+      throw new NotFoundException(`Space with ID ${spaceId} not found`);
+    }
+    assertSchoolAccess(actor, 'documents:create', space.schoolId);
+
+    if (!file || !file.buffer) {
+      throw new BadRequestException('A file must be uploaded under the "file" field');
+    }
+
+    const validated = await this.fileValidationService.validateFile({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      declaredMimeType: file.mimetype,
+      spaceId,
+    });
+
+    return new ValidatedFileEntity({
+      valid: true,
+      checksum: validated.checksum,
+      mimeType: validated.mimeType,
+      extension: validated.extension,
+      size: validated.size,
+    });
   }
 }
