@@ -9,8 +9,17 @@ import { PrismaService } from '../../database/prisma.service.js';
 import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { buildDocumentStorageKey } from '../../storage/utils/storage-key.util.js';
-import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
+import type {
+  CreateDocumentDto,
+  CreateSpaceDto,
+  ListDocumentsQueryDto,
+  ListSpacesQueryDto,
+  PublishDocumentDto,
+  UpdateDocumentDto,
+  UploadDocumentDto,
+} from '../dto/index.js';
 import {
+  DocumentAccessEntity,
   DocumentEntity,
   DocumentVersionItemEntity,
   DocumentVersionUploaderEntity,
@@ -235,6 +244,124 @@ export class DocumentsService {
       id: doc.id,
       message: 'Document successfully soft-deleted',
     };
+  }
+
+  /**
+   * Publishes a document to specific schools, roles, classes, or groups (§4.5, §4.7, #109):
+   * 1. Validates document exists and caller has `documents:publish` access in the space's school.
+   * 2. Validates targets (school, role, group/class). Groups must belong to the target school.
+   * 3. Creates access rules in DB, avoiding duplicate rows.
+   * 4. Emits a hash-chained audit event (`document_published`).
+   * 5. Returns all configured access rules for this document.
+   */
+  async publishDocument(
+    documentId: string,
+    dto: PublishDocumentDto,
+    actor: AuthenticatedUser,
+    auditContext?: AuditRequestContext,
+  ): Promise<DocumentAccessEntity[]> {
+    const doc = await this.findDocumentInScope(documentId, actor, 'documents:publish');
+
+    if (!dto.rules || dto.rules.length === 0) {
+      throw new BadRequestException('At least one access rule must be provided');
+    }
+
+    const createdRules: DocumentAccessEntity[] = [];
+    const targetAuditDetails: Array<{ schoolId?: string | null; roleId?: string | null; groupId?: string | null }> = [];
+
+    for (const rule of dto.rules) {
+      const targetSchoolId = rule.schoolId ?? doc.space.schoolId;
+
+      if (!rule.schoolId && !rule.roleId && !rule.groupId) {
+        throw new BadRequestException(
+          'Each access rule must specify at least one target (school, role, or group)',
+        );
+      }
+
+      // If a specific foreign schoolId is explicitly targeted, verify actor has publish rights in that school
+      if (rule.schoolId && rule.schoolId !== doc.space.schoolId) {
+        assertSchoolAccess(actor, 'documents:publish', rule.schoolId);
+      }
+
+      // If groupId is provided, verify it exists and belongs to the target school
+      if (rule.groupId) {
+        const group = await this.prisma.group.findUnique({
+          where: { id: rule.groupId },
+          select: { id: true, schoolId: true },
+        });
+        if (!group) {
+          throw new NotFoundException(`Group with ID ${rule.groupId} not found`);
+        }
+        if (group.schoolId !== targetSchoolId) {
+          throw new BadRequestException(
+            `Group ${rule.groupId} belongs to a different school than target school ${targetSchoolId}`,
+          );
+        }
+      }
+
+      const roleId = rule.roleId?.trim() || null;
+      const groupId = rule.groupId ?? null;
+      const schoolId = rule.schoolId ?? doc.space.schoolId;
+
+      // Check if an identical rule already exists for this document
+      const existing = await this.prisma.documentAccess.findFirst({
+        where: {
+          documentId: doc.id,
+          schoolId,
+          roleId,
+          groupId,
+        },
+      });
+
+      if (!existing) {
+        const created = await this.prisma.documentAccess.create({
+          data: {
+            id: randomUUID(),
+            documentId: doc.id,
+            schoolId,
+            roleId,
+            groupId,
+          },
+        });
+        createdRules.push(new DocumentAccessEntity(created));
+        targetAuditDetails.push({ schoolId, roleId, groupId });
+      }
+    }
+
+    if (createdRules.length > 0) {
+      await this.audit.record(
+        AuditEvents.documentPublished(
+          {
+            documentId: doc.id,
+            spaceId: doc.spaceId,
+            schoolId: doc.space.schoolId,
+            rulesCount: createdRules.length,
+            targets: targetAuditDetails,
+            actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext ?? SYSTEM_AUDIT_CONTEXT,
+        ),
+      );
+    }
+
+    return this.getDocumentAccessRules(doc.id, actor);
+  }
+
+  /**
+   * Retrieves all access rules configured for a document (§4.5, §4.7, #109).
+   */
+  async getDocumentAccessRules(
+    documentId: string,
+    actor: AuthenticatedUser,
+  ): Promise<DocumentAccessEntity[]> {
+    const doc = await this.findDocumentInScope(documentId, actor, 'documents:read');
+
+    const rules = await this.prisma.documentAccess.findMany({
+      where: { documentId: doc.id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return rules.map((r) => new DocumentAccessEntity(r));
   }
 
   /**

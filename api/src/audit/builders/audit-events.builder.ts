@@ -333,4 +333,64 @@ export const AuditEvents = {
       context,
     };
   },
+
+  documentPublished(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      rulesCount: number;
+      targets: Array<{ schoolId?: string | null; roleId?: string | null; groupId?: string | null }>;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_PUBLISHED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        rulesCount: p.rulesCount,
+        targets: p.targets,
+      },
+      context,
+    };
+  },
+
+  documentAccessUpdated(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      actionType: 'add' | 'update' | 'remove';
+      ruleId?: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_ACCESS_UPDATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        actionType: p.actionType,
+        ruleId: p.ruleId ?? null,
+      },
+      context,
+    };
+  },
 };

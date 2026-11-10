@@ -47,6 +47,8 @@ describe('DocumentsController', () => {
       replaceDocumentVersion: vi.fn(),
       listDocumentVersions: vi.fn(),
       deleteDocument: vi.fn(),
+      publishDocument: vi.fn(),
+      getDocumentAccessRules: vi.fn(),
     };
 
     controller = new DocumentsController(mockDocumentsService as unknown as DocumentsService);
@@ -174,6 +176,76 @@ describe('DocumentsController', () => {
         }),
       );
       expect(res).toBe(mockResult);
+    });
+  });
+
+  describe('publishDocument and getDocumentAccessRules', () => {
+    it('getDocumentAccessRules delegates to documentsService.getDocumentAccessRules', async () => {
+      const mockRules = [
+        {
+          id: 'rule-1',
+          documentId: 'doc-1',
+          schoolId: 'school-1',
+          roleId: 'student',
+          groupId: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+      mockDocumentsService.getDocumentAccessRules.mockResolvedValueOnce(mockRules);
+
+      const res = await controller.getDocumentAccessRules('doc-1', mockActor);
+
+      expect(mockDocumentsService.getDocumentAccessRules).toHaveBeenCalledWith('doc-1', mockActor);
+      expect(res).toBe(mockRules);
+    });
+
+    it('publishDocument delegates to documentsService.publishDocument with auditContext', async () => {
+      const dto = {
+        rules: [
+          { schoolId: 'school-1', roleId: 'student' },
+          { schoolId: 'school-1', groupId: 'group-1' },
+        ],
+      };
+      const mockRules = [
+        { id: 'rule-1', documentId: 'doc-1', schoolId: 'school-1', roleId: 'student' },
+      ];
+      mockDocumentsService.publishDocument.mockResolvedValueOnce(mockRules);
+
+      const mockReq = {
+        ip: '127.0.0.1',
+        header: vi.fn().mockReturnValue(undefined),
+      } as any;
+
+      const res = await controller.publishDocument('doc-1', dto, mockReq, mockActor);
+
+      expect(mockDocumentsService.publishDocument).toHaveBeenCalledWith(
+        'doc-1',
+        dto,
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
+      expect(res).toBe(mockRules);
+    });
+
+    it('publishDocumentAlias delegates to documentsService.publishDocument', async () => {
+      const dto = {
+        rules: [{ schoolId: 'school-1', roleId: 'student' }],
+      };
+      const mockRules = [{ id: 'rule-1', documentId: 'doc-1' }];
+      mockDocumentsService.publishDocument.mockResolvedValueOnce(mockRules);
+
+      const mockReq = { ip: '127.0.0.1', header: vi.fn() } as any;
+
+      const res = await controller.publishDocumentAlias('doc-1', dto, mockReq, mockActor);
+
+      expect(mockDocumentsService.publishDocument).toHaveBeenCalledWith(
+        'doc-1',
+        dto,
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
+      expect(res).toBe(mockRules);
     });
   });
 

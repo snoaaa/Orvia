@@ -32,10 +32,10 @@ describe('DocumentsService', () => {
         scope: 'platform',
         schoolId: '',
         groupId: null,
-        permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', '*'],
+        permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', 'documents:publish', 'documents:manage_access', '*'],
       },
     ],
-    permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', '*'],
+    permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', 'documents:publish', 'documents:manage_access', '*'],
     schoolIds: [],
     isPlatformAdmin: true,
     role: 'platform_admin',
@@ -54,10 +54,28 @@ describe('DocumentsService', () => {
         scope: 'school',
         schoolId: 'school-1',
         groupId: null,
-        permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', 'spaces:read', 'spaces:create'],
+        permissions: [
+          'documents:create',
+          'documents:read',
+          'documents:update',
+          'documents:delete',
+          'documents:publish',
+          'documents:manage_access',
+          'spaces:read',
+          'spaces:create',
+        ],
       },
     ],
-    permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', 'spaces:read', 'spaces:create'],
+    permissions: [
+      'documents:create',
+      'documents:read',
+      'documents:update',
+      'documents:delete',
+      'documents:publish',
+      'documents:manage_access',
+      'spaces:read',
+      'spaces:create',
+    ],
     schoolIds: ['school-1'],
     isPlatformAdmin: false,
     role: 'school_admin',
@@ -161,6 +179,20 @@ describe('DocumentsService', () => {
           createdAt: new Date(),
           updatedAt: new Date(),
         })),
+      },
+      documentAccess: {
+        findFirst: vi.fn(),
+        findMany: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          ...data,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })),
+        delete: vi.fn(),
+        deleteMany: vi.fn(),
+      },
+      group: {
+        findUnique: vi.fn(),
       },
       auditEvent: {
         findMany: vi.fn().mockResolvedValue([]),
@@ -2003,6 +2035,196 @@ describe('DocumentsService', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('publishDocument and getDocumentAccessRules (#109)', () => {
+    const existingDoc = {
+      id: 'doc-1',
+      spaceId: 'space-1',
+      title: 'Operating Systems',
+      author: 'Prof. Tanenbaum',
+      tags: 'os,systems',
+      deletedAt: null,
+      createdAt: new Date('2026-10-10T10:00:00Z'),
+      updatedAt: new Date('2026-10-10T10:00:00Z'),
+      space: { schoolId: 'school-1' },
+    };
+
+    it('publishes document to school, role, and group and writes audit log', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.group.findUnique.mockResolvedValueOnce({
+        id: 'group-10a',
+        schoolId: 'school-1',
+      });
+      mockPrisma.documentAccess.findFirst.mockResolvedValue(null);
+
+      const createdRule1 = {
+        id: 'rule-1',
+        documentId: 'doc-1',
+        schoolId: 'school-1',
+        roleId: 'student',
+        groupId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      const createdRule2 = {
+        id: 'rule-2',
+        documentId: 'doc-1',
+        schoolId: 'school-1',
+        roleId: null,
+        groupId: 'group-10a',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      mockPrisma.documentAccess.create
+        .mockResolvedValueOnce(createdRule1)
+        .mockResolvedValueOnce(createdRule2);
+
+      // getDocumentAccessRules return
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentAccess.findMany.mockResolvedValueOnce([createdRule1, createdRule2]);
+
+      const result = await service.publishDocument(
+        'doc-1',
+        {
+          rules: [
+            { schoolId: 'school-1', roleId: 'student' },
+            { groupId: 'group-10a' },
+          ],
+        },
+        schoolAdmin,
+        { ip: '127.0.0.1' },
+      );
+
+      expect(mockPrisma.documentAccess.create).toHaveBeenCalledTimes(2);
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: 'documents',
+          action: 'document_published',
+          entity: { type: 'document', id: 'doc-1' },
+          details: expect.objectContaining({
+            rulesCount: 2,
+          }),
+        }),
+      );
+      expect(result).toHaveLength(2);
+    });
+
+    it('throws BadRequestException if no rules provided', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(
+        service.publishDocument('doc-1', { rules: [] }, schoolAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException if rule specifies no target', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(
+        service.publishDocument('doc-1', { rules: [{}] }, schoolAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws NotFoundException if target group is not found', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.group.findUnique.mockResolvedValueOnce(null);
+
+      await expect(
+        service.publishDocument(
+          'doc-1',
+          { rules: [{ groupId: 'nonexistent-group' }] },
+          schoolAdmin,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException if target group belongs to another school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.group.findUnique.mockResolvedValueOnce({
+        id: 'group-school-2',
+        schoolId: 'school-2',
+      });
+
+      await expect(
+        service.publishDocument(
+          'doc-1',
+          { rules: [{ groupId: 'group-school-2' }] },
+          schoolAdmin,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws ForbiddenException if non-platform admin tries to publish to foreign school without access', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(
+        service.publishDocument(
+          'doc-1',
+          { rules: [{ schoolId: 'school-2', roleId: 'student' }] },
+          schoolAdmin,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws ForbiddenException if mobile student tries to publish', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(
+        service.publishDocument(
+          'doc-1',
+          { rules: [{ roleId: 'student' }] },
+          studentUser,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('platform admin can publish across any school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentAccess.findFirst.mockResolvedValue(null);
+      mockPrisma.documentAccess.create.mockResolvedValueOnce({
+        id: 'rule-plat',
+        documentId: 'doc-1',
+        schoolId: 'school-2',
+        roleId: 'student',
+        groupId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentAccess.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.publishDocument(
+        'doc-1',
+        { rules: [{ schoolId: 'school-2', roleId: 'student' }] },
+        platformAdmin,
+      );
+
+      expect(mockPrisma.documentAccess.create).toHaveBeenCalled();
+      expect(result).toBeDefined();
+    });
+
+    it('getDocumentAccessRules returns all rules for document in scope', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      const mockRules = [
+        {
+          id: 'rule-1',
+          documentId: 'doc-1',
+          schoolId: 'school-1',
+          roleId: 'student',
+          groupId: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+      mockPrisma.documentAccess.findMany.mockResolvedValueOnce(mockRules);
+
+      const result = await service.getDocumentAccessRules('doc-1', schoolAdmin);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].roleId).toBe('student');
     });
   });
 });

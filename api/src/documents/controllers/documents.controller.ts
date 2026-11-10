@@ -18,8 +18,17 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
 import {
+  CreateDocumentDto,
+  CreateSpaceDto,
+  ListDocumentsQueryDto,
+  ListSpacesQueryDto,
+  PublishDocumentDto,
+  UpdateDocumentDto,
+  UploadDocumentDto,
+} from '../dto/index.js';
+import {
+  DocumentAccessEntity,
   DocumentEntity,
   DocumentVersionItemEntity,
   PaginatedDocumentsEntity,
@@ -146,6 +155,66 @@ export class DocumentsController {
   ): Promise<{ success: boolean; id: string; message: string }> {
     const auditContext = auditContextFromRequest(req);
     return this.documentsService.deleteDocument(id, actor, auditContext);
+  }
+
+  @Get(':id/access')
+  @RequirePermission('documents:read')
+  @ApiOperation({
+    summary: 'Get access rules for a document (§4.5, §4.7, #109)',
+    description: 'Returns all configured access rules (schools, roles, groups) for this document.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiResponse({ status: 200, description: 'List of access rules', type: [DocumentAccessEntity] })
+  @ApiResponse({ status: 404, description: 'Document not found' })
+  async getDocumentAccessRules(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentAccessEntity[]> {
+    return this.documentsService.getDocumentAccessRules(id, actor);
+  }
+
+  @Post(':id/access')
+  @RequirePermission('documents:publish')
+  @ApiOperation({
+    summary: 'Publish a document to a school, role, class or group (§4.5, §4.7, #109)',
+    description:
+      'Creates access rules specifying which schools, roles, classes, or groups can view and retrieve this document. ' +
+      'Restricted to platform administrators, school administrators, and staff with documents:publish rights. ' +
+      'Writes an immutable hash-chained audit event.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiBody({ type: PublishDocumentDto })
+  @ApiResponse({ status: 201, description: 'Document access rules configured', type: [DocumentAccessEntity] })
+  @ApiResponse({ status: 400, description: 'Invalid rules or group belongs to another school' })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks documents:publish in this school' })
+  @ApiResponse({ status: 404, description: 'Document or group not found' })
+  async publishDocument(
+    @Param('id') id: string,
+    @Body() dto: PublishDocumentDto,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentAccessEntity[]> {
+    const auditContext = auditContextFromRequest(req);
+    return this.documentsService.publishDocument(id, dto, actor, auditContext);
+  }
+
+  @Post(':id/publish')
+  @RequirePermission('documents:publish')
+  @ApiOperation({
+    summary: 'Publish a document to a school, role, class or group (alias for POST /documents/:id/access, #109)',
+    description: 'Alias for POST /documents/:id/access.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiBody({ type: PublishDocumentDto })
+  @ApiResponse({ status: 201, description: 'Document access rules configured', type: [DocumentAccessEntity] })
+  async publishDocumentAlias(
+    @Param('id') id: string,
+    @Body() dto: PublishDocumentDto,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentAccessEntity[]> {
+    const auditContext = auditContextFromRequest(req);
+    return this.documentsService.publishDocument(id, dto, actor, auditContext);
   }
 
   @Post(':id/replace')
