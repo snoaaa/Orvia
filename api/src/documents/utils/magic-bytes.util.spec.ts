@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   ALLOWED_MIME_TYPES,
   detectMimeTypeFromBuffer,
+  determineInitialProcessingStep,
   isAllowedMimeType,
+  isImageMimeType,
 } from './magic-bytes.util.js';
 
 describe('magic-bytes.util', () => {
@@ -227,6 +229,80 @@ describe('magic-bytes.util', () => {
       expect(isAllowedMimeType('application/x-msdownload')).toBe(false);
       expect(isAllowedMimeType('application/x-sh')).toBe(false);
       expect(isAllowedMimeType('video/mp4')).toBe(false);
+    });
+  });
+
+  describe('isImageMimeType', () => {
+    it('returns true for image formats', () => {
+      expect(isImageMimeType('image/jpeg')).toBe(true);
+      expect(isImageMimeType('image/png')).toBe(true);
+      expect(isImageMimeType('image/heic')).toBe(true);
+      expect(isImageMimeType('image/heif')).toBe(true);
+    });
+
+    it('returns false for non-image formats', () => {
+      expect(isImageMimeType('application/pdf')).toBe(false);
+      expect(isImageMimeType('application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe(false);
+      expect(isImageMimeType('text/plain')).toBe(false);
+    });
+  });
+
+  describe('determineInitialProcessingStep', () => {
+    it('maps PDF to ingestion', () => {
+      expect(determineInitialProcessingStep('application/pdf')).toBe('ingestion');
+    });
+
+    it('maps Word documents to office_extraction', () => {
+      expect(
+        determineInitialProcessingStep(
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ),
+      ).toBe('office_extraction');
+      expect(determineInitialProcessingStep('application/msword')).toBe('office_extraction');
+      expect(
+        determineInitialProcessingStep('application/vnd.oasis.opendocument.text'),
+      ).toBe('office_extraction');
+    });
+
+    it('maps PowerPoint presentations to slide_extraction', () => {
+      expect(
+        determineInitialProcessingStep(
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        ),
+      ).toBe('slide_extraction');
+      expect(determineInitialProcessingStep('application/vnd.ms-powerpoint')).toBe('slide_extraction');
+      expect(
+        determineInitialProcessingStep('application/vnd.oasis.opendocument.presentation'),
+      ).toBe('slide_extraction');
+    });
+
+    it('maps Spreadsheets and CSV to tabular_extraction', () => {
+      expect(
+        determineInitialProcessingStep(
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ),
+      ).toBe('tabular_extraction');
+      expect(determineInitialProcessingStep('application/vnd.ms-excel')).toBe('tabular_extraction');
+      expect(
+        determineInitialProcessingStep('application/vnd.oasis.opendocument.spreadsheet'),
+      ).toBe('tabular_extraction');
+      expect(determineInitialProcessingStep('text/csv')).toBe('tabular_extraction');
+    });
+
+    it('maps Plain text and Markdown to text_chunking', () => {
+      expect(determineInitialProcessingStep('text/plain')).toBe('text_chunking');
+      expect(determineInitialProcessingStep('text/markdown')).toBe('text_chunking');
+    });
+
+    it('maps Images to ocr', () => {
+      expect(determineInitialProcessingStep('image/jpeg')).toBe('ocr');
+      expect(determineInitialProcessingStep('image/png')).toBe('ocr');
+      expect(determineInitialProcessingStep('image/heic')).toBe('ocr');
+      expect(determineInitialProcessingStep('image/heif')).toBe('ocr');
+    });
+
+    it('defaults unknown formats to ingestion', () => {
+      expect(determineInitialProcessingStep('application/octet-stream')).toBe('ingestion');
     });
   });
 });

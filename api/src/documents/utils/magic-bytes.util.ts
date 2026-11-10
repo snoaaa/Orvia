@@ -273,3 +273,49 @@ function isBufferValidUtf8(buffer: Buffer): boolean {
     return false;
   }
 }
+
+/**
+ * Determines whether a MIME type represents an image.
+ */
+export function isImageMimeType(mimeType: string): boolean {
+  return (
+    mimeType === 'image/jpeg' ||
+    mimeType === 'image/png' ||
+    mimeType === 'image/heic' ||
+    mimeType === 'image/heif'
+  );
+}
+
+/**
+ * Determines the initial processing job step based on MIME type (§4.1, §9, #150).
+ */
+export function determineInitialProcessingStep(mimeType: string): string {
+  switch (mimeType) {
+    case 'application/pdf':
+      return 'ingestion';
+    case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    case 'application/msword':
+    case 'application/vnd.oasis.opendocument.text':
+      return 'office_extraction';
+    case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+    case 'application/vnd.ms-powerpoint':
+    case 'application/vnd.oasis.opendocument.presentation':
+      return 'slide_extraction';
+    case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+    case 'application/vnd.ms-excel':
+    case 'application/vnd.oasis.opendocument.spreadsheet':
+    case 'text/csv':
+      return 'tabular_extraction';
+    case 'text/plain':
+    case 'text/markdown':
+      return 'text_chunking';
+    case 'image/jpeg':
+    case 'image/png':
+    case 'image/heic':
+    case 'image/heif':
+      return 'ocr';
+    default:
+      return 'ingestion';
+  }
+}
+
