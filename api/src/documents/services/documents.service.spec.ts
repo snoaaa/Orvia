@@ -10,6 +10,7 @@ import { DocumentsService } from './documents.service.js';
 import type { FileValidationService } from './file-validation.service.js';
 import type { ImageConversionService } from './image-conversion.service.js';
 import type { ProcessingQueueService } from './processing-queue.service.js';
+import type { AuditService } from '../../audit/services/audit.service.js';
 
 describe('DocumentsService', () => {
   let service: DocumentsService;
@@ -18,6 +19,7 @@ describe('DocumentsService', () => {
   let mockStorageService: any;
   let mockProcessingQueueService: any;
   let mockImageConversionService: any;
+  let mockAudit: any;
 
   const platformAdmin: AuthenticatedUser = {
     id: 'user-platform-admin',
@@ -30,10 +32,10 @@ describe('DocumentsService', () => {
         scope: 'platform',
         schoolId: '',
         groupId: null,
-        permissions: ['*'],
+        permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', '*'],
       },
     ],
-    permissions: ['*'],
+    permissions: ['documents:create', 'documents:read', 'documents:update', 'documents:delete', '*'],
     schoolIds: [],
     isPlatformAdmin: true,
     role: 'platform_admin',
@@ -206,12 +208,17 @@ describe('DocumentsService', () => {
       }),
     };
 
+    mockAudit = {
+      record: vi.fn().mockResolvedValue({}),
+    };
+
     service = new DocumentsService(
       mockPrisma as unknown as PrismaService,
       mockFileValidationService as unknown as FileValidationService,
       mockStorageService as unknown as StorageService,
       mockProcessingQueueService as unknown as ProcessingQueueService,
       mockImageConversionService as unknown as ImageConversionService,
+      mockAudit as unknown as AuditService,
     );
   });
 
@@ -317,6 +324,173 @@ describe('DocumentsService', () => {
       const doc = await service.findDocumentById('doc-1', schoolAdmin);
       expect(doc.id).toBe('doc-1');
       expect(doc.title).toBe('Notes');
+    });
+  });
+
+  describe('updateDocument', () => {
+    const existingDoc = {
+      id: 'doc-1',
+      spaceId: 'space-1',
+      title: 'Operating Systems Syllabus',
+      author: 'Prof. Tanenbaum',
+      tags: 'os,minix',
+      createdAt: new Date('2026-09-01T08:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T08:00:00.000Z'),
+      deletedAt: null,
+      space: { schoolId: 'school-1' },
+    };
+
+    it('throws NotFoundException if document does not exist', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+
+      await expect(
+        service.updateDocument('doc-missing', { title: 'New Title' }, schoolAdmin),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException if document is soft-deleted', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...existingDoc,
+        deletedAt: new Date(),
+      });
+
+      await expect(
+        service.updateDocument('doc-1', { title: 'New Title' }, schoolAdmin),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException if user lacks documents:update permission in space school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...existingDoc,
+        space: { schoolId: 'school-2' },
+      });
+
+      await expect(
+        service.updateDocument('doc-1', { title: 'New Title' }, schoolAdmin),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws BadRequestException if title is empty string or only whitespace', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(
+        service.updateDocument('doc-1', { title: '   ' }, schoolAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException if date format is invalid', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(
+        service.updateDocument('doc-1', { date: 'invalid-date-string' }, schoolAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('successfully updates title, author, tags, and date, writing hash-chained audit event', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      const newDate = new Date('2026-10-15T09:00:00.000Z');
+      const updatedDoc = {
+        ...existingDoc,
+        title: 'Modern Operating Systems (Rev 3)',
+        author: 'Prof. Andrew S. Tanenbaum',
+        tags: 'os,minix,linux,kernel',
+        createdAt: newDate,
+        updatedAt: new Date(),
+      };
+
+      mockPrisma.document.update.mockResolvedValueOnce(updatedDoc);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce({
+        id: 'ver-1',
+        versionNo: 1,
+        status: 'indexed',
+      });
+
+      const result = await service.updateDocument(
+        'doc-1',
+        {
+          title: '  Modern Operating Systems (Rev 3)  ',
+          author: 'Prof. Andrew S. Tanenbaum',
+          tags: 'os,minix,linux,kernel',
+          date: '2026-10-15T09:00:00.000Z',
+        },
+        schoolAdmin,
+      );
+
+      expect(result.id).toBe('doc-1');
+      expect(result.title).toBe('Modern Operating Systems (Rev 3)');
+      expect(result.author).toBe('Prof. Andrew S. Tanenbaum');
+      expect(result.tags).toBe('os,minix,linux,kernel');
+      expect(result.createdAt).toEqual(newDate);
+
+      // Verify update payload in Prisma
+      expect(mockPrisma.document.update).toHaveBeenCalledWith({
+        where: { id: 'doc-1' },
+        data: {
+          title: 'Modern Operating Systems (Rev 3)',
+          author: 'Prof. Andrew S. Tanenbaum',
+          tags: 'os,minix,linux,kernel',
+          createdAt: newDate,
+        },
+      });
+
+      // Verify audit event
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: 'documents',
+          action: 'document_updated',
+          entity: { type: 'document', id: 'doc-1' },
+          details: expect.objectContaining({
+            spaceId: 'space-1',
+            schoolId: 'school-1',
+            changes: expect.objectContaining({
+              title: { from: existingDoc.title, to: 'Modern Operating Systems (Rev 3)' },
+              author: { from: existingDoc.author, to: 'Prof. Andrew S. Tanenbaum' },
+              tags: { from: existingDoc.tags, to: 'os,minix,linux,kernel' },
+              date: { from: existingDoc.createdAt.toISOString(), to: newDate.toISOString() },
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('platform admin can update document metadata on any school space', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...existingDoc,
+        space: { schoolId: 'school-arbitrary-99' },
+      });
+
+      mockPrisma.document.update.mockResolvedValueOnce({
+        ...existingDoc,
+        title: 'Platform Admin Edit',
+      });
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(null);
+
+      const result = await service.updateDocument(
+        'doc-1',
+        { title: 'Platform Admin Edit' },
+        platformAdmin,
+      );
+
+      expect(result.title).toBe('Platform Admin Edit');
+      expect(mockAudit.record).toHaveBeenCalled();
+    });
+
+    it('does not write audit event if no values actually changed', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.update.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(null);
+
+      await service.updateDocument(
+        'doc-1',
+        {
+          title: existingDoc.title,
+          author: existingDoc.author,
+        },
+        schoolAdmin,
+      );
+
+      expect(mockAudit.record).not.toHaveBeenCalled();
     });
   });
 

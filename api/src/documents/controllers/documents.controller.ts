@@ -22,6 +22,7 @@ import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceE
 import type { UploadedFile as IUploadedFile } from '../interfaces/index.js';
 import { DocumentsService } from '../services/documents.service.js';
 import { RangeNotSatisfiableException } from '../utils/http-range.util.js';
+import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 
 @ApiTags('Documents')
 @ApiBearerAuth('bearer-jwt')
@@ -95,15 +96,25 @@ export class DocumentsController {
 
   @Patch(':id')
   @RequirePermission('documents:update')
-  @ApiOperation({ summary: 'Update document metadata' })
+  @ApiOperation({
+    summary: 'Edit document metadata (§4.1, #105)',
+    description:
+      'Updates the title, author, date, and/or tags of an existing document. ' +
+      'Enforces school-scoped permissions and writes an immutable hash-chained audit event.',
+  })
   @ApiParam({ name: 'id', description: 'Document UUID' })
-  @ApiResponse({ status: 200, description: 'Document updated', type: DocumentEntity })
+  @ApiResponse({ status: 200, description: 'Document metadata updated successfully', type: DocumentEntity })
+  @ApiResponse({ status: 400, description: 'Invalid payload, empty title, or malformed date' })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks documents:update in this school' })
+  @ApiResponse({ status: 404, description: 'Document not found' })
   async updateDocument(
     @Param('id') id: string,
     @Body() dto: UpdateDocumentDto,
+    @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DocumentEntity> {
-    return this.documentsService.updateDocument(id, dto, actor);
+    const auditContext = auditContextFromRequest(req);
+    return this.documentsService.updateDocument(id, dto, actor, auditContext);
   }
 
   @Post('spaces/:spaceId/validate-file')

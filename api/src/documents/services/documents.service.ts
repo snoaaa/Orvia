@@ -15,6 +15,9 @@ import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
 import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
+import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
+import { AuditService } from '../../audit/services/audit.service.js';
+import { type AuditRequestContext, SYSTEM_AUDIT_CONTEXT } from '../../audit/utils/audit-request-context.util.js';
 import { FileValidationService } from './file-validation.service.js';
 import { ImageConversionService } from './image-conversion.service.js';
 import { ProcessingQueueService } from './processing-queue.service.js';
@@ -27,6 +30,7 @@ export class DocumentsService {
     @Inject(STORAGE_SERVICE) private readonly storageService: StorageService,
     private readonly processingQueueService: ProcessingQueueService,
     private readonly imageConversionService: ImageConversionService,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -76,7 +80,7 @@ export class DocumentsService {
       where: { id },
       include: { space: { select: { schoolId: true } } },
     });
-    if (!doc) {
+    if (!doc || doc.deletedAt) {
       throw new NotFoundException(`Document with ID ${id} not found`);
     }
     assertSchoolAccess(actor, permission, doc.space.schoolId);
@@ -97,17 +101,82 @@ export class DocumentsService {
     return DocumentMapper.toEntity(created);
   }
 
-  async updateDocument(id: string, dto: UpdateDocumentDto, actor: AuthenticatedUser): Promise<DocumentEntity> {
-    await this.findDocumentInScope(id, actor, 'documents:update');
-    const updated = await this.prisma.document.update({
-      where: { id },
-      data: {
-        ...(dto.title !== undefined && { title: dto.title }),
-        ...(dto.author !== undefined && { author: dto.author }),
-        ...(dto.tags !== undefined && { tags: dto.tags }),
-      },
-    });
-    return DocumentMapper.toEntity(updated);
+  /**
+   * Updates metadata (title, author, date, tags) of an existing document (§4.1, #105).
+   * Enforces school access, validates inputs, and records an immutable hash-chained audit event.
+   */
+  async updateDocument(
+    id: string,
+    dto: UpdateDocumentDto,
+    actor: AuthenticatedUser,
+    auditContext?: AuditRequestContext,
+  ): Promise<DocumentEntity> {
+    const doc = await this.findDocumentInScope(id, actor, 'documents:update');
+
+    if (dto.title !== undefined && dto.title.trim().length === 0) {
+      throw new BadRequestException('Document title cannot be empty');
+    }
+
+    let parsedDate: Date | undefined;
+    if (dto.date !== undefined) {
+      parsedDate = new Date(dto.date);
+      if (isNaN(parsedDate.getTime())) {
+        throw new BadRequestException('Invalid date format for document date');
+      }
+    }
+
+    const trimmedTitle = dto.title !== undefined ? dto.title.trim() : undefined;
+    const trimmedAuthor = dto.author !== undefined ? dto.author.trim() : undefined;
+    const trimmedTags = dto.tags !== undefined ? dto.tags.trim() : undefined;
+
+    // Detect actual changes for the audit trail
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    if (trimmedTitle !== undefined && trimmedTitle !== doc.title) {
+      changes.title = { from: doc.title, to: trimmedTitle };
+    }
+    if (trimmedAuthor !== undefined && trimmedAuthor !== doc.author) {
+      changes.author = { from: doc.author, to: trimmedAuthor };
+    }
+    if (trimmedTags !== undefined && trimmedTags !== doc.tags) {
+      changes.tags = { from: doc.tags, to: trimmedTags };
+    }
+    if (parsedDate !== undefined && parsedDate.toISOString() !== doc.createdAt.toISOString()) {
+      changes.date = { from: doc.createdAt.toISOString(), to: parsedDate.toISOString() };
+    }
+
+    const [updated, currentVersion] = await Promise.all([
+      this.prisma.document.update({
+        where: { id },
+        data: {
+          ...(trimmedTitle !== undefined && { title: trimmedTitle }),
+          ...(trimmedAuthor !== undefined && { author: trimmedAuthor }),
+          ...(trimmedTags !== undefined && { tags: trimmedTags }),
+          ...(parsedDate !== undefined && { createdAt: parsedDate }),
+        },
+      }),
+      this.prisma.documentVersion.findFirst({
+        where: { documentId: id },
+        orderBy: { versionNo: 'desc' },
+      }),
+    ]);
+
+    // Record audit event if any field changed
+    if (Object.keys(changes).length > 0) {
+      await this.audit.record(
+        AuditEvents.documentUpdated(
+          {
+            documentId: id,
+            spaceId: doc.spaceId,
+            schoolId: doc.space.schoolId,
+            actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+            changes,
+          },
+          auditContext ?? SYSTEM_AUDIT_CONTEXT,
+        ),
+      );
+    }
+
+    return DocumentMapper.toEntity(updated, currentVersion);
   }
 
   /**

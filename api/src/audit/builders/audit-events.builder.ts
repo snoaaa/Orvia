@@ -207,4 +207,32 @@ export const AuditEvents = {
       context,
     };
   },
+
+  documentUpdated(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+      changes: Record<string, { from: unknown; to: unknown }>;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_UPDATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        changes: p.changes,
+      },
+      context,
+    };
+  },
 };
