@@ -17,7 +17,11 @@ const actor = (scope: 'platform' | 'school', permissions = ['groups:create']) =>
 describe('GroupsService', () => {
   const prisma = {
     school: { findUnique: vi.fn() },
-    group: { create: vi.fn(), count: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    group: { create: vi.fn(), count: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    groupMember: { deleteMany: vi.fn() },
+    documentAccess: { deleteMany: vi.fn() },
+    userAssignment: { updateMany: vi.fn() },
+    $transaction: vi.fn(),
   };
   const service = new GroupsService(prisma as unknown as PrismaService);
   const dto = { schoolId: 'school-a', name: 'Class 4-A' };
@@ -94,7 +98,7 @@ describe('GroupsService', () => {
     it('confines a school admin to their schools and maps the member count', async () => {
       const page = await service.listGroups(actor('school', ['groups:read']), { limit: 5 });
       const args = prisma.group.findMany.mock.calls[0][0];
-      expect(args.where).toEqual({ schoolId: { in: ['school-a'] } });
+      expect(args.where).toEqual({ deletedAt: null, schoolId: { in: ['school-a'] } });
       expect(args.take).toBe(5);
       expect(page).toMatchObject({ total: 1, page: 1, limit: 5, totalPages: 1 });
       expect(page.data[0]).toMatchObject({ id: 'g1', schoolName: 'School school-a', memberCount: 2 });
@@ -103,7 +107,7 @@ describe('GroupsService', () => {
     it('does not restrict a platform admin, and sorts text columns A-Z by default', async () => {
       await service.listGroups(actor('platform', ['groups:read']), { sortBy: 'name', type: 'team', search: 'isi' });
       const args = prisma.group.findMany.mock.calls[0][0];
-      expect(args.where).toEqual({ type: 'team', name: { contains: 'isi' } });
+      expect(args.where).toEqual({ deletedAt: null, type: 'team', name: { contains: 'isi' } });
       expect(args.orderBy).toEqual([{ name: 'asc' }, { id: 'asc' }]);
     });
 
@@ -132,7 +136,7 @@ describe('GroupsService', () => {
     });
 
     beforeEach(() => {
-      prisma.group.findUnique.mockResolvedValue(existing());
+      prisma.group.findFirst.mockResolvedValue(existing());
       prisma.group.update.mockImplementation(({ data }) => Promise.resolve({ ...existing(), ...data }));
     });
 
@@ -141,9 +145,9 @@ describe('GroupsService', () => {
     });
 
     it('answers 404 for an unknown group and 403 for another school', async () => {
-      prisma.group.findUnique.mockResolvedValueOnce(null);
+      prisma.group.findFirst.mockResolvedValueOnce(null);
       await expect(service.getGroup('g1', actor('platform', ['groups:read']))).rejects.toBeInstanceOf(NotFoundException);
-      prisma.group.findUnique.mockResolvedValueOnce(existing('school-b'));
+      prisma.group.findFirst.mockResolvedValueOnce(existing('school-b'));
       await expect(service.getGroup('g1', actor('school', ['groups:read']))).rejects.toBeInstanceOf(ForbiddenException);
     });
 
@@ -161,9 +165,9 @@ describe('GroupsService', () => {
     it('rejects an empty update, a deactivated school and another school', async () => {
       const admin = actor('school', ['groups:update']);
       await expect(service.updateGroup('g1', {}, admin)).rejects.toBeInstanceOf(BadRequestException);
-      prisma.group.findUnique.mockResolvedValueOnce(existing('school-a', 'deactivated'));
+      prisma.group.findFirst.mockResolvedValueOnce(existing('school-a', 'deactivated'));
       await expect(service.updateGroup('g1', { name: 'X' }, admin)).rejects.toBeInstanceOf(BadRequestException);
-      prisma.group.findUnique.mockResolvedValueOnce(existing('school-b'));
+      prisma.group.findFirst.mockResolvedValueOnce(existing('school-b'));
       await expect(service.updateGroup('g1', { name: 'X' }, admin)).rejects.toBeInstanceOf(ForbiddenException);
       expect(prisma.group.update).not.toHaveBeenCalled();
     });
@@ -175,6 +179,73 @@ describe('GroupsService', () => {
       await expect(
         service.updateGroup('g1', { name: 'Taken' }, actor('school', ['groups:update'])),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+  });
+
+  describe('deleteGroup', () => {
+    const existing = (overrides: Record<string, unknown> = {}) => ({
+      id: 'g1',
+      schoolId: 'school-a',
+      name: 'Class 4-A',
+      type: 'class',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      school: { name: 'School A', status: 'active' },
+      _count: { members: 3 },
+      ...overrides,
+    });
+    const admin = actor('school', ['groups:delete']);
+
+    beforeEach(() => {
+      prisma.group.findFirst.mockResolvedValue(existing());
+      prisma.group.updateMany.mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => Promise<unknown>) => run(prisma));
+    });
+
+    it('soft deletes and renames the group, removes memberships and access, keeps assignments', async () => {
+      await service.deleteGroup('g1', admin);
+      const { where, data } = prisma.group.updateMany.mock.calls[0][0];
+      expect(where).toEqual({ id: 'g1', deletedAt: null });
+      expect(data.deletedAt).toBeInstanceOf(Date);
+      expect(data.name).toBe(`Class 4-A [deleted ${data.deletedAt.toISOString()}]`);
+      expect(prisma.groupMember.deleteMany).toHaveBeenCalledWith({ where: { groupId: 'g1' } });
+      expect(prisma.documentAccess.deleteMany).toHaveBeenCalledWith({ where: { groupId: 'g1' } });
+      expect(prisma.userAssignment.updateMany).toHaveBeenCalledWith({ where: { groupId: 'g1' }, data: { groupId: null } });
+    });
+
+    it('keeps the renamed name within 191 characters', async () => {
+      prisma.group.findFirst.mockResolvedValue(existing({ name: 'x'.repeat(191) }));
+      await service.deleteGroup('g1', admin);
+      const { data } = prisma.group.updateMany.mock.calls[0][0];
+      expect(data.name).toHaveLength(191);
+      expect(data.name.endsWith(']')).toBe(true);
+    });
+
+    it('answers 404 for an unknown or already deleted group', async () => {
+      prisma.group.findFirst.mockResolvedValue(null);
+      await expect(service.deleteGroup('g1', admin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.group.findFirst.mock.calls[0][0].where).toEqual({ id: 'g1', deletedAt: null });
+    });
+
+    it('answers 404 when a simultaneous delete won, without touching memberships', async () => {
+      prisma.group.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.deleteGroup('g1', admin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.groupMember.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects another school and a deactivated school', async () => {
+      prisma.group.findFirst.mockResolvedValueOnce(existing({ schoolId: 'school-b' }));
+      await expect(service.deleteGroup('g1', admin)).rejects.toBeInstanceOf(ForbiddenException);
+      prisma.group.findFirst.mockResolvedValueOnce(existing({ school: { name: 'School A', status: 'deactivated' } }));
+      await expect(service.deleteGroup('g1', admin)).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('hides deleted groups from the list', async () => {
+      prisma.group.count.mockResolvedValue(0);
+      prisma.group.findMany.mockResolvedValue([]);
+      await service.listGroups(actor('platform', ['groups:read']));
+      expect(prisma.group.findMany.mock.calls[0][0].where).toEqual({ deletedAt: null });
     });
   });
 });

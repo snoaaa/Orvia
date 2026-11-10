@@ -14,6 +14,9 @@ const detailInclude = {
 
 type GroupWithDetail = Prisma.GroupGetPayload<{ include: typeof detailInclude }>;
 
+/** Column size of `groups.name` (VARCHAR(191)). */
+const GROUP_NAME_MAX_LENGTH = 191;
+
 /** Groups (classes, departments, teams) of a school (Sections 4.5 and 4.7). */
 @Injectable()
 export class GroupsService {
@@ -57,6 +60,7 @@ export class GroupsService {
 
     const scope = schoolIdFilter(actor, 'groups:read');
     const where: Prisma.GroupWhereInput = {
+      deletedAt: null,
       ...(query.schoolId ? { schoolId: query.schoolId } : scope ? { schoolId: scope } : {}),
       ...(query.type && { type: query.type }),
       // MySQL's default collation (utf8mb4_unicode_ci) makes `contains` case-insensitive.
@@ -120,8 +124,37 @@ export class GroupsService {
     }
   }
 
+  /**
+   * DELETE /groups/:id (#35): soft delete. In one transaction the group gets `deleted_at` and a renamed
+   * `name` (so the name can be reused in the school), loses its memberships and the document access it
+   * granted, and assignments pointing to it keep their school role without the group.
+   */
+  async deleteGroup(id: string, actor: AuthenticatedUser): Promise<void> {
+    const group = await this.findGroup(id);
+    assertSchoolAccess(actor, 'groups:delete', group.schoolId);
+    if (group.school.status === 'deactivated') {
+      throw new BadRequestException('Cannot delete a group of a deactivated school');
+    }
+
+    const deletedAt = new Date();
+    const suffix = ` [deleted ${deletedAt.toISOString()}]`;
+    const name = group.name.slice(0, GROUP_NAME_MAX_LENGTH - suffix.length) + suffix;
+
+    await this.prisma.$transaction(async (tx) => {
+      // Conditional on deleted_at: of two simultaneous deletes, only one goes through.
+      const { count } = await tx.group.updateMany({ where: { id, deletedAt: null }, data: { deletedAt, name } });
+      if (count === 0) {
+        throw new NotFoundException(`Group with ID ${id} not found`);
+      }
+      await tx.groupMember.deleteMany({ where: { groupId: id } });
+      await tx.documentAccess.deleteMany({ where: { groupId: id } });
+      await tx.userAssignment.updateMany({ where: { groupId: id }, data: { groupId: null } });
+    });
+  }
+
+  /** Loads a group that is not deleted, or throws 404. */
   private async findGroup(id: string): Promise<GroupWithDetail> {
-    const group = await this.prisma.group.findUnique({ where: { id }, include: detailInclude });
+    const group = await this.prisma.group.findFirst({ where: { id, deletedAt: null }, include: detailInclude });
     if (!group) {
       throw new NotFoundException(`Group with ID ${id} not found`);
     }

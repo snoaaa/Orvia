@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
@@ -83,5 +83,22 @@ export class GroupsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<GroupDetailEntity> {
     return this.groupsService.updateGroup(id, dto, actor);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('groups:delete')
+  @ApiOperation({
+    summary: 'Delete a group (soft delete)',
+    description:
+      'The group is kept with deleted_at and renamed, so the name can be reused. Its memberships and the document ' +
+      'access it granted are removed; members keep their school role. Deleted groups no longer appear anywhere.',
+  })
+  @ApiParam({ name: 'id', description: 'Group UUID' })
+  @ApiResponse({ status: 204, description: 'Group deleted' })
+  @ApiResponse({ status: 400, description: 'Invalid id or deactivated school' })
+  @ApiResponse({ status: 404, description: 'Group not found or already deleted' })
+  async deleteGroup(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: AuthenticatedUser): Promise<void> {
+    await this.groupsService.deleteGroup(id, actor);
   }
 }

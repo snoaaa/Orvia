@@ -72,7 +72,7 @@ export class IdentityAndAccessService {
       assertSchoolAccess(actor, 'users:read', query.schoolId);
     }
     if (query.groupId) {
-      const group = await this.prisma.group.findUnique({ where: { id: query.groupId }, select: { schoolId: true } });
+      const group = await this.prisma.group.findFirst({ where: { id: query.groupId, deletedAt: null }, select: { schoolId: true } });
       if (!group) {
         throw new NotFoundException(`Group with ID ${query.groupId} not found`);
       }
