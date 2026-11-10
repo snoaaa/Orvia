@@ -4,6 +4,7 @@ import { DocumentsController } from './documents.controller.js';
 import { ValidatedFileEntity } from '../entities/validated-file.entity.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import type { DocumentsService } from '../services/documents.service.js';
+import { RangeNotSatisfiableException } from '../utils/http-range.util.js';
 
 describe('DocumentsController', () => {
   let controller: DocumentsController;
@@ -42,6 +43,7 @@ describe('DocumentsController', () => {
       validateUploadedFile: vi.fn(),
       uploadPdf: vi.fn(),
       uploadImage: vi.fn(),
+      getDocumentVersionStream: vi.fn(),
     };
 
     controller = new DocumentsController(mockDocumentsService as unknown as DocumentsService);
@@ -182,6 +184,160 @@ describe('DocumentsController', () => {
         mockActor,
       );
       expect(result).toBe(expectedDoc);
+    });
+  });
+
+  describe('download and stream endpoints', () => {
+    const createMockResponse = () => {
+      const res: any = {
+        statusCode: 200,
+        headers: {} as Record<string, string>,
+        status: vi.fn().mockImplementation((code) => {
+          res.statusCode = code;
+          return res;
+        }),
+        setHeader: vi.fn().mockImplementation((k, v) => {
+          res.headers[k] = v;
+          return res;
+        }),
+        json: vi.fn().mockImplementation((body) => {
+          res.body = body;
+          return res;
+        }),
+        on: vi.fn(),
+      };
+      return res;
+    };
+
+    const mockStream = {
+      pipe: vi.fn(),
+      destroy: vi.fn(),
+      on: vi.fn(),
+    } as any;
+
+    it('downloadCurrentDocument streams with attachment disposition', async () => {
+      const res = createMockResponse();
+      const req = { headers: {} } as any;
+
+      mockDocumentsService.getDocumentVersionStream.mockResolvedValueOnce({
+        stream: mockStream,
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Length': 1000,
+          'Content-Disposition': 'attachment; filename="doc.pdf"',
+        },
+      });
+
+      await controller.downloadCurrentDocument('doc-1', undefined, req, res, mockActor);
+
+      expect(mockDocumentsService.getDocumentVersionStream).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        versionRef: 'latest',
+        actor: mockActor,
+        rangeHeader: undefined,
+        disposition: 'attachment',
+      });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/pdf');
+      expect(mockStream.pipe).toHaveBeenCalledWith(res);
+    });
+
+    it('streamCurrentDocument streams with inline disposition', async () => {
+      const res = createMockResponse();
+      const req = { headers: { range: 'bytes=0-499' } } as any;
+
+      mockDocumentsService.getDocumentVersionStream.mockResolvedValueOnce({
+        stream: mockStream,
+        statusCode: 206,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Length': 500,
+          'Content-Range': 'bytes 0-499/1000',
+          'Content-Disposition': 'inline; filename="doc.pdf"',
+        },
+      });
+
+      await controller.streamCurrentDocument('doc-1', req, res, mockActor);
+
+      expect(mockDocumentsService.getDocumentVersionStream).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        versionRef: 'latest',
+        actor: mockActor,
+        rangeHeader: 'bytes=0-499',
+        disposition: 'inline',
+      });
+      expect(res.status).toHaveBeenCalledWith(206);
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Range', 'bytes 0-499/1000');
+    });
+
+    it('downloadDocumentVersion streams specific version with attachment', async () => {
+      const res = createMockResponse();
+      const req = { headers: {} } as any;
+
+      mockDocumentsService.getDocumentVersionStream.mockResolvedValueOnce({
+        stream: mockStream,
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Length': 800,
+          'Content-Disposition': 'attachment; filename="doc.pdf"',
+        },
+      });
+
+      await controller.downloadDocumentVersion('doc-1', '2', undefined, req, res, mockActor);
+
+      expect(mockDocumentsService.getDocumentVersionStream).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        versionRef: '2',
+        actor: mockActor,
+        rangeHeader: undefined,
+        disposition: 'attachment',
+      });
+    });
+
+    it('streamDocumentVersion streams specific version with inline disposition', async () => {
+      const res = createMockResponse();
+      const req = { headers: {} } as any;
+
+      mockDocumentsService.getDocumentVersionStream.mockResolvedValueOnce({
+        stream: mockStream,
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': 'inline; filename="doc.pdf"',
+        },
+      });
+
+      await controller.streamDocumentVersion('doc-1', 'ver-uuid-123', req, res, mockActor);
+
+      expect(mockDocumentsService.getDocumentVersionStream).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        versionRef: 'ver-uuid-123',
+        actor: mockActor,
+        rangeHeader: undefined,
+        disposition: 'inline',
+      });
+    });
+
+    it('catches RangeNotSatisfiableException and returns 416 with Content-Range header', async () => {
+      const res = createMockResponse();
+      const req = { headers: { range: 'bytes=9999-' } } as any;
+
+      mockDocumentsService.getDocumentVersionStream.mockRejectedValueOnce(
+        new RangeNotSatisfiableException(1000),
+      );
+
+      await controller.streamDocumentVersion('doc-1', '1', req, res, mockActor);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Range', 'bytes */1000');
+      expect(res.status).toHaveBeenCalledWith(416);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          statusCode: 416,
+          message: 'Requested range not satisfiable',
+        }),
+      );
     });
   });
 });

@@ -1,4 +1,18 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
@@ -7,6 +21,7 @@ import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQue
 import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
 import type { UploadedFile as IUploadedFile } from '../interfaces/index.js';
 import { DocumentsService } from '../services/documents.service.js';
+import { RangeNotSatisfiableException } from '../utils/http-range.util.js';
 
 @ApiTags('Documents')
 @ApiBearerAuth('bearer-jwt')
@@ -232,5 +247,171 @@ export class DocumentsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DocumentEntity> {
     return this.documentsService.uploadImage(spaceId, file, dto, actor);
+  }
+
+  @Get(':id/download')
+  @ApiOperation({
+    summary: 'Download current version of a document (§4.3, §7, #104)',
+    description:
+      'Downloads the latest version of an authorized document with Content-Disposition: attachment. ' +
+      'Supports HTTP range requests for resumable downloads.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiQuery({ name: 'disposition', enum: ['attachment', 'inline'], required: false })
+  @ApiResponse({ status: 200, description: 'File content' })
+  @ApiResponse({ status: 206, description: 'Partial content (range request)' })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks access to this document' })
+  @ApiResponse({ status: 404, description: 'Document not found' })
+  @ApiResponse({ status: 416, description: 'Range not satisfiable' })
+  async downloadCurrentDocument(
+    @Param('id') id: string,
+    @Query('disposition') disposition: 'attachment' | 'inline' | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.pipeDocumentStream({
+      documentId: id,
+      versionRef: 'latest',
+      actor,
+      rangeHeader: req.headers.range,
+      disposition: disposition ?? 'attachment',
+      res,
+    });
+  }
+
+  @Get(':id/stream')
+  @ApiOperation({
+    summary: 'Stream current version of a document for viewer (§4.3, §7, #104)',
+    description:
+      'Streams the latest version of an authorized document with Content-Disposition: inline. ' +
+      'Supports HTTP 206 range requests for page-by-page PDF / media rendering.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiResponse({ status: 200, description: 'File content' })
+  @ApiResponse({ status: 206, description: 'Partial content (range request)' })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks access to this document' })
+  @ApiResponse({ status: 404, description: 'Document not found' })
+  @ApiResponse({ status: 416, description: 'Range not satisfiable' })
+  async streamCurrentDocument(
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.pipeDocumentStream({
+      documentId: id,
+      versionRef: 'latest',
+      actor,
+      rangeHeader: req.headers.range,
+      disposition: 'inline',
+      res,
+    });
+  }
+
+  @Get(':id/versions/:version/download')
+  @ApiOperation({
+    summary: 'Download a specific version of a document (§4.3, §7, #104)',
+    description:
+      'Downloads a specific version (by version number, UUID, or "latest") with Content-Disposition: attachment. ' +
+      'Managers may download any historical version; non-managers may download current versions or versions cited in their conversations.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiParam({ name: 'version', description: 'Version number (e.g. 1) or version UUID or "latest"' })
+  @ApiQuery({ name: 'disposition', enum: ['attachment', 'inline'], required: false })
+  @ApiResponse({ status: 200, description: 'File content' })
+  @ApiResponse({ status: 206, description: 'Partial content (range request)' })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks access to this version' })
+  @ApiResponse({ status: 404, description: 'Document or version not found' })
+  @ApiResponse({ status: 416, description: 'Range not satisfiable' })
+  async downloadDocumentVersion(
+    @Param('id') id: string,
+    @Param('version') version: string,
+    @Query('disposition') disposition: 'attachment' | 'inline' | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.pipeDocumentStream({
+      documentId: id,
+      versionRef: version,
+      actor,
+      rangeHeader: req.headers.range,
+      disposition: disposition ?? 'attachment',
+      res,
+    });
+  }
+
+  @Get(':id/versions/:version/stream')
+  @ApiOperation({
+    summary: 'Stream a specific version of a document for viewer (§4.3, §7, #104)',
+    description:
+      'Streams a specific version (by version number, UUID, or "latest") with Content-Disposition: inline and HTTP 206 range request support.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiParam({ name: 'version', description: 'Version number (e.g. 1) or version UUID or "latest"' })
+  @ApiResponse({ status: 200, description: 'File content' })
+  @ApiResponse({ status: 206, description: 'Partial content (range request)' })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks access to this version' })
+  @ApiResponse({ status: 404, description: 'Document or version not found' })
+  @ApiResponse({ status: 416, description: 'Range not satisfiable' })
+  async streamDocumentVersion(
+    @Param('id') id: string,
+    @Param('version') version: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.pipeDocumentStream({
+      documentId: id,
+      versionRef: version,
+      actor,
+      rangeHeader: req.headers.range,
+      disposition: 'inline',
+      res,
+    });
+  }
+
+  private async pipeDocumentStream(options: {
+    documentId: string;
+    versionRef: string;
+    actor: AuthenticatedUser;
+    rangeHeader?: string;
+    disposition: 'attachment' | 'inline';
+    res: Response;
+  }): Promise<void> {
+    const { res, ...serviceOpts } = options;
+    try {
+      const { stream, statusCode, headers } =
+        await this.documentsService.getDocumentVersionStream(serviceOpts);
+
+      res.status(statusCode);
+      for (const [key, value] of Object.entries(headers)) {
+        res.setHeader(key, value);
+      }
+
+      res.on('close', () => {
+        stream.destroy();
+      });
+
+      stream.on('error', (err) => {
+        if (!res.headersSent) {
+          res.status(HttpStatus.INTERNAL_SERVER_ERROR).end();
+        }
+        stream.destroy(err);
+      });
+
+      stream.pipe(res);
+    } catch (err) {
+      if (err instanceof RangeNotSatisfiableException) {
+        res.setHeader('Content-Range', `bytes */${err.totalSize}`);
+        res.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE).json({
+          statusCode: HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+          message: 'Requested range not satisfiable',
+        });
+        return;
+      }
+      throw err;
+    }
   }
 }

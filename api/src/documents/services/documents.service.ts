@@ -1,8 +1,10 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type { Readable } from 'node:stream';
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
+import { assertSchoolAccess, canInSchool, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
@@ -11,6 +13,7 @@ import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpac
 import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
+import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
 import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { FileValidationService } from './file-validation.service.js';
 import { ImageConversionService } from './image-conversion.service.js';
@@ -470,5 +473,216 @@ export class DocumentsService {
       await this.storageService.delete(storageKey).catch(() => {});
       throw err;
     }
+  }
+
+  /**
+   * Asserts whether the caller is authorized to download or stream a document version (§4.3, §7, #104).
+   *
+   * Authorization matrix:
+   * 1. Platform admin (web): can download any version of any document across the platform.
+   * 2. School admin / Document manager (web + mobile): can download any version of documents
+   *    in the school(s) where they hold `documents:read` rights.
+   * 3. Staff / Student / Parent / Guest:
+   *    a) Can download ANY version cited in an answer generated for them (conversation references).
+   *    b) Can download the CURRENT version if the document is published to them (matches school,
+   *       role, or group publication rules, or open to school when no rules are configured).
+   *    c) Cannot download un-cited past versions (returns 403).
+   *    d) Cannot download documents out of their school/group scope (returns 403).
+   */
+  async assertCanDownloadDocumentVersion(
+    actor: AuthenticatedUser,
+    document: {
+      id: string;
+      spaceId: string;
+      space: { schoolId: string };
+      access: { schoolId: string | null; roleId: string | null; groupId: string | null }[];
+    },
+    version: {
+      id: string;
+      versionNo: number;
+    },
+  ): Promise<void> {
+    // 1. Platform admin: global access
+    if (actor.isPlatformAdmin || actor.assignments.some((a) => a.scope === 'platform')) {
+      return;
+    }
+
+    // 2. Document managers with `documents:read` permission in this school
+    if (canInSchool(actor, 'documents:read', document.space.schoolId)) {
+      return;
+    }
+
+    // 3. User must at least belong to the school of this space
+    if (!actor.schoolIds.includes(document.space.schoolId)) {
+      throw new ForbiddenException('You do not have access to documents in this school');
+    }
+
+    // 4. Citation check: if this specific version is cited in an answer generated for this user
+    const citation = await this.prisma.messageReference.findFirst({
+      where: {
+        documentVersionId: version.id,
+        message: {
+          conversation: {
+            userId: actor.id,
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    if (citation) {
+      return;
+    }
+
+    // 5. If not cited in user's own answers, only the CURRENT version can be downloaded
+    const latestVersion = await this.prisma.documentVersion.findFirst({
+      where: { documentId: document.id },
+      orderBy: { versionNo: 'desc' },
+      select: { id: true },
+    });
+
+    if (latestVersion?.id !== version.id) {
+      throw new ForbiddenException(
+        'Historical document versions can only be accessed by document managers or when cited in your conversations',
+      );
+    }
+
+    // 6. Publication rules check: if specific access rules exist, user must match at least one
+    if (document.access && document.access.length > 0) {
+      const userAssignments = actor.assignments.filter(
+        (a) => a.schoolId === document.space.schoolId,
+      );
+      const userRoles = new Set(userAssignments.map((a) => a.role));
+      const userGroupIds = new Set(
+        userAssignments.map((a) => a.groupId).filter((g): g is string => !!g),
+      );
+
+      const matches = document.access.some((rule) => {
+        // School-level rule
+        if (rule.schoolId && rule.schoolId === document.space.schoolId && !rule.roleId && !rule.groupId) {
+          return true;
+        }
+        // Role-level rule
+        if (rule.roleId && userRoles.has(rule.roleId)) {
+          return true;
+        }
+        // Group-level rule
+        if (rule.groupId && userGroupIds.has(rule.groupId)) {
+          return true;
+        }
+        return false;
+      });
+
+      if (!matches) {
+        throw new ForbiddenException('This document is not published to your school, role, or group');
+      }
+    }
+  }
+
+  /**
+   * Streams a document version with HTTP range request support (§4.3, §7, #104).
+   *
+   * @param options.documentId Document UUID
+   * @param options.versionRef Version number (integer string), version UUID, or 'latest'
+   * @param options.actor Authenticated user requesting the file
+   * @param options.rangeHeader Optional HTTP `Range` header (e.g. `bytes=0-1023`)
+   * @param options.disposition 'attachment' for download prompt or 'inline' for viewer streaming
+   */
+  async getDocumentVersionStream(options: {
+    documentId: string;
+    versionRef?: string;
+    actor: AuthenticatedUser;
+    rangeHeader?: string;
+    disposition?: 'attachment' | 'inline';
+  }): Promise<{
+    stream: Readable;
+    statusCode: number;
+    headers: Record<string, string | number>;
+    filename: string;
+    mimeType: string;
+  }> {
+    const { documentId, versionRef, actor, rangeHeader, disposition = 'attachment' } = options;
+
+    const document = await this.prisma.document.findUnique({
+      where: { id: documentId },
+      include: {
+        space: { select: { id: true, schoolId: true, privacy: true } },
+        access: { select: { schoolId: true, roleId: true, groupId: true } },
+      },
+    });
+
+    if (!document || document.deletedAt) {
+      throw new NotFoundException(`Document with ID ${documentId} not found`);
+    }
+
+    // Resolve target version
+    let version;
+    if (!versionRef || versionRef === 'latest') {
+      version = await this.prisma.documentVersion.findFirst({
+        where: { documentId },
+        orderBy: { versionNo: 'desc' },
+      });
+    } else if (/^\d+$/.test(versionRef.trim())) {
+      const versionNo = parseInt(versionRef.trim(), 10);
+      version = await this.prisma.documentVersion.findFirst({
+        where: { documentId, versionNo },
+      });
+    } else {
+      version = await this.prisma.documentVersion.findFirst({
+        where: { documentId, id: versionRef.trim() },
+      });
+    }
+
+    if (!version) {
+      throw new NotFoundException(
+        `Version ${versionRef ?? 'latest'} not found for document with ID ${documentId}`,
+      );
+    }
+
+    // Enforce role-based access control
+    await this.assertCanDownloadDocumentVersion(actor, document, version);
+
+    // Retrieve storage file metadata
+    const metadata = await this.storageService.getMetadata(version.storageKey);
+    const totalSize = metadata.size;
+
+    // Parse byte range (RFC 7233)
+    const range = parseHttpRange(rangeHeader, totalSize);
+
+    // Open read stream for requested byte segment
+    const stream = await this.storageService.read(version.storageKey, {
+      start: range.start,
+      end: range.end,
+    });
+
+    const ext = path.extname(version.storageKey) || '';
+    const cleanTitle = document.title.trim() || 'document';
+    const filename = cleanTitle.toLowerCase().endsWith(ext.toLowerCase())
+      ? cleanTitle
+      : `${cleanTitle}${ext}`;
+
+    const { ascii, utf8 } = formatContentDispositionFilename(filename);
+
+    const headers: Record<string, string | number> = {
+      'Content-Type': version.mimeType,
+      'Content-Length': range.chunkSize,
+      'Accept-Ranges': 'bytes',
+      'Content-Disposition': `${disposition}; filename="${ascii}"; filename*=UTF-8''${utf8}`,
+      'ETag': `"${version.checksum}"`,
+      'Last-Modified': version.updatedAt.toUTCString(),
+      'Cache-Control': 'private, max-age=3600',
+    };
+
+    if (range.isRange && range.contentRange) {
+      headers['Content-Range'] = range.contentRange;
+    }
+
+    return {
+      stream,
+      statusCode: range.statusCode,
+      headers,
+      filename,
+      mimeType: version.mimeType,
+    };
   }
 }
