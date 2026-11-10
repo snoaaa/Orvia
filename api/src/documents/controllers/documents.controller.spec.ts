@@ -110,6 +110,43 @@ describe('DocumentsController', () => {
     });
   });
 
+  describe('updateDocument', () => {
+    it('delegates to documentsService.updateDocument with auditContext', async () => {
+      const dto = {
+        title: 'Updated Operating Systems Notes',
+        author: 'Prof. Tanenbaum',
+        tags: 'os,systems',
+        date: '2026-10-15T09:00:00.000Z',
+      };
+
+      const expectedDoc = {
+        id: 'doc-1',
+        title: 'Updated Operating Systems Notes',
+        author: 'Prof. Tanenbaum',
+        tags: 'os,systems',
+      } as any;
+
+      mockDocumentsService.updateDocument.mockResolvedValueOnce(expectedDoc);
+
+      const mockReq = {
+        ip: '127.0.0.1',
+        header: vi.fn().mockReturnValue(undefined),
+      } as any;
+
+      const res = await controller.updateDocument('doc-1', dto, mockReq, mockActor);
+
+      expect(mockDocumentsService.updateDocument).toHaveBeenCalledWith(
+        'doc-1',
+        dto,
+        mockActor,
+        expect.objectContaining({
+          ip: '127.0.0.1',
+        }),
+      );
+      expect(res).toBe(expectedDoc);
+    });
+  });
+
   describe('uploadPdf', () => {
     it('delegates PDF upload to documentsService.uploadPdf', async () => {
       const mockFile = {
