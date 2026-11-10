@@ -378,15 +378,9 @@ export class DocumentsService {
       spaceId,
     });
 
-    const isImage =
-      validated.mimeType === 'image/jpeg' ||
-      validated.mimeType === 'image/png' ||
-      validated.mimeType === 'image/heic' ||
-      validated.mimeType === 'image/heif';
-
-    if (!isImage) {
+    if (!isImageMimeType(validated.mimeType)) {
       throw new BadRequestException(
-        `Only JPEG, PNG, and HEIC images are supported by this endpoint (detected: ${validated.mimeType}). For PDF documents, use the PDF upload endpoint.`,
+        `Only JPEG, PNG, and HEIC images are supported by this endpoint (detected: ${validated.mimeType}). For PDF and office documents, use the document upload endpoint.`,
       );
     }
 
