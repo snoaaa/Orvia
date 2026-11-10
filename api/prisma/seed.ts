@@ -114,6 +114,7 @@ export const ROLE_PERMISSIONS_MATRIX: Record<string, string[]> = {
     'audit:read',
   ],
   CONTENT_MANAGER: [
+    'groups:read',
     'spaces:read',
     'spaces:update',
     'documents:create',
