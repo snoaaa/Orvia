@@ -154,11 +154,18 @@ describe('DocumentsService', () => {
       },
       documentVersion: {
         findFirst: vi.fn(),
+        findMany: vi.fn(),
         create: vi.fn().mockImplementation(async ({ data }: any) => ({
           ...data,
           createdAt: new Date(),
           updatedAt: new Date(),
         })),
+      },
+      auditEvent: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      user: {
+        findMany: vi.fn().mockResolvedValue([]),
       },
       messageReference: {
         findFirst: vi.fn(),
@@ -1692,6 +1699,192 @@ describe('DocumentsService', () => {
       expect(mockStorageService.delete).toHaveBeenCalledWith(
         'spaces/space-1/docs/doc-1/v2.pdf',
       );
+    });
+  });
+
+  describe('listDocumentVersions (#107)', () => {
+    const existingDoc = {
+      id: 'doc-1',
+      spaceId: 'space-1',
+      title: 'Operating Systems',
+      author: 'Prof. Tanenbaum',
+      tags: 'os,systems',
+      deletedAt: null,
+      createdAt: new Date('2026-10-10T10:00:00Z'),
+      updatedAt: new Date('2026-10-10T10:00:00Z'),
+      space: { schoolId: 'school-1' },
+    };
+
+    const mockVersions = [
+      {
+        id: 'ver-2',
+        documentId: 'doc-1',
+        versionNo: 2,
+        storageKey: 'spaces/space-1/docs/doc-1/v2.pdf',
+        mimeType: 'application/pdf',
+        checksum: 'checksum-v2',
+        status: 'pending',
+        pageCount: 10,
+        createdAt: new Date('2026-10-20T10:00:00Z'),
+        updatedAt: new Date('2026-10-20T10:00:00Z'),
+      },
+      {
+        id: 'ver-1',
+        documentId: 'doc-1',
+        versionNo: 1,
+        storageKey: 'spaces/space-1/docs/doc-1/v1.pdf',
+        mimeType: 'application/pdf',
+        checksum: 'checksum-v1',
+        status: 'indexed',
+        pageCount: 10,
+        createdAt: new Date('2026-10-10T10:00:00Z'),
+        updatedAt: new Date('2026-10-10T10:00:00Z'),
+      },
+    ];
+
+    it('lists versions ordered newest first with size, uploader, checksum, status, and isCurrent', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.findMany.mockResolvedValueOnce(mockVersions);
+
+      mockStorageService.getMetadata
+        .mockResolvedValueOnce({ size: 2048 })
+        .mockResolvedValueOnce({ size: 1024 });
+
+      mockPrisma.auditEvent.findMany.mockResolvedValueOnce([
+        {
+          actorId: 'usr-admin',
+          details: { versionId: 'ver-2', versionNo: 2 },
+          createdAt: new Date('2026-10-20T10:00:00Z'),
+        },
+        {
+          actorId: 'usr-prof',
+          details: { versionId: 'ver-1', versionNo: 1 },
+          createdAt: new Date('2026-10-10T10:00:00Z'),
+        },
+      ]);
+
+      mockPrisma.user.findMany.mockResolvedValueOnce([
+        { id: 'usr-admin', name: 'Admin Alice', email: 'admin@school1.edu' },
+        { id: 'usr-prof', name: 'Prof Bob', email: 'prof@school1.edu' },
+      ]);
+
+      const result = await service.listDocumentVersions('doc-1', schoolAdmin);
+
+      expect(mockPrisma.documentVersion.findMany).toHaveBeenCalledWith({
+        where: { documentId: 'doc-1' },
+        orderBy: { versionNo: 'desc' },
+      });
+
+      expect(result).toHaveLength(2);
+
+      // Newest version first (v2)
+      expect(result[0].versionNumber).toBe(2);
+      expect(result[0].versionNo).toBe(2);
+      expect(result[0].isCurrent).toBe(true);
+      expect(result[0].size).toBe(2048);
+      expect(result[0].checksum).toBe('checksum-v2');
+      expect(result[0].status).toBe('pending');
+      expect(result[0].uploader).toEqual({
+        id: 'usr-admin',
+        name: 'Admin Alice',
+        email: 'admin@school1.edu',
+      });
+
+      // Older version (v1)
+      expect(result[1].versionNumber).toBe(1);
+      expect(result[1].versionNo).toBe(1);
+      expect(result[1].isCurrent).toBe(false);
+      expect(result[1].size).toBe(1024);
+      expect(result[1].checksum).toBe('checksum-v1');
+      expect(result[1].status).toBe('indexed');
+      expect(result[1].uploader).toEqual({
+        id: 'usr-prof',
+        name: 'Prof Bob',
+        email: 'prof@school1.edu',
+      });
+    });
+
+    it('returns empty array if document has no versions', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.listDocumentVersions('doc-1', schoolAdmin);
+
+      expect(result).toEqual([]);
+    });
+
+    it('throws NotFoundException if document does not exist', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.listDocumentVersions('nonexistent-doc', schoolAdmin)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws NotFoundException if document is soft-deleted', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...existingDoc,
+        deletedAt: new Date(),
+      });
+
+      await expect(service.listDocumentVersions('doc-1', schoolAdmin)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws ForbiddenException if mobile student user tries to list versions', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(service.listDocumentVersions('doc-1', studentUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws ForbiddenException if user lacks documents:update in the space school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      await expect(service.listDocumentVersions('doc-1', otherSchoolUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('allows platform admin to list versions for any document', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.findMany.mockResolvedValueOnce([mockVersions[0]]);
+      mockStorageService.getMetadata.mockResolvedValueOnce({ size: 5000 });
+      mockPrisma.auditEvent.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.listDocumentVersions('doc-1', platformAdmin);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].versionNo).toBe(2);
+      expect(result[0].isCurrent).toBe(true);
+      expect(result[0].size).toBe(5000);
+      expect(result[0].uploader).toBeNull();
+    });
+
+    it('handles missing storage metadata gracefully by defaulting size to 0', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.findMany.mockResolvedValueOnce([mockVersions[0]]);
+      mockStorageService.getMetadata.mockRejectedValueOnce(new Error('ENOENT file not found'));
+      mockPrisma.auditEvent.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.listDocumentVersions('doc-1', schoolAdmin);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].size).toBe(0);
+    });
+
+    it('handles versions without audit event uploader gracefully by setting uploader to null', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.documentVersion.findMany.mockResolvedValueOnce([mockVersions[0]]);
+      mockStorageService.getMetadata.mockResolvedValueOnce({ size: 100 });
+      mockPrisma.auditEvent.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.listDocumentVersions('doc-1', schoolAdmin);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].uploader).toBeNull();
     });
   });
 });

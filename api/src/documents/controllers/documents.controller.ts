@@ -18,7 +18,14 @@ import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiQuery, 
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
-import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
+import {
+  DocumentEntity,
+  DocumentVersionItemEntity,
+  PaginatedDocumentsEntity,
+  PaginatedSpacesEntity,
+  SpaceEntity,
+  ValidatedFileEntity,
+} from '../entities/index.js';
 import type { UploadedFile as IUploadedFile } from '../interfaces/index.js';
 import { DocumentsService } from '../services/documents.service.js';
 import { RangeNotSatisfiableException } from '../utils/http-range.util.js';
@@ -276,8 +283,10 @@ export class DocumentsController {
     @UploadedFile() file: IUploadedFile,
     @Body() dto: UploadDocumentDto,
     @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
   ): Promise<DocumentEntity> {
-    return this.documentsService.uploadPdf(spaceId, file, dto, actor);
+    const auditContext = auditContextFromRequest(req);
+    return this.documentsService.uploadPdf(spaceId, file, dto, actor, auditContext);
   }
 
   @Post('spaces/:spaceId/upload-image')
@@ -328,8 +337,10 @@ export class DocumentsController {
     @UploadedFile() file: IUploadedFile,
     @Body() dto: UploadDocumentDto,
     @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
   ): Promise<DocumentEntity> {
-    return this.documentsService.uploadImage(spaceId, file, dto, actor);
+    const auditContext = auditContextFromRequest(req);
+    return this.documentsService.uploadImage(spaceId, file, dto, actor, auditContext);
   }
 
   @Get(':id/download')
@@ -390,6 +401,34 @@ export class DocumentsController {
       disposition: 'inline',
       res,
     });
+  }
+
+  @Get(':id/versions')
+  @RequirePermission('documents:update')
+  @ApiOperation({
+    summary: 'List version history of a document (§4.5, #107)',
+    description:
+      'Returns the full version history of a document, ordered newest first. ' +
+      'Includes version number, creation date, uploader, file size in bytes, checksum, and status. ' +
+      'Accessible to platform admins, school admins, and staff with document-management rights in the space school. ' +
+      'Mobile users without document-management rights cannot call this endpoint.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Version history ordered newest first',
+    type: [DocumentVersionItemEntity],
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden: caller lacks document-management rights in this school or is a mobile user',
+  })
+  @ApiResponse({ status: 404, description: 'Document not found' })
+  async listDocumentVersions(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentVersionItemEntity[]> {
+    return this.documentsService.listDocumentVersions(id, actor);
   }
 
   @Get(':id/versions/:version/download')

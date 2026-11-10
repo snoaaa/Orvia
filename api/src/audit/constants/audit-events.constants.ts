@@ -25,6 +25,7 @@ export const AuditAction = {
   ACCESS_DENIED: 'access_denied',
   ACCOUNT_LOCKED: 'account_locked',
   // documents
+  DOCUMENT_UPLOADED: 'document_uploaded',
   DOCUMENT_UPDATED: 'document_updated',
   DOCUMENT_REPLACED: 'document_replaced',
 } as const;
@@ -42,6 +43,7 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.ROLE_ASSIGNED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.ACCESS_DENIED]: AuditCategory.SECURITY,
   [AuditAction.ACCOUNT_LOCKED]: AuditCategory.SECURITY,
+  [AuditAction.DOCUMENT_UPLOADED]: AuditCategory.DOCUMENTS,
   [AuditAction.DOCUMENT_UPDATED]: AuditCategory.DOCUMENTS,
   [AuditAction.DOCUMENT_REPLACED]: AuditCategory.DOCUMENTS,
 };

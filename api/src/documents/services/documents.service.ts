@@ -10,12 +10,21 @@ import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { buildDocumentStorageKey } from '../../storage/utils/storage-key.util.js';
 import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
-import { DocumentEntity, PaginatedDocumentsEntity, PaginatedSpacesEntity, SpaceEntity, ValidatedFileEntity } from '../entities/index.js';
+import {
+  DocumentEntity,
+  DocumentVersionItemEntity,
+  DocumentVersionUploaderEntity,
+  PaginatedDocumentsEntity,
+  PaginatedSpacesEntity,
+  SpaceEntity,
+  ValidatedFileEntity,
+} from '../entities/index.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
 import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
+import { AuditAction } from '../../audit/constants/audit-events.constants.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { type AuditRequestContext, SYSTEM_AUDIT_CONTEXT } from '../../audit/utils/audit-request-context.util.js';
 import { FileValidationService } from './file-validation.service.js';
@@ -447,6 +456,7 @@ export class DocumentsService {
     file: UploadedFile,
     dto: UploadDocumentDto,
     actor: AuthenticatedUser,
+    auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
     const space = await this.prisma.space.findUnique({
       where: { id: spaceId },
@@ -552,6 +562,23 @@ export class DocumentsService {
         mimeType: validated.mimeType,
       });
 
+      // 5. Record tamper-evident audit event (§4.5, #107)
+      await this.audit.record(
+        AuditEvents.documentUploaded(
+          {
+            documentId,
+            spaceId,
+            schoolId: space.schoolId,
+            versionNo,
+            versionId,
+            checksum: validated.checksum,
+            mimeType: validated.mimeType,
+            actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext ?? SYSTEM_AUDIT_CONTEXT,
+        ),
+      );
+
       return DocumentMapper.toEntity(createdDoc, createdVersion);
     } catch (err) {
       // Clean up written file from storage if DB transaction failed
@@ -576,6 +603,7 @@ export class DocumentsService {
     file: UploadedFile,
     dto: UploadDocumentDto,
     actor: AuthenticatedUser,
+    auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
     const space = await this.prisma.space.findUnique({
       where: { id: spaceId },
@@ -684,6 +712,23 @@ export class DocumentsService {
         mimeType: prepared.mimeType,
         targetStep: 'ocr',
       });
+
+      // 4. Record tamper-evident audit event (§4.5, #107)
+      await this.audit.record(
+        AuditEvents.documentUploaded(
+          {
+            documentId,
+            spaceId,
+            schoolId: space.schoolId,
+            versionNo,
+            versionId,
+            checksum: validated.checksum,
+            mimeType: prepared.mimeType,
+            actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext ?? SYSTEM_AUDIT_CONTEXT,
+        ),
+      );
 
       return DocumentMapper.toEntity(createdDoc, createdVersion);
     } catch (err) {
@@ -902,5 +947,132 @@ export class DocumentsService {
       filename,
       mimeType: version.mimeType,
     };
+  }
+
+  /**
+   * Lists the version history of a document (§4.5, #107):
+   * 1. Verifies document exists and caller has `documents:update` rights in the space school.
+   *    (Platform admins, school admins, and staff with document rights; mobile users cannot call this).
+   * 2. Returns versions ordered newest first (`versionNo: 'desc'`).
+   * 3. Enriches each version with size (from storage metadata) and uploader details (from audit trail).
+   */
+  async listDocumentVersions(
+    documentId: string,
+    actor: AuthenticatedUser,
+  ): Promise<DocumentVersionItemEntity[]> {
+    const doc = await this.findDocumentInScope(documentId, actor, 'documents:update');
+
+    const versions = await this.prisma.documentVersion.findMany({
+      where: { documentId: doc.id },
+      orderBy: { versionNo: 'desc' },
+    });
+
+    if (versions.length === 0) {
+      return [];
+    }
+
+    const latestVersionNo = versions[0].versionNo;
+
+    // Resolve file sizes from storage in parallel
+    const sizes = await Promise.all(
+      versions.map(async (v) => {
+        try {
+          const meta = await this.storageService.getMetadata(v.storageKey);
+          return meta.size ?? 0;
+        } catch {
+          return 0;
+        }
+      }),
+    );
+
+    // Look up uploaders from the append-only audit trail
+    const auditEvents = await this.prisma.auditEvent.findMany({
+      where: {
+        entityType: 'document',
+        entityId: doc.id,
+        action: {
+          in: [
+            AuditAction.DOCUMENT_UPLOADED,
+            AuditAction.DOCUMENT_REPLACED,
+            'document_uploaded',
+            'document_replaced',
+            'document_created',
+          ],
+        },
+      },
+      select: {
+        actorId: true,
+        details: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const versionUploaderMap = new Map<string, string>();
+    for (const event of auditEvents) {
+      if (!event.actorId) continue;
+      const details = event.details as Record<string, unknown> | null;
+      if (details) {
+        if (typeof details.versionId === 'string' && !versionUploaderMap.has(details.versionId)) {
+          versionUploaderMap.set(details.versionId, event.actorId);
+        }
+        if (typeof details.versionNo === 'number') {
+          const key = `no_${details.versionNo}`;
+          if (!versionUploaderMap.has(key)) {
+            versionUploaderMap.set(key, event.actorId);
+          }
+        }
+      }
+    }
+
+    const actorIds = Array.from(new Set(Array.from(versionUploaderMap.values())));
+    const userMap = new Map<string, DocumentVersionUploaderEntity>();
+
+    if (actorIds.length > 0) {
+      const users = await this.prisma.user.findMany({
+        where: { id: { in: actorIds } },
+        select: { id: true, name: true, email: true },
+      });
+      for (const u of users) {
+        userMap.set(
+          u.id,
+          new DocumentVersionUploaderEntity({
+            id: u.id,
+            name: u.name,
+            email: u.email,
+          }),
+        );
+      }
+    }
+
+    return versions.map((v, index) => {
+      const actorId =
+        versionUploaderMap.get(v.id) ?? versionUploaderMap.get(`no_${v.versionNo}`);
+      const uploader = actorId
+        ? (userMap.get(actorId) ??
+          new DocumentVersionUploaderEntity({
+            id: actorId,
+            name: 'System User',
+            email: '',
+          }))
+        : null;
+
+      return new DocumentVersionItemEntity({
+        id: v.id,
+        documentId: v.documentId,
+        versionNumber: v.versionNo,
+        versionNo: v.versionNo,
+        date: v.createdAt,
+        createdAt: v.createdAt,
+        uploader,
+        size: sizes[index],
+        checksum: v.checksum,
+        status: v.status,
+        mimeType: v.mimeType,
+        storageKey: v.storageKey,
+        pageCount: v.pageCount,
+        isCurrent: v.versionNo === latestVersionNo,
+      });
+    });
   }
 }

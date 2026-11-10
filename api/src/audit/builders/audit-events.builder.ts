@@ -208,6 +208,40 @@ export const AuditEvents = {
     };
   },
 
+  documentUploaded(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      versionNo: number;
+      versionId: string;
+      checksum: string;
+      mimeType: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_UPLOADED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        versionNo: p.versionNo,
+        versionId: p.versionId,
+        checksum: p.checksum,
+        mimeType: p.mimeType,
+      },
+      context,
+    };
+  },
+
   documentUpdated(
     p: {
       documentId: string;
