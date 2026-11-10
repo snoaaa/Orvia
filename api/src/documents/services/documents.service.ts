@@ -180,6 +180,155 @@ export class DocumentsService {
   }
 
   /**
+   * Replaces an existing document with a new uploaded version (§4.1, §4.3, §5.2, #106):
+   * 1. Verifies document exists, is not soft-deleted, and caller has `documents:update` rights in the space's school.
+   * 2. Runs pre-ingestion validation (magic bytes, size, malware check, space duplicate check with allowDuplicates=true so content can update).
+   * 3. Converts HEIC to JPEG if needed via `ImageConversionService`.
+   * 4. Queries latest `versionNo` and increments by 1 (`v2`, `v3`, ...).
+   * 5. Atomically saves file to storage via `StorageService`.
+   * 6. Atomically creates new `DocumentVersion` (status: 'pending') and `ProcessingJob` in DB, updating document `updatedAt`.
+   * 7. Enqueues background job to `ProcessingQueueService` for format-specific ingestion / chunking.
+   * 8. Records immutable audit event `document_replaced`.
+   * 9. Returns `DocumentEntity` with `currentVersion` pointing to the new version.
+   * 10. Cleans up storage if DB transaction fails.
+   */
+  async replaceDocumentVersion(
+    documentId: string,
+    file: UploadedFile,
+    actor: AuthenticatedUser,
+    auditContext?: AuditRequestContext,
+  ): Promise<DocumentEntity> {
+    const doc = await this.findDocumentInScope(documentId, actor, 'documents:update');
+
+    if (!file || !file.buffer || file.buffer.length === 0) {
+      throw new BadRequestException('A replacement file must be uploaded under the "file" field');
+    }
+
+    // Pre-ingestion validation (magic-bytes, size limit, antivirus scanning)
+    // Note: allowDuplicates=true allows re-uploading an amended file without collision false-positives
+    const validated = await this.fileValidationService.validateFile({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      declaredMimeType: file.mimetype,
+      spaceId: doc.spaceId,
+      allowDuplicates: true,
+    });
+
+    // Prepare buffer & extension (e.g. converts HEIC/HEIF to JPEG for OCR)
+    const isImage = isImageMimeType(validated.mimeType);
+    let finalBuffer = file.buffer;
+    let finalMimeType = validated.mimeType;
+    let finalExtension = validated.extension;
+
+    if (validated.mimeType === 'image/heic' || validated.mimeType === 'image/heif') {
+      const prepared = await this.imageConversionService.prepareImageForOcr(
+        file.buffer,
+        validated.mimeType,
+      );
+      finalBuffer = prepared.buffer;
+      finalMimeType = prepared.mimeType;
+      finalExtension = prepared.extension;
+    }
+
+    // Determine the next version number
+    const latestVersion = await this.prisma.documentVersion.findFirst({
+      where: { documentId },
+      orderBy: { versionNo: 'desc' },
+      select: { versionNo: true },
+    });
+    const nextVersionNo = (latestVersion?.versionNo ?? 0) + 1;
+
+    const versionId = randomUUID();
+    const jobId = randomUUID();
+    const storageKey = buildDocumentStorageKey({
+      spaceId: doc.spaceId,
+      documentId,
+      version: nextVersionNo,
+      extension: finalExtension,
+    });
+
+    // 1. Save file to storage
+    await this.storageService.save(storageKey, finalBuffer);
+
+    // 2. Determine initial processing step
+    const step = determineInitialProcessingStep(finalMimeType);
+
+    // 3. Perform DB transaction
+    try {
+      const { updatedDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
+        const ver = await tx.documentVersion.create({
+          data: {
+            id: versionId,
+            documentId,
+            versionNo: nextVersionNo,
+            storageKey,
+            mimeType: finalMimeType,
+            checksum: validated.checksum,
+            status: 'pending',
+            pageCount: isImage ? 1 : 0,
+          },
+        });
+
+        await tx.processingJob.create({
+          data: {
+            id: jobId,
+            versionId,
+            step,
+            status: 'pending',
+            durationMs: 0,
+            ocrConfidence: 1.0,
+            pageCount: isImage ? 1 : 0,
+            chunkCount: 0,
+          },
+        });
+
+        const docRecord = await tx.document.update({
+          where: { id: documentId },
+          data: {
+            updatedAt: new Date(),
+          },
+        });
+
+        return { updatedDoc: docRecord, createdVersion: ver };
+      });
+
+      // 4. Dispatch background processing job
+      this.processingQueueService.enqueueJob({
+        jobId,
+        versionId,
+        documentId,
+        spaceId: doc.spaceId,
+        storageKey,
+        mimeType: finalMimeType,
+        targetStep: step === 'ocr' ? 'ocr' : undefined,
+      });
+
+      // 5. Write audit entry
+      await this.audit.record(
+        AuditEvents.documentReplaced(
+          {
+            documentId,
+            spaceId: doc.spaceId,
+            schoolId: doc.space.schoolId,
+            versionNo: nextVersionNo,
+            versionId,
+            checksum: validated.checksum,
+            mimeType: finalMimeType,
+            actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext ?? SYSTEM_AUDIT_CONTEXT,
+        ),
+      );
+
+      return DocumentMapper.toEntity(updatedDoc, createdVersion);
+    } catch (err) {
+      // Clean up written file from storage if DB transaction failed
+      await this.storageService.delete(storageKey).catch(() => {});
+      throw err;
+    }
+  }
+
+  /**
    * Spaces of the caller's schools, paginated with the shared `page`/`limit` contract and ordered
    * alphabetically (stable id tie-breaker). The table is small, so no extra index is needed.
    */

@@ -44,6 +44,7 @@ describe('DocumentsController', () => {
       uploadPdf: vi.fn(),
       uploadImage: vi.fn(),
       getDocumentVersionStream: vi.fn(),
+      replaceDocumentVersion: vi.fn(),
     };
 
     controller = new DocumentsController(mockDocumentsService as unknown as DocumentsService);
@@ -221,6 +222,70 @@ describe('DocumentsController', () => {
         mockActor,
       );
       expect(result).toBe(expectedDoc);
+    });
+  });
+
+  describe('replaceDocument and createDocumentVersion', () => {
+    it('replaceDocument delegates to documentsService.replaceDocumentVersion', async () => {
+      const mockFile = {
+        buffer: Buffer.from('%PDF-1.4\nreplacement content'),
+        originalname: 'replacement.pdf',
+        mimetype: 'application/pdf',
+      } as UploadedFile;
+
+      const expectedDoc = {
+        id: 'doc-1',
+        title: 'Document',
+        currentVersion: { versionNo: 2, status: 'pending' },
+      } as any;
+
+      mockDocumentsService.replaceDocumentVersion.mockResolvedValueOnce(expectedDoc);
+
+      const mockReq = {
+        ip: '127.0.0.1',
+        header: vi.fn().mockReturnValue(undefined),
+      } as any;
+
+      const res = await controller.replaceDocument('doc-1', mockFile, mockReq, mockActor);
+
+      expect(mockDocumentsService.replaceDocumentVersion).toHaveBeenCalledWith(
+        'doc-1',
+        mockFile,
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
+      expect(res).toBe(expectedDoc);
+    });
+
+    it('createDocumentVersion is an alias and delegates to replaceDocumentVersion', async () => {
+      const mockFile = {
+        buffer: Buffer.from('%PDF-1.4\ncontent'),
+        originalname: 'v2.pdf',
+        mimetype: 'application/pdf',
+      } as UploadedFile;
+
+      const expectedDoc = {
+        id: 'doc-1',
+        title: 'Document',
+        currentVersion: { versionNo: 2, status: 'pending' },
+      } as any;
+
+      mockDocumentsService.replaceDocumentVersion.mockResolvedValueOnce(expectedDoc);
+
+      const mockReq = {
+        ip: '127.0.0.1',
+        header: vi.fn().mockReturnValue(undefined),
+      } as any;
+
+      const res = await controller.createDocumentVersion('doc-1', mockFile, mockReq, mockActor);
+
+      expect(mockDocumentsService.replaceDocumentVersion).toHaveBeenCalledWith(
+        'doc-1',
+        mockFile,
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
+      expect(res).toBe(expectedDoc);
     });
   });
 

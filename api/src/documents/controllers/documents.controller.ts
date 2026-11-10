@@ -117,6 +117,78 @@ export class DocumentsController {
     return this.documentsService.updateDocument(id, dto, actor, auditContext);
   }
 
+  @Post(':id/replace')
+  @RequirePermission('documents:update')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({
+    summary: 'Replace document with a new version (§4.1, §4.3, §5.2, #106)',
+    description:
+      'Uploads a replacement file for an existing document, creating a new incremented version (v2, v3, ...) ' +
+      'with status pending and enqueues format-specific processing. Keeps previous versions intact for citations.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Replacement document or image file',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Document replaced with a new version', type: DocumentEntity })
+  @ApiResponse({ status: 400, description: 'Missing file, unsupported format, or infected payload' })
+  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks documents:update in this school' })
+  @ApiResponse({ status: 404, description: 'Document not found' })
+  @ApiResponse({ status: 413, description: 'File exceeds maximum size' })
+  async replaceDocument(
+    @Param('id') id: string,
+    @UploadedFile() file: IUploadedFile,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentEntity> {
+    const auditContext = auditContextFromRequest(req);
+    return this.documentsService.replaceDocumentVersion(id, file, actor, auditContext);
+  }
+
+  @Post(':id/versions')
+  @RequirePermission('documents:update')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({
+    summary: 'Upload a new version for a document (REST alias for replace, #106)',
+    description: 'Alias for POST /documents/:id/replace.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'New document version file',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 201, description: 'New version created', type: DocumentEntity })
+  async createDocumentVersion(
+    @Param('id') id: string,
+    @UploadedFile() file: IUploadedFile,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentEntity> {
+    const auditContext = auditContextFromRequest(req);
+    return this.documentsService.replaceDocumentVersion(id, file, actor, auditContext);
+  }
+
   @Post('spaces/:spaceId/validate-file')
   @RequirePermission('documents:create')
   @UseInterceptors(FileInterceptor('file'))
