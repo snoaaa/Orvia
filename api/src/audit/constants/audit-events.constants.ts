@@ -21,6 +21,7 @@ export const AuditAction = {
   PASSWORD_SETUP: 'password_setup',
   ROLE_ASSIGNED: 'role_assigned',
   ASSIGNMENT_UPDATED: 'assignment_updated',
+  ASSIGNMENT_REMOVED: 'assignment_removed',
   // security
   ACCESS_DENIED: 'access_denied',
   ACCOUNT_LOCKED: 'account_locked',
@@ -38,6 +39,7 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.PASSWORD_SETUP]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.ROLE_ASSIGNED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.ASSIGNMENT_UPDATED]: AuditCategory.IDENTITY_ACCESS,
+  [AuditAction.ASSIGNMENT_REMOVED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.ACCESS_DENIED]: AuditCategory.SECURITY,
   [AuditAction.ACCOUNT_LOCKED]: AuditCategory.SECURITY,
 };

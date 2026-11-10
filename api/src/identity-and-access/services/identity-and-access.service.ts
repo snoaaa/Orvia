@@ -28,6 +28,7 @@ import {
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
 import { DomainValidationService } from './domain-validation.service.js';
+import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 
 /** Role given to invited users when none is specified. */
 const DEFAULT_INVITE_ROLE = 'STUDENT';
@@ -86,11 +87,12 @@ export class IdentityAndAccessService {
 
     // Conditions one assignment must meet; also confined to the admin's schools when scoped.
     const assignment: Prisma.UserAssignmentWhereInput = {
+      ...ACTIVE_ASSIGNMENT,
       ...(query.schoolId ? { schoolId: query.schoolId } : scope ? { schoolId: scope } : {}),
       ...(query.role && { role: { name: query.role } }),
     };
     const filters: Prisma.UserWhereInput[] = [];
-    if (scope) filters.push({ assignments: { some: { schoolId: scope } } });
+    if (scope) filters.push({ assignments: { some: { ...ACTIVE_ASSIGNMENT, schoolId: scope } } });
     if (query.status) filters.push({ status: query.status });
     if (query.search) {
       // MySQL's default collation (utf8mb4_unicode_ci) makes `contains` case-insensitive.
@@ -123,7 +125,7 @@ export class IdentityAndAccessService {
         take: limit,
         include: {
           assignments: {
-            where: scope ? { schoolId: scope } : undefined,
+            where: { ...ACTIVE_ASSIGNMENT, ...(scope && { schoolId: scope }) },
             orderBy: { createdAt: 'asc' },
             include: {
               school: { select: { name: true } },
@@ -170,7 +172,7 @@ export class IdentityAndAccessService {
       where: { id },
       include: {
         assignments: {
-          where: scope ? { schoolId: scope } : undefined,
+          where: { ...ACTIVE_ASSIGNMENT, ...(scope && { schoolId: scope }) },
           orderBy: { createdAt: 'asc' },
           include: {
             school: { select: { name: true } },
@@ -224,7 +226,7 @@ export class IdentityAndAccessService {
   private async findUserInScope(id: string, actor: AuthenticatedUser, permission: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      include: { assignments: { select: { schoolId: true } } },
+      include: { assignments: { where: ACTIVE_ASSIGNMENT, select: { schoolId: true } } },
     });
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
@@ -529,7 +531,7 @@ export class IdentityAndAccessService {
 
     const target = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { assignments: { include: { role: true } } },
+      include: { assignments: { where: ACTIVE_ASSIGNMENT, include: { role: true } } },
     });
     if (!target) {
       throw new NotFoundException(`User with ID ${userId} not found`);
@@ -884,7 +886,7 @@ export class IdentityAndAccessService {
           include: { permission: true },
         },
         _count: {
-          select: { assignments: true },
+          select: { assignments: { where: ACTIVE_ASSIGNMENT } },
         },
       },
     });
@@ -911,7 +913,7 @@ export class IdentityAndAccessService {
           include: { permission: true },
         },
         _count: {
-          select: { assignments: true },
+          select: { assignments: { where: ACTIVE_ASSIGNMENT } },
         },
       },
     });
@@ -1037,7 +1039,7 @@ export class IdentityAndAccessService {
     }
 
     const assignedCount = await this.prisma.userAssignment.count({
-      where: { roleId: role.id },
+      where: { roleId: role.id, ...ACTIVE_ASSIGNMENT },
     });
     if (assignedCount > 0) {
       throw new BadRequestException(
@@ -1120,7 +1122,8 @@ export class IdentityAndAccessService {
       FROM permissions p
       JOIN role_permissions rp ON rp.permission_id = p.id
       JOIN user_assignments ua ON ua.role_id = rp.role_id
-      ${schoolIds ? Prisma.sql`WHERE ua.school_id IN (${Prisma.join(schoolIds)})` : Prisma.empty}
+      WHERE ua.deleted_at IS NULL
+      ${schoolIds ? Prisma.sql`AND ua.school_id IN (${Prisma.join(schoolIds)})` : Prisma.empty}
       GROUP BY p.code
     `;
     return new Map(rows.map((row) => [row.code, Number(row.holders)]));
@@ -1158,6 +1161,7 @@ export class IdentityAndAccessService {
       JOIN role_permissions rp ON rp.role_id = r.id
       JOIN permissions p ON p.id = rp.permission_id
       WHERE p.code = ${code}
+        AND ua.deleted_at IS NULL
       ${schoolIds ? Prisma.sql`AND ua.school_id IN (${Prisma.join(schoolIds)})` : Prisma.empty}
       GROUP BY ua.user_id, ua.school_id, u.email, u.full_name, u.status, s.name
       ORDER BY u.email ASC

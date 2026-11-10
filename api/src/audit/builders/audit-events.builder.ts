@@ -214,6 +214,35 @@ export const AuditEvents = {
     };
   },
 
+  /** An assignment was removed (DELETE /assignments/:id, #49, soft delete): the user loses that role in the school. */
+  assignmentRemoved(
+    p: {
+      assignmentId: string;
+      userId: string;
+      email: string;
+      schoolId: string;
+      role: string;
+      groupId: string | null;
+      removedBy: AuditActor;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ASSIGNMENT_REMOVED,
+      actor: p.removedBy,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        assignmentId: p.assignmentId,
+        email: p.email.trim().toLowerCase(),
+        schoolId: p.schoolId,
+        role: p.role,
+        groupId: p.groupId,
+      },
+      context,
+    };
+  },
+
   accessDenied(
     p: { actor?: AuditActor | null; method: string; path: string; requiredPermission?: string; reason?: string },
     context: AuditRequestContext,

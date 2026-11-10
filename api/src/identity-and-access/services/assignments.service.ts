@@ -1,8 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
+import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 import { ASSIGN_ROLE_PERMISSION, assertCanGrantRole, grantableRoleLevel } from '../../auth/utils/role-grant.util.js';
 import { highestRoleLevel, roleScopeLevel } from '../../auth/utils/role-level.util.js';
 import { assertSchoolAccess } from '../../auth/utils/school-scope.util.js';
@@ -10,10 +12,23 @@ import { PrismaService } from '../../database/prisma.service.js';
 import type { CreateAssignmentDto, UpdateAssignmentDto } from '../dto/index.js';
 import { AssignableRoleEntity, AssignmentEntity } from '../entities/index.js';
 
+/** The role scopes of a user's active assignments, for `assertCanActOnUser`. */
+const ACTIVE_ROLE_SCOPES = {
+  where: ACTIVE_ASSIGNMENT,
+  select: { role: { select: { scope: true } } },
+} as const satisfies Prisma.User$assignmentsArgs;
+
+/** A school admin role (#49): school-scoped and able to manage the school's assignments. */
+const SCHOOL_ADMIN_ROLE = {
+  scope: 'school',
+  rolePermissions: { some: { permission: { code: ASSIGN_ROLE_PERMISSION } } },
+} as const satisfies Prisma.RoleWhereInput;
+
 /**
  * Assignments (Sections 4.5 and 4.7): a user's role in a school, optionally in one of its groups.
  * A user has at most one assignment per school. Its role and group change through PATCH /assignments/:id
- * (or the role alone through PATCH /identity/users/:id/role); its school never changes.
+ * (or the role alone through PATCH /identity/users/:id/role); its school never changes. DELETE /assignments/:id
+ * soft-deletes it (`deleted_at`): every reader must use ACTIVE_ASSIGNMENT.
  */
 @Injectable()
 export class AssignmentsService {
@@ -42,7 +57,7 @@ export class AssignmentsService {
     const [target, school, role] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: dto.userId },
-        select: { id: true, email: true, assignments: { select: { role: { select: { scope: true } } } } },
+        select: { id: true, email: true, assignments: ACTIVE_ROLE_SCOPES },
       }),
       this.prisma.school.findUnique({ where: { id: dto.schoolId }, select: { id: true, name: true, status: true } }),
       this.prisma.role.findUnique({ where: { name: dto.role }, select: { id: true, name: true, scope: true } }),
@@ -67,8 +82,9 @@ export class AssignmentsService {
 
     const created = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
+      // A removed assignment (#49) does not block a new one in the same school.
       const existing = await tx.userAssignment.findFirst({
-        where: { userId: target.id, schoolId: school.id },
+        where: { userId: target.id, schoolId: school.id, ...ACTIVE_ASSIGNMENT },
         select: { role: { select: { name: true } } },
       });
       if (existing) {
@@ -141,16 +157,15 @@ export class AssignmentsService {
       throw new BadRequestException('Nothing to update: give a role and/or a groupId');
     }
 
-    const assignment = await this.prisma.userAssignment.findUnique({
-      where: { id },
+    // A removed assignment (#49) is not found: 404.
+    const assignment = await this.prisma.userAssignment.findFirst({
+      where: { id, ...ACTIVE_ASSIGNMENT },
       select: {
         id: true,
         groupId: true,
         createdAt: true,
         updatedAt: true,
-        user: {
-          select: { id: true, email: true, assignments: { select: { role: { select: { scope: true } } } } },
-        },
+        user: { select: { id: true, email: true, assignments: ACTIVE_ROLE_SCOPES } },
         school: { select: { id: true, name: true, status: true } },
         role: { select: { id: true, name: true, scope: true } },
         group: { select: { id: true, name: true } },
@@ -202,9 +217,10 @@ export class AssignmentsService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`;
-      // Re-read under the lock, so a concurrent PATCH cannot leave a stale group membership behind.
-      const current = await tx.userAssignment.findUnique({
-        where: { id: assignment.id },
+      // Re-read under the lock, so a concurrent PATCH cannot leave a stale group membership behind,
+      // and a concurrent DELETE (#49) makes this one 404.
+      const current = await tx.userAssignment.findFirst({
+        where: { id: assignment.id, ...ACTIVE_ASSIGNMENT },
         select: { groupId: true, updatedAt: true, role: { select: { id: true, name: true } } },
       });
       if (!current) {
@@ -253,6 +269,120 @@ export class AssignmentsService {
     }
 
     return toEntity(group, result.updatedAt);
+  }
+
+  /**
+   * DELETE /assignments/:id (#49): soft delete. Sets `deleted_at` (and `updated_at` moves with it, so the next mobile
+   * sync sees the removal, Section 4.7); every reader filters on ACTIVE_ASSIGNMENT, so the access is gone on the
+   * user's very next request.
+   *
+   *  - 404: unknown or already removed assignment (a repeat is not re-run nor audited twice).
+   *  - 403: another school, a role above the admin's own level, or a user who outranks the admin.
+   *  - 400: deactivated school (same as PATCH).
+   *  - 409: the last school admin of the school (see `assertNotLastSchoolAdmin`).
+   *  - The user also leaves the members of every group of that school: the assignment was the only source of those
+   *    memberships (#48).
+   */
+  async removeAssignment(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<void> {
+    const assignment = await this.prisma.userAssignment.findFirst({
+      where: { id, ...ACTIVE_ASSIGNMENT },
+      select: {
+        id: true,
+        user: { select: { id: true, email: true, assignments: ACTIVE_ROLE_SCOPES } },
+        school: { select: { id: true, status: true } },
+        role: { select: { name: true, scope: true } },
+      },
+    });
+    if (!assignment) {
+      throw new NotFoundException(`Assignment with ID ${id} not found`);
+    }
+    const { user, school } = assignment;
+
+    assertSchoolAccess(actor, ASSIGN_ROLE_PERMISSION, school.id);
+    if (school.status === 'deactivated') {
+      throw new BadRequestException('Cannot remove an assignment in a deactivated school');
+    }
+    // Removing a role takes the same right as granting it: a school admin cannot remove a platform role.
+    assertCanGrantRole(actor, assignment.role, school.id);
+    this.assertCanActOnUser(actor, user.assignments, school.id);
+
+    const removed = await this.prisma.$transaction(async (tx) => {
+      // School row first: every removal in this school waits here, so two removals cannot both see the other
+      // admin as still there. Then the user row, the lock POST and PATCH take (always school → user, no deadlock).
+      await tx.$queryRaw`SELECT id FROM schools WHERE id = ${school.id} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`;
+      // Re-read under the locks: a concurrent DELETE makes this one 404, a concurrent PATCH may have changed it.
+      const current = await tx.userAssignment.findFirst({
+        where: { id, ...ACTIVE_ASSIGNMENT },
+        select: { roleId: true, groupId: true, role: { select: { name: true } }, user: { select: { status: true } } },
+      });
+      if (!current) {
+        throw new NotFoundException(`Assignment with ID ${id} not found`);
+      }
+      await this.assertNotLastSchoolAdmin(tx, { id, schoolId: school.id, roleId: current.roleId, userStatus: current.user.status });
+
+      // Same instant for both: a sync reading `updated_at > lastSync` gets the row with its `deleted_at`.
+      const now = new Date();
+      await tx.userAssignment.update({ where: { id }, data: { deletedAt: now, updatedAt: now } });
+      const stillInSchool = await tx.userAssignment.count({
+        where: { userId: user.id, schoolId: school.id, ...ACTIVE_ASSIGNMENT },
+      });
+      if (stillInSchool === 0) {
+        await tx.groupMember.deleteMany({ where: { userId: user.id, group: { schoolId: school.id } } });
+      }
+      return current;
+    });
+
+    await this.audit.record(
+      AuditEvents.assignmentRemoved(
+        {
+          assignmentId: id,
+          userId: user.id,
+          email: user.email,
+          schoolId: school.id,
+          role: removed.role.name,
+          groupId: removed.groupId,
+          removedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+  }
+
+  /**
+   * 409 when removing this assignment would leave its school without a school admin (#49).
+   *
+   * A "school admin" is an active assignment in that school whose role is school-scoped and grants
+   * users:assign_role (data-driven like admin-role.util.ts, so a custom admin role counts too; today SCHOOL_ADMIN).
+   * Platform roles do not count: they are not the school's own admin. Only admins whose user is not SUSPENDED count
+   * (an INVITED one can still activate). Removing a suspended admin is always allowed: the school does not lose a
+   * working admin. Run under the school row lock taken by the caller.
+   */
+  private async assertNotLastSchoolAdmin(
+    tx: Prisma.TransactionClient,
+    removed: { id: string; schoolId: string; roleId: string; userStatus: string },
+  ): Promise<void> {
+    if (removed.userStatus === 'SUSPENDED') return;
+    const isSchoolAdminRole = (await tx.role.count({ where: { id: removed.roleId, ...SCHOOL_ADMIN_ROLE } })) > 0;
+    if (!isSchoolAdminRole) return;
+    const otherAdmins = await tx.userAssignment.count({
+      where: {
+        ...ACTIVE_ASSIGNMENT,
+        schoolId: removed.schoolId,
+        id: { not: removed.id },
+        role: SCHOOL_ADMIN_ROLE,
+        user: { status: { not: 'SUSPENDED' } },
+      },
+    });
+    if (otherAdmins === 0) {
+      throw new ConflictException(
+        'Cannot remove the last school administrator of this school: assign another one first',
+      );
+    }
   }
 
   /**

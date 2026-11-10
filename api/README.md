@@ -373,7 +373,7 @@ Both fields are optional, but at least one is required (empty body → 400). **T
 - Same checks as `POST /assignments`: another school, a role above the admin's level, or a user who already holds
   a higher-level role → 403; unknown role, deactivated school, group of another school, or a group on a platform
   role → 400 (also when only the role becomes a platform role and the current group is kept: send
-  `groupId: null` with it); unknown assignment or group → 404.
+  `groupId: null` with it); unknown or removed assignment, or unknown group → 404.
 - **Group members**: a new group removes the user from the old group's members and adds them to the new one;
   `groupId: null` only removes the old membership. The assignment is the only source of a membership in its school
   (a group belongs to one school, a user has one assignment per school).
@@ -386,8 +386,38 @@ Both fields are optional, but at least one is required (empty body → 400). **T
 Answer 200 with the assignment (same shape as `POST`). Audited as `identity_access/assignment_updated`.
 
 `PATCH /identity/users/{id}/role` also changes a role, keyed by user and `schoolId`: it changes the role only
-(and creates the assignment if missing), never touches the group or `group_members`, and does not yet check the
-target user's level or a deactivated school. Prefer `PATCH /assignments/{id}` to edit an existing assignment.
+(and creates the assignment if missing, also when the previous one was removed), never touches the group or
+`group_members`, and does not yet check the target user's level or a deactivated school. Prefer
+`PATCH /assignments/{id}` to edit an existing assignment.
+
+### Remove an assignment: `DELETE /assignments/{id}` (#49)
+
+Ends the link between the user and the school, group and role of the assignment. Answer **204** (no body).
+
+- **Soft delete**: the row is kept with `deleted_at` set, and `updated_at` set to the same instant (migration
+  `8_user_assignments_soft_delete`). A future mobile sync reading `updated_at > lastSync` *without* the active filter
+  gets the row with its `deletedAt` and drops that access on the device (Section 4.7). Nothing is written to
+  `sync_changes` yet.
+- **Every reader ignores removed rows** through `ACTIVE_ASSIGNMENT` (`src/auth/utils/active-assignment.util.ts`,
+  `{ deletedAt: null }`; raw SQL uses `deleted_at IS NULL`): the per-request user loading (`AuthUserService`, so
+  the guards and school scoping), admin/Google login, refresh, password setup, user list/detail/edit, sessions admin,
+  the assignment routes, `PATCH /identity/users/{id}/role`, role counts and deletion, the permission overview, the
+  dashboard overview, the seed and the dev fixtures. The access is therefore gone on the user's **very next
+  request**, with the same token. Any new query on `user_assignments` must use it.
+- Same checks as `PATCH`: another school, a role above the admin's level (a school admin cannot remove a platform
+  role), or a user who already holds a higher-level role → 403; deactivated school → 400; unknown or **already
+  removed** assignment → 404 (a repeat is not audited again); invalid UUID → 400.
+- **Last school admin → 409**. A school admin is an active assignment in that school whose role is
+  school-scoped and grants `users:assign_role` (today `SCHOOL_ADMIN`; a custom admin role counts too; platform roles
+  do not). Only admins whose user is not `SUSPENDED` count (an `INVITED` one can still activate). Removing a
+  suspended admin is always allowed, since it takes no working admin away.
+- **Concurrency**: the school row, then the user row, is locked (`SELECT … FOR UPDATE`) and the assignment
+  re-read under the locks, so two simultaneous removals of the last two admins give one 204 and one 409.
+- **Group members**: the user leaves the members of every group of that school (the assignment was their only
+  source, see `PATCH`), unless another active assignment in that school remains.
+- A removed assignment does not block a new `POST /assignments` in the same school: it creates a new row.
+
+Audited as `identity_access/assignment_removed`.
 
 ### Assignable roles: `GET /assignments/assignable-roles` (#47)
 
@@ -464,6 +494,7 @@ roles get 403. The older `POST /identity/roles`, used by the web role editor, ru
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
+| `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `security` | `access_denied` | Any HTTP 403 | the user if authenticated | `route` (`METHOD /path`) | `reason`, `requiredPermission` |
 | `security` | `account_locked` | An account is locked (e.g. too many failed logins) | anonymous | `user` | `email`, `reason`, `failedAttempts`, `lockedUntil` |
 

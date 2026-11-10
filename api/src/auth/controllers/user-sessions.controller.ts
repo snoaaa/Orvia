@@ -8,6 +8,7 @@ import { ActiveSessionEntity } from '../entities/index.js';
 import { SessionService } from '../services/session.service.js';
 import type { AuthenticatedUser } from '../types/authenticated-user.js';
 import { assertSchoolAccess } from '../utils/school-scope.util.js';
+import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
 
 /** Admin view of another user's sessions, scoped to the admin's schools (#12). */
 @ApiTags('Identity and Access')
@@ -81,7 +82,7 @@ export class UserSessionsController {
   private async assertUserInScope(userId: string, actor: AuthenticatedUser, permission: string): Promise<void> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { assignments: { select: { schoolId: true } } },
+      select: { assignments: { where: ACTIVE_ASSIGNMENT, select: { schoolId: true } } },
     });
     if (!user) throw new NotFoundException(`User with ID ${userId} not found`);
     assertSchoolAccess(actor, permission, user.assignments.map((a) => a.schoolId));

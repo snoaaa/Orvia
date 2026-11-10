@@ -8,6 +8,7 @@ import type { AuditRequestContext } from '../../audit/utils/audit-request-contex
 import type { AuthConfig } from '../../config/index.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { TokenService } from './token.service.js';
+import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
 
 export interface TokenPair {
   accessToken: string;
@@ -84,6 +85,7 @@ export class SessionService {
             id: true,
             status: true,
             assignments: {
+              where: ACTIVE_ASSIGNMENT,
               include: {
                 role: { select: { scope: true } },
                 school: { select: { id: true, status: true } },
