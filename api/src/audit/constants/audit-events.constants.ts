@@ -26,6 +26,7 @@ export const AuditAction = {
   ACCOUNT_LOCKED: 'account_locked',
   // documents
   DOCUMENT_UPDATED: 'document_updated',
+  DOCUMENT_REPLACED: 'document_replaced',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
@@ -42,6 +43,7 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.ACCESS_DENIED]: AuditCategory.SECURITY,
   [AuditAction.ACCOUNT_LOCKED]: AuditCategory.SECURITY,
   [AuditAction.DOCUMENT_UPDATED]: AuditCategory.DOCUMENTS,
+  [AuditAction.DOCUMENT_REPLACED]: AuditCategory.DOCUMENTS,
 };
 
 /** Primary key of the single audit_chain_head row. */

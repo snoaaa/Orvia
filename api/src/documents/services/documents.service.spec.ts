@@ -1441,4 +1441,257 @@ describe('DocumentsService', () => {
       expect(result.headers['Content-Disposition']).toMatch(/^inline;/);
     });
   });
+
+  describe('replaceDocumentVersion', () => {
+    const existingDoc = {
+      id: 'doc-1',
+      spaceId: 'space-1',
+      title: 'Operating Systems Syllabus',
+      author: 'Prof. Tanenbaum',
+      tags: 'os,minix',
+      createdAt: new Date('2026-09-01T08:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T08:00:00.000Z'),
+      deletedAt: null,
+      space: { schoolId: 'school-1' },
+    };
+
+    const mockPdfFile = {
+      buffer: Buffer.from('%PDF-1.4\nNew revision content for OS Syllabus'),
+      originalname: 'OS-Syllabus-2026-Rev2.pdf',
+      mimetype: 'application/pdf',
+      size: 50,
+    } as UploadedFile;
+
+    it('throws NotFoundException if target document does not exist', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+
+      await expect(
+        service.replaceDocumentVersion('doc-missing', mockPdfFile, schoolAdmin),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException if target document is soft-deleted', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...existingDoc,
+        deletedAt: new Date(),
+      });
+
+      await expect(
+        service.replaceDocumentVersion('doc-1', mockPdfFile, schoolAdmin),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException if user lacks documents:update permission in space school', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        ...existingDoc,
+        space: { schoolId: 'school-2' },
+      });
+
+      await expect(
+        service.replaceDocumentVersion('doc-1', mockPdfFile, schoolAdmin),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws BadRequestException if replacement file is missing or empty buffer', async () => {
+      mockPrisma.document.findUnique.mockResolvedValue(existingDoc);
+
+      await expect(
+        service.replaceDocumentVersion('doc-1', null as unknown as UploadedFile, schoolAdmin),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.replaceDocumentVersion('doc-1', { buffer: Buffer.alloc(0) } as UploadedFile, schoolAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('successfully replaces document with incremented version (v1 -> v2) for PDF, saves to storage, and queues ingestion job', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'v2-pdf-checksum-hex',
+        mimeType: 'application/pdf',
+        extension: 'pdf',
+        size: mockPdfFile.buffer.length,
+      });
+
+      // Existing latest version is v1
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce({
+        id: 'ver-1',
+        versionNo: 1,
+      });
+
+      let createdVersionRecord: any;
+      let createdJobRecord: any;
+      mockPrisma.documentVersion.create.mockImplementation(async ({ data }: any) => {
+        createdVersionRecord = {
+          ...data,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        return createdVersionRecord;
+      });
+
+      mockPrisma.processingJob.create.mockImplementation(async ({ data }: any) => {
+        createdJobRecord = {
+          ...data,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        return createdJobRecord;
+      });
+
+      mockPrisma.document.update.mockResolvedValueOnce({
+        ...existingDoc,
+        updatedAt: new Date(),
+      });
+
+      const result = await service.replaceDocumentVersion('doc-1', mockPdfFile, schoolAdmin);
+
+      // Verify returned document entity has version 2 with status pending
+      expect(result.id).toBe('doc-1');
+      expect(result.currentVersion?.versionNo).toBe(2);
+      expect(result.currentVersion?.status).toBe('pending');
+      expect(result.currentVersion?.mimeType).toBe('application/pdf');
+
+      // Verify storage key incremented to v2
+      expect(mockStorageService.save).toHaveBeenCalledWith(
+        'spaces/space-1/docs/doc-1/v2.pdf',
+        mockPdfFile.buffer,
+      );
+
+      // Verify processing job step
+      expect(createdJobRecord.step).toBe('ingestion');
+      expect(createdJobRecord.status).toBe('pending');
+
+      // Verify processing queue dispatch
+      expect(mockProcessingQueueService.enqueueJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-1',
+          spaceId: 'space-1',
+          storageKey: 'spaces/space-1/docs/doc-1/v2.pdf',
+          mimeType: 'application/pdf',
+        }),
+      );
+
+      // Verify audit event
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: 'documents',
+          action: 'document_replaced',
+          entity: { type: 'document', id: 'doc-1' },
+          details: expect.objectContaining({
+            versionNo: 2,
+            spaceId: 'space-1',
+            schoolId: 'school-1',
+            checksum: 'v2-pdf-checksum-hex',
+            mimeType: 'application/pdf',
+          }),
+        }),
+      );
+    });
+
+    it('successfully replaces document with Word document (.docx) and queues office_extraction', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      const docxFile = {
+        buffer: Buffer.from('PK\x03\x04...word/document.xml...'),
+        originalname: 'Syllabus-v2.docx',
+        mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      } as UploadedFile;
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'docx-checksum',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extension: 'docx',
+        size: docxFile.buffer.length,
+      });
+
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce({
+        versionNo: 2, // existing version is 2, next should be 3!
+      });
+
+      let createdJobStep = '';
+      mockPrisma.processingJob.create.mockImplementation(async ({ data }: any) => {
+        createdJobStep = data.step;
+        return { ...data, createdAt: new Date(), updatedAt: new Date() };
+      });
+      mockPrisma.document.update.mockResolvedValueOnce(existingDoc);
+
+      const result = await service.replaceDocumentVersion('doc-1', docxFile, schoolAdmin);
+
+      expect(result.currentVersion?.versionNo).toBe(3);
+      expect(createdJobStep).toBe('office_extraction');
+      expect(mockStorageService.save).toHaveBeenCalledWith(
+        'spaces/space-1/docs/doc-1/v3.docx',
+        docxFile.buffer,
+      );
+    });
+
+    it('successfully replaces document with HEIC photo, converts to JPEG, and queues OCR', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      const heicFile = {
+        buffer: Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]),
+        originalname: 'whiteboard-v2.heic',
+        mimetype: 'image/heic',
+      } as UploadedFile;
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'heic-checksum',
+        mimeType: 'image/heic',
+        extension: 'heic',
+        size: 12,
+      });
+
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce({
+        versionNo: 1,
+      });
+      mockPrisma.document.update.mockResolvedValueOnce(existingDoc);
+
+      let createdJobStep = '';
+      mockPrisma.processingJob.create.mockImplementation(async ({ data }: any) => {
+        createdJobStep = data.step;
+        return { ...data, createdAt: new Date(), updatedAt: new Date() };
+      });
+
+      const result = await service.replaceDocumentVersion('doc-1', heicFile, schoolAdmin);
+
+      expect(result.currentVersion?.versionNo).toBe(2);
+      expect(result.currentVersion?.mimeType).toBe('image/jpeg');
+      expect(createdJobStep).toBe('ocr');
+      expect(mockImageConversionService.prepareImageForOcr).toHaveBeenCalledWith(
+        heicFile.buffer,
+        'image/heic',
+      );
+      expect(mockStorageService.save).toHaveBeenCalledWith(
+        'spaces/space-1/docs/doc-1/v2.jpg',
+        expect.any(Buffer),
+      );
+    });
+
+    it('cleans up written storage file if database transaction fails', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'v2-pdf-checksum',
+        mimeType: 'application/pdf',
+        extension: 'pdf',
+        size: mockPdfFile.buffer.length,
+      });
+
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce({
+        versionNo: 1,
+      });
+
+      mockPrisma.$transaction.mockRejectedValueOnce(new Error('Prisma write deadlock'));
+
+      await expect(
+        service.replaceDocumentVersion('doc-1', mockPdfFile, schoolAdmin),
+      ).rejects.toThrow('Prisma write deadlock');
+
+      expect(mockStorageService.delete).toHaveBeenCalledWith(
+        'spaces/space-1/docs/doc-1/v2.pdf',
+      );
+    });
+  });
 });
