@@ -46,6 +46,7 @@ describe('DocumentsController', () => {
       getDocumentVersionStream: vi.fn(),
       replaceDocumentVersion: vi.fn(),
       listDocumentVersions: vi.fn(),
+      deleteDocument: vi.fn(),
     };
 
     controller = new DocumentsController(mockDocumentsService as unknown as DocumentsService);
@@ -146,6 +147,33 @@ describe('DocumentsController', () => {
         }),
       );
       expect(res).toBe(expectedDoc);
+    });
+  });
+
+  describe('deleteDocument', () => {
+    it('delegates soft delete to documentsService.deleteDocument with auditContext', async () => {
+      const mockResult = {
+        success: true,
+        id: 'doc-1',
+        message: 'Document successfully soft-deleted',
+      };
+      mockDocumentsService.deleteDocument.mockResolvedValueOnce(mockResult);
+
+      const mockReq = {
+        ip: '127.0.0.1',
+        header: vi.fn().mockReturnValue(undefined),
+      } as any;
+
+      const res = await controller.deleteDocument('doc-1', mockReq, mockActor);
+
+      expect(mockDocumentsService.deleteDocument).toHaveBeenCalledWith(
+        'doc-1',
+        mockActor,
+        expect.objectContaining({
+          ip: '127.0.0.1',
+        }),
+      );
+      expect(res).toBe(mockResult);
     });
   });
 

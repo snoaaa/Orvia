@@ -303,4 +303,34 @@ export const AuditEvents = {
       context,
     };
   },
+
+  documentDeleted(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      title: string;
+      versionsCount: number;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_DELETED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        title: p.title,
+        versionsCount: p.versionsCount,
+      },
+      context,
+    };
+  },
 };

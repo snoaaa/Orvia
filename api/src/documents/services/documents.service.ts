@@ -56,7 +56,10 @@ export class DocumentsService {
     const skip = (page - 1) * limit;
 
     const schoolId = schoolIdFilter(actor, 'documents:read');
-    const where: Prisma.DocumentWhereInput = schoolId ? { space: { schoolId } } : {};
+    const where: Prisma.DocumentWhereInput = {
+      deletedAt: null,
+      ...(schoolId ? { space: { schoolId } } : {}),
+    };
 
     const [total, docs] = await Promise.all([
       this.prisma.document.count({ where }),
@@ -186,6 +189,52 @@ export class DocumentsService {
     }
 
     return DocumentMapper.toEntity(updated, currentVersion);
+  }
+
+  /**
+   * Soft-deletes a document (§4.1, §9, #108):
+   * 1. Validates document exists, is not already deleted, and caller has `documents:delete` rights in the space school.
+   * 2. Sets `deletedAt = new Date()`.
+   * 3. Excludes its versions/chunks from retrieval: any download or stream attempts will throw 404.
+   * 4. Past answers that cited this document will show the reference as unavailable (Issue #127).
+   * 5. Records an immutable hash-chained audit event (`document_deleted`).
+   */
+  async deleteDocument(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext?: AuditRequestContext,
+  ): Promise<{ success: boolean; id: string; message: string }> {
+    const doc = await this.findDocumentInScope(id, actor, 'documents:delete');
+
+    const versionsCount = await this.prisma.documentVersion.count({
+      where: { documentId: doc.id },
+    });
+
+    const deletedAt = new Date();
+    await this.prisma.document.update({
+      where: { id: doc.id },
+      data: { deletedAt },
+    });
+
+    await this.audit.record(
+      AuditEvents.documentDeleted(
+        {
+          documentId: doc.id,
+          spaceId: doc.spaceId,
+          schoolId: doc.space.schoolId,
+          title: doc.title,
+          versionsCount,
+          actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext ?? SYSTEM_AUDIT_CONTEXT,
+      ),
+    );
+
+    return {
+      success: true,
+      id: doc.id,
+      message: 'Document successfully soft-deleted',
+    };
   }
 
   /**
