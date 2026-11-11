@@ -197,9 +197,13 @@ export class GroupsService {
   /**
    * Locks the group row until the transaction ends, so membership changes of one group run one at a time:
    * without it, two simultaneous requests can deadlock (inserting members, then updating the group).
+   * 404 if the group was deleted since it was loaded, so members are never changed on a deleted group.
    */
   private async lockGroup(tx: Prisma.TransactionClient, id: string): Promise<void> {
-    await tx.$queryRaw`SELECT id FROM \`groups\` WHERE id = ${id} FOR UPDATE`;
+    const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM \`groups\` WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`;
+    if (rows.length === 0) {
+      throw new NotFoundException(`Group with ID ${id} not found`);
+    }
   }
 
   /** Loads a group that is not deleted, or throws 404. */

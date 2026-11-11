@@ -151,6 +151,21 @@ describe('Group members: add (e2e)', () => {
     });
   });
 
+  describe('with a simultaneous delete', () => {
+    it('never leaves members in a deleted group', async () => {
+      for (let i = 0; i < 5; i++) {
+        const id = await group('A', `Delete race ${i}`);
+        const [added, deleted] = await Promise.all([
+          add(ids.AdminA, id, [ids.Student1, ids.Student2]),
+          http().delete(`/groups/${id}`).set('Authorization', await bearer(ids.AdminA)),
+        ]);
+        expect(deleted.status).toBe(204);
+        expect([200, 404]).toContain(added.status);
+        expect(await members(id)).toEqual([]);
+      }
+    });
+  });
+
   describe('same school only', () => {
     it.each([
       ['a user of another school', 'StudentB'],

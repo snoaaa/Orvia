@@ -282,6 +282,7 @@ describe('GroupsService', () => {
       );
       prisma.groupMember.findMany.mockResolvedValue([{ userId: 'ok-1' }]);
       prisma.groupMember.count.mockResolvedValue(3);
+      prisma.$queryRaw.mockResolvedValue([{ id: 'g1' }]);
       prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => Promise<unknown>) => run(prisma));
     });
 
@@ -299,9 +300,16 @@ describe('GroupsService', () => {
     it('locks the group row before reading the members', async () => {
       await service.addMembers('g1', { userIds: ['ok-2'] }, admin);
       const [sql, groupId] = prisma.$queryRaw.mock.calls[0];
-      expect(sql.join('?')).toBe('SELECT id FROM `groups` WHERE id = ? FOR UPDATE');
+      expect(sql.join('?')).toBe('SELECT id FROM `groups` WHERE id = ? AND deleted_at IS NULL FOR UPDATE');
       expect(groupId).toBe('g1');
       expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.groupMember.findMany.mock.invocationCallOrder[0]);
+    });
+
+    it('answers 404 when the group was deleted after it was loaded, adding nobody', async () => {
+      prisma.$queryRaw.mockResolvedValue([]);
+      await expect(service.addMembers('g1', { userIds: ['ok-2'] }, admin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.groupMember.createMany).not.toHaveBeenCalled();
+      expect(prisma.group.update).not.toHaveBeenCalled();
     });
 
     it('writes nothing when everyone is already a member', async () => {
