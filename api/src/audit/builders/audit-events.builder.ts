@@ -175,6 +175,60 @@ export const AuditEvents = {
     };
   },
 
+  /**
+   * Document-management or other fine-grained permission granted to a staff member in a school (§4.5, #88).
+   */
+  permissionGranted(
+    p: {
+      userId: string;
+      email?: string | null;
+      schoolId: string;
+      permission: string;
+      grantedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.PERMISSION_GRANTED,
+      actor: p.grantedBy ?? anonymous,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        permission: p.permission,
+        schoolId: p.schoolId,
+        ...(p.email ? { email: p.email.trim().toLowerCase() } : {}),
+      },
+      context,
+    };
+  },
+
+  /**
+   * Document-management or other fine-grained permission revoked from a staff member in a school (§4.5, #88).
+   */
+  permissionRevoked(
+    p: {
+      userId: string;
+      email?: string | null;
+      schoolId: string;
+      permission: string;
+      revokedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.PERMISSION_REVOKED,
+      actor: p.revokedBy ?? anonymous,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        permission: p.permission,
+        schoolId: p.schoolId,
+        ...(p.email ? { email: p.email.trim().toLowerCase() } : {}),
+      },
+      context,
+    };
+  },
+
   accessDenied(
     p: { actor?: AuditActor | null; method: string; path: string; requiredPermission?: string; reason?: string },
     context: AuditRequestContext,
@@ -203,6 +257,132 @@ export const AuditEvents = {
         reason: p.reason,
         failedAttempts: p.failedAttempts,
         lockedUntil: p.lockedUntil ?? null,
+      },
+      context,
+    };
+  },
+
+  documentUploaded(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      versionNo: number;
+      versionId: string;
+      checksum: string;
+      mimeType: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_UPLOADED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        versionNo: p.versionNo,
+        versionId: p.versionId,
+        checksum: p.checksum,
+        mimeType: p.mimeType,
+      },
+      context,
+    };
+  },
+
+  documentUpdated(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+      changes: Record<string, { from: unknown; to: unknown }>;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_UPDATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        changes: p.changes,
+      },
+      context,
+    };
+  },
+
+  documentReplaced(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      versionNo: number;
+      versionId: string;
+      checksum: string;
+      mimeType: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_REPLACED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        versionNo: p.versionNo,
+        versionId: p.versionId,
+        checksum: p.checksum,
+        mimeType: p.mimeType,
+      },
+      context,
+    };
+  },
+
+  documentDeleted(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      title: string;
+      versionsCount: number;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_DELETED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        title: p.title,
+        versionsCount: p.versionsCount,
       },
       context,
     };

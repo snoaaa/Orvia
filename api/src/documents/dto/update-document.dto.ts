@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { IsISO8601, IsOptional, IsString } from 'class-validator';
 
 export class UpdateDocumentDto {
   @ApiPropertyOptional({ example: 'Lecture Notes - Advanced Algorithms (Rev 2)', description: 'Updated document title' })
@@ -11,6 +11,11 @@ export class UpdateDocumentDto {
   @IsString()
   @IsOptional()
   author?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-15T09:00:00.000Z', description: 'Updated document date (ISO 8601 string)' })
+  @IsISO8601()
+  @IsOptional()
+  date?: string;
 
   @ApiPropertyOptional({ example: 'algorithms,cs,graphs,sorting', description: 'Updated tags' })
   @IsString()

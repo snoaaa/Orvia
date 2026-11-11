@@ -79,6 +79,19 @@ describe('Group list, view and update (e2e)', () => {
     await group('Delta', 'B', 'class', new Date(t0 + 3000));
     await group('Frozen', 'Off', 'class', new Date(t0 - 1000));
 
+    // Content managers got groups:read in #34; grant it here too so databases with an older seed pass.
+    const manager = await prisma.role.findUniqueOrThrow({ where: { name: 'CONTENT_MANAGER' } });
+    const groupsRead = await prisma.permission.upsert({
+      where: { code: 'groups:read' },
+      update: {},
+      create: { code: 'groups:read', description: 'View group details and roster' },
+    });
+    await prisma.rolePermission.upsert({
+      where: { roleId_permissionId: { roleId: manager.id, permissionId: groupsRead.id } },
+      update: {},
+      create: { roleId: manager.id, permissionId: groupsRead.id },
+    });
+
     await user('AdminA', 'SCHOOL_ADMIN');
     await user('ManagerA', 'CONTENT_MANAGER');
     await user('StudentA', 'STUDENT');

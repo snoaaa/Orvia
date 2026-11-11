@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { RequirePermission } from '../../auth/decorators/auth.decorators.js';
+import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
+import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { CreateRagMetricDto, QueryRagMetricsDto } from '../dto/index.js';
 import { RagRequestMetricEntity } from '../entities/index.js';
 import { RagPerformanceService } from '../services/rag-performance.service.js';
@@ -15,10 +16,13 @@ export class RagPerformanceController {
 
   @Get('metrics')
   @RequirePermission('metrics:view')
-  @ApiOperation({ summary: 'List RAG performance and latency telemetry' })
+  @ApiOperation({ summary: 'List RAG performance and latency telemetry (scoped to school) (§4.5, §4.7, #89)' })
   @ApiResponse({ status: 200, description: 'RAG metrics list', type: [RagRequestMetricEntity] })
-  async getMetrics(@Query() query: QueryRagMetricsDto): Promise<RagRequestMetricEntity[]> {
-    return this.ragService.findAllMetrics(query);
+  async getMetrics(
+    @Query() query: QueryRagMetricsDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<RagRequestMetricEntity[]> {
+    return this.ragService.findAllMetrics(query, actor);
   }
 
   @Post('metrics')

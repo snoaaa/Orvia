@@ -13,4 +13,5 @@ export * from './invite-user.dto.js';
 export * from './update-user.dto.js';
 export * from './update-user-profile.dto.js';
 export * from './assign-role.dto.js';
+export * from './grant-document-management.dto.js';
 export * from './query-permission-overview.dto.js';

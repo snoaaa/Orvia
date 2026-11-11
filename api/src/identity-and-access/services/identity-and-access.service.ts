@@ -529,10 +529,17 @@ export class IdentityAndAccessService {
 
     const target = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { assignments: { include: { role: true } } },
+      include: { assignments: { include: { role: { include: { rolePermissions: { select: { permission: { select: { code: true } } } } } } } } },
     });
     if (!target) {
       throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    if (actorScope !== 'all') {
+      const targetInSchool = target.assignments.some((a) => a.schoolId === dto.schoolId);
+      if (!targetInSchool) {
+        throw new ForbiddenException('A school admin cannot grant permissions to a user outside their school');
+      }
     }
 
     const school = await this.prisma.school.findUnique({
@@ -555,10 +562,32 @@ export class IdentityAndAccessService {
       throw new ForbiddenException(`Only a platform administrator can assign the ${role.name} role`);
     }
 
+    const roleGrantsDocManage =
+      role.name === 'CONTENT_MANAGER' ||
+      role.rolePermissions.some(
+        (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
+      );
+
+    if (roleGrantsDocManage) {
+      const isStudent =
+        target.assignments.some((a) => a.schoolId === dto.schoolId && a.role.name.toUpperCase() === 'STUDENT') ||
+        (target.assignments.length > 0 && target.assignments.every((a) => a.role.name.toUpperCase() === 'STUDENT'));
+      if (isStudent) {
+        throw new BadRequestException('Student accounts can never receive document management permissions');
+      }
+    }
+
     const existing = target.assignments.find((a) => a.schoolId === dto.schoolId);
     if (existing?.roleId === role.id) {
       return UserMapper.toEntity(target);
     }
+
+    const prevRoleGrantsDocManage =
+      existing?.role.name === 'CONTENT_MANAGER' ||
+      existing?.role.rolePermissions?.some(
+        (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
+      ) ||
+      false;
 
     if (existing) {
       await this.prisma.userAssignment.update({ where: { id: existing.id }, data: { roleId: role.id } });
@@ -566,6 +595,34 @@ export class IdentityAndAccessService {
       await this.prisma.userAssignment.create({
         data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
       });
+    }
+
+    if (roleGrantsDocManage && !prevRoleGrantsDocManage) {
+      await this.audit.record(
+        AuditEvents.permissionGranted(
+          {
+            userId: target.id,
+            email: target.email,
+            schoolId: dto.schoolId,
+            permission: 'documents:manage',
+            grantedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+      );
+    } else if (!roleGrantsDocManage && prevRoleGrantsDocManage) {
+      await this.audit.record(
+        AuditEvents.permissionRevoked(
+          {
+            userId: target.id,
+            email: target.email,
+            schoolId: dto.schoolId,
+            permission: 'documents:manage',
+            revokedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+      );
     }
 
     await this.audit.record(
@@ -576,6 +633,210 @@ export class IdentityAndAccessService {
           schoolId: dto.schoolId,
           role: role.name,
           previousRole: existing?.role.name ?? null,
+          assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    return UserMapper.toEntity(target);
+  }
+
+  /**
+   * Grant document-management rights to a staff member in a school (§4.5, #88).
+   *
+   * Enforces:
+   *  - Caller must hold users:assign_role. Platform admins can grant in any school;
+   *    school admins can only grant in their own school(s).
+   *  - School admins cannot grant permissions to a user outside their school (403).
+   *  - Students can NEVER receive document-management rights (400).
+   *  - Idempotent: granting when already held is a no-op.
+   *  - Records tamper-evident audit events `permission_granted` and `role_assigned`.
+   */
+  async grantDocumentManagement(
+    userId: string,
+    schoolId: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    const actorScope = schoolsWithPermission(actor, 'users:assign_role');
+    if (actorScope !== 'all') {
+      assertSchoolAccess(actor, 'users:assign_role', schoolId);
+    }
+
+    const school = await this.prisma.school.findUnique({
+      where: { id: schoolId },
+      select: { id: true },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${schoolId} not found`);
+    }
+
+    const target = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { assignments: { include: { role: true } } },
+    });
+    if (!target) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    if (actorScope !== 'all') {
+      const targetInSchool = target.assignments.some((a) => a.schoolId === schoolId);
+      if (!targetInSchool) {
+        throw new ForbiddenException('A school admin cannot grant permissions to a user outside their school');
+      }
+    }
+
+    const isStudent =
+      target.assignments.some((a) => a.schoolId === schoolId && a.role.name.toUpperCase() === 'STUDENT') ||
+      (target.assignments.length > 0 && target.assignments.every((a) => a.role.name.toUpperCase() === 'STUDENT'));
+    if (isStudent) {
+      throw new BadRequestException('Student accounts can never receive document management permissions');
+    }
+
+    let role = await this.prisma.role.findFirst({
+      where: { name: 'CONTENT_MANAGER' },
+    });
+    if (!role) {
+      role = await this.prisma.role.create({
+        data: {
+          name: 'CONTENT_MANAGER',
+          scope: 'school',
+        },
+      });
+    }
+
+    const existing = target.assignments.find((a) => a.schoolId === schoolId);
+    if (existing?.roleId === role.id) {
+      return UserMapper.toEntity(target);
+    }
+
+    if (existing) {
+      await this.prisma.userAssignment.update({ where: { id: existing.id }, data: { roleId: role.id } });
+    } else {
+      await this.prisma.userAssignment.create({
+        data: { userId: target.id, schoolId, roleId: role.id },
+      });
+    }
+
+    await this.audit.record(
+      AuditEvents.permissionGranted(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId,
+          permission: 'documents:manage',
+          grantedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    await this.audit.record(
+      AuditEvents.roleAssigned(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId,
+          role: role.name,
+          previousRole: existing?.role.name ?? null,
+          assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    return UserMapper.toEntity(target);
+  }
+
+  /**
+   * Revoke document-management rights from a staff member in a school (§4.5, #88).
+   *
+   * Enforces:
+   *  - Caller must hold users:assign_role. Platform admins can revoke in any school;
+   *    school admins can only revoke in their own school(s).
+   *  - School admins cannot revoke permissions for a user outside their school (403).
+   *  - Idempotent: revoking when not held is a no-op.
+   *  - Reverts user assignment to STAFF.
+   *  - Records tamper-evident audit events `permission_revoked` and `role_assigned`.
+   */
+  async revokeDocumentManagement(
+    userId: string,
+    schoolId: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    const actorScope = schoolsWithPermission(actor, 'users:assign_role');
+    if (actorScope !== 'all') {
+      assertSchoolAccess(actor, 'users:assign_role', schoolId);
+    }
+
+    const school = await this.prisma.school.findUnique({
+      where: { id: schoolId },
+      select: { id: true },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${schoolId} not found`);
+    }
+
+    const target = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { assignments: { include: { role: true } } },
+    });
+    if (!target) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    if (actorScope !== 'all') {
+      const targetInSchool = target.assignments.some((a) => a.schoolId === schoolId);
+      if (!targetInSchool) {
+        throw new ForbiddenException('A school admin cannot revoke permissions for a user outside their school');
+      }
+    }
+
+    const existing = target.assignments.find((a) => a.schoolId === schoolId);
+    if (!existing || existing.role.name.toUpperCase() !== 'CONTENT_MANAGER') {
+      return UserMapper.toEntity(target);
+    }
+
+    let staffRole = await this.prisma.role.findFirst({
+      where: { name: 'STAFF' },
+    });
+    if (!staffRole) {
+      staffRole = await this.prisma.role.create({
+        data: {
+          name: 'STAFF',
+          scope: 'school',
+        },
+      });
+    }
+
+    await this.prisma.userAssignment.update({
+      where: { id: existing.id },
+      data: { roleId: staffRole.id },
+    });
+
+    await this.audit.record(
+      AuditEvents.permissionRevoked(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId,
+          permission: 'documents:manage',
+          revokedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    await this.audit.record(
+      AuditEvents.roleAssigned(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId,
+          role: staffRole.name,
+          previousRole: existing.role.name,
           assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
         },
         auditContext,
