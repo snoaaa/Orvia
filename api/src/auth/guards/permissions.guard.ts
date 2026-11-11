@@ -1,12 +1,41 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import { IS_PUBLIC_KEY, REQUIRED_PERMISSIONS_KEY } from '../decorators/auth.decorators.js';
+import {
+  IS_PUBLIC_KEY,
+  REQUIRED_ANY_PERMISSION_KEY,
+  REQUIRED_PERMISSIONS_KEY,
+  REQUIRED_ROLES_KEY,
+} from '../decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../types/authenticated-user.js';
 
+const DOC_MANAGE_PERMISSIONS = new Set([
+  'documents:manage',
+  'documents.manage',
+]);
+
+const DOC_COVERED_PERMISSIONS = new Set([
+  'documents:create',
+  'documents:update',
+  'documents:delete',
+  'documents:publish',
+  'documents:manage_access',
+  'documents:process',
+  'documents:access.manage',
+  'documents.access.manage',
+  'spaces:create',
+  'spaces:update',
+  'spaces:delete',
+  'spaces:manage',
+  'documents:manage',
+  'documents.manage',
+]);
+
 /**
- * Global guard, runs after JwtAuthGuard. Enforces @RequirePermission(): the user must hold
- * every listed permission through at least one of their roles, otherwise 403.
+ * Global guard, runs after JwtAuthGuard. Enforces permissions and roles (§4.5, §4.7, #89):
+ * - @RequirePermission(): user must hold ALL listed permissions (or covered by documents:manage/*)
+ * - @RequireAnyPermission(): user must hold AT LEAST ONE listed permission
+ * - @RequireRole(): user must hold AT LEAST ONE listed role
  */
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -16,14 +45,60 @@ export class PermissionsGuard implements CanActivate {
     const targets = [context.getHandler(), context.getClass()];
     if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, targets)) return true;
 
-    const required = this.reflector.getAllAndOverride<string[]>(REQUIRED_PERMISSIONS_KEY, targets);
-    if (!required?.length) return true;
-
     const { user } = context.switchToHttp().getRequest<Request & { user?: AuthenticatedUser }>();
-    const missing = required.filter((p) => !user?.permissions.includes(p));
-    if (missing.length > 0) {
-      throw new ForbiddenException(`Missing permission: ${missing.join(', ')}`);
+    const userPerms = user?.permissions ?? [];
+
+    const hasWildcard = userPerms.includes('*');
+    const hasDocManage = userPerms.some((p) => DOC_MANAGE_PERMISSIONS.has(p));
+
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(REQUIRED_ROLES_KEY, targets);
+    if (requiredRoles?.length) {
+      const userRoles = [
+        ...(user?.roles ?? []),
+        ...(user?.role ? [user.role] : []),
+        ...(user?.assignments?.map((a) => a.role) ?? []),
+      ].map((r) => r.toUpperCase());
+
+      const hasMatchingRole =
+        user?.isPlatformAdmin ||
+        requiredRoles.some((r) => userRoles.includes(r.toUpperCase()));
+
+      if (!hasMatchingRole) {
+        throw new ForbiddenException(`Requires one of roles: ${requiredRoles.join(', ')}`);
+      }
     }
+
+    const requiredAny = this.reflector.getAllAndOverride<string[]>(REQUIRED_ANY_PERMISSION_KEY, targets);
+    if (requiredAny?.length) {
+      const hasAny =
+        hasWildcard ||
+        requiredAny.some((reqPerm) => {
+          if (userPerms.includes(reqPerm)) return true;
+          if (DOC_MANAGE_PERMISSIONS.has(reqPerm) && (hasDocManage || userPerms.some((p) => DOC_COVERED_PERMISSIONS.has(p)))) return true;
+          if (DOC_COVERED_PERMISSIONS.has(reqPerm) && hasDocManage) return true;
+          return false;
+        });
+
+      if (!hasAny) {
+        throw new ForbiddenException(`Requires at least one permission of: ${requiredAny.join(', ')}`);
+      }
+    }
+
+    const required = this.reflector.getAllAndOverride<string[]>(REQUIRED_PERMISSIONS_KEY, targets);
+    if (required?.length) {
+      const missing = required.filter((reqPerm) => {
+        if (hasWildcard) return false;
+        if (userPerms.includes(reqPerm)) return false;
+        if (DOC_MANAGE_PERMISSIONS.has(reqPerm) && (hasDocManage || userPerms.some((p) => DOC_COVERED_PERMISSIONS.has(p)))) return false;
+        if (DOC_COVERED_PERMISSIONS.has(reqPerm) && hasDocManage) return false;
+        return true;
+      });
+
+      if (missing.length > 0) {
+        throw new ForbiddenException(`Missing permission: ${missing.join(', ')}`);
+      }
+    }
+
     return true;
   }
 }
