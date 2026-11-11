@@ -10,6 +10,7 @@ import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
+import { assertCanGrantRole } from '../../auth/utils/role-grant.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto, UpdateUserProfileDto } from '../dto/index.js';
@@ -17,6 +18,7 @@ import {
   PaginatedSchoolsEntity,
   PaginatedUsersEntity,
   PermissionHolderEntity,
+  PermissionEntity,
   PermissionOverviewEntity,
   RoleEntity,
   SchoolEntity,
@@ -510,7 +512,8 @@ export class IdentityAndAccessService {
    * Enforces:
    *  - `users:assign_role` in the target school (platform admins may act on any school).
    *  - The school and the role must exist (404 / 400).
-   *  - A platform-scoped role can only be granted by someone who assigns roles platform-wide (403).
+   *  - The role must be at or below the admin's own level in that school (403), via `assertCanGrantRole`,
+   *    the same check as POST /assignments: only a platform admin can grant a platform-scoped role.
    *  - Idempotent: re-assigning the role the user already holds changes nothing and records nothing.
    *  - Tamper-evident audit event `identity_access/role_assigned` with the previous role.
    *
@@ -522,10 +525,7 @@ export class IdentityAndAccessService {
     actor: AuthenticatedUser,
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<UserEntity> {
-    const actorScope = schoolsWithPermission(actor, 'users:assign_role');
-    if (actorScope !== 'all') {
-      assertSchoolAccess(actor, 'users:assign_role', dto.schoolId);
-    }
+    assertSchoolAccess(actor, 'users:assign_role', dto.schoolId);
 
     const target = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -558,9 +558,7 @@ export class IdentityAndAccessService {
     if (!role) {
       throw new BadRequestException(`Unknown role '${roleName}'`);
     }
-    if (role.scope === 'platform' && actorScope !== 'all') {
-      throw new ForbiddenException(`Only a platform administrator can assign the ${role.name} role`);
-    }
+    assertCanGrantRole(actor, role, dto.schoolId);
 
     const roleGrantsDocManage =
       role.name === 'CONTENT_MANAGER' ||
@@ -1193,43 +1191,43 @@ export class IdentityAndAccessService {
     });
   }
 
-  async createRole(dto: CreateRoleDto): Promise<RoleEntity> {
+  /**
+   * POST /roles (#44), also behind the older POST /identity/roles: creates a custom role with its scope and
+   * permission codes. Platform admins only: the guard checks system:manage, and this also refuses a
+   * school-scoped role that would hold it. The role and its permissions are written in one transaction.
+   */
+  async createRole(dto: CreateRoleDto, actor: AuthenticatedUser): Promise<RoleEntity> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may create roles');
+    }
     const roleName = dto.name.trim().toUpperCase();
     if (isBaseRoleName(roleName)) {
       throw new BadRequestException(`Role name '${roleName}' is reserved for system base roles`);
     }
-    const existing = await this.prisma.role.findUnique({
-      where: { name: roleName },
-    });
-    if (existing) {
-      throw new ConflictException(`Role '${roleName}' already exists`);
+
+    const codes = [...new Set(dto.permissions)];
+    const permissions = await this.prisma.permission.findMany({ where: { code: { in: codes } }, select: { id: true, code: true } });
+    const unknown = codes.filter((code) => !permissions.some((p) => p.code === code));
+    if (unknown.length > 0) {
+      throw new BadRequestException(`Unknown permission code(s): ${unknown.join(', ')}`);
     }
 
-    const id = randomUUID();
-    const role = await this.prisma.role.create({
-      data: {
-        id,
-        name: roleName,
-        scope: dto.scope || 'school',
-      },
-    });
-
-    if (dto.permissions && dto.permissions.length > 0) {
-      const perms = await this.prisma.permission.findMany({
-        where: { code: { in: dto.permissions } },
-      });
-      if (perms.length > 0) {
-        await this.prisma.rolePermission.createMany({
-          data: perms.map((p) => ({
-            roleId: role.id,
-            permissionId: p.id,
-          })),
-          skipDuplicates: true,
+    try {
+      const role = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.role.create({ data: { id: randomUUID(), name: roleName, scope: dto.scope } });
+        await tx.rolePermission.createMany({
+          data: permissions.map((p) => ({ roleId: created.id, permissionId: p.id })),
         });
+        return created;
+      });
+      return await this.findRoleById(role.id);
+    } catch (error) {
+      // The unique index on roles.name decides, so two simultaneous requests cannot both succeed.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Role '${roleName}' already exists`);
       }
+      throw error;
     }
-
-    return this.findRoleById(role.id);
   }
 
   async updateRole(id: string, dto: UpdateRoleDto): Promise<RoleEntity> {
@@ -1316,6 +1314,20 @@ export class IdentityAndAccessService {
       success: true,
       message: `Role '${role.name}' was successfully deleted`,
     };
+  }
+
+  /**
+   * GET /permissions: the permission catalogue, sorted by category then code. Platform admins only:
+   * the guard checks system:manage, and this also refuses a school-scoped role that would hold it.
+   */
+  async listPermissions(actor: AuthenticatedUser): Promise<PermissionEntity[]> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may list permissions');
+    }
+    const rows = await this.prisma.permission.findMany({ select: { code: true, description: true } });
+    return rows
+      .map((p) => new PermissionEntity({ code: p.code, description: p.description, category: p.code.split(':')[0] }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
   }
 
   /**
