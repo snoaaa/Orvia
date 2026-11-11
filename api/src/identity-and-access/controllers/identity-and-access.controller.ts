@@ -4,7 +4,7 @@ import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
+import { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, GrantDocumentManagementDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto } from '../dto/index.js';
 import { PaginatedSchoolsEntity, PaginatedUsersEntity, PermissionOverviewEntity, RoleEntity, SchoolEntity, UserEntity } from '../entities/index.js';
 import { IdentityAndAccessService } from '../services/identity-and-access.service.js';
 
@@ -123,6 +123,79 @@ export class IdentityAndAccessController {
     @Req() req: Request,
   ): Promise<UserEntity> {
     return this.identityService.assignRole(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Post('users/:id/document-management')
+  @RequirePermission('users:assign_role')
+  @ApiOperation({
+    summary: 'Grant document-management rights to a staff member (§4.5, #88)',
+    description:
+      'Turns a staff member into a content manager for their school(s). ' +
+      'Platform admins can grant for any staff member of any school. ' +
+      'School admins can only grant for staff of their own school. ' +
+      'Students can never receive this permission. ' +
+      'Records immutable hash-chained audit events.',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Document management rights granted', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'Student account or invalid payload' })
+  @ApiResponse({ status: 403, description: 'Forbidden: school admin cannot grant outside their school' })
+  @ApiResponse({ status: 404, description: 'User or school not found' })
+  async grantDocumentManagement(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: GrantDocumentManagementDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    const auditContext = auditContextFromRequest(req);
+    if (dto.granted === false) {
+      return this.identityService.revokeDocumentManagement(id, dto.schoolId, actor, auditContext);
+    }
+    return this.identityService.grantDocumentManagement(id, dto.schoolId, actor, auditContext);
+  }
+
+  @Patch('users/:id/document-management')
+  @RequirePermission('users:assign_role')
+  @ApiOperation({
+    summary: 'Grant or revoke document-management rights for a staff member (§4.5, #88)',
+    description: 'Updates document-management rights for a staff member in a school.',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Document management rights updated', type: UserEntity })
+  @ApiResponse({ status: 400, description: 'Student account or invalid payload' })
+  @ApiResponse({ status: 403, description: 'Forbidden: school admin cannot modify outside their school' })
+  @ApiResponse({ status: 404, description: 'User or school not found' })
+  async updateDocumentManagement(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: GrantDocumentManagementDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    const auditContext = auditContextFromRequest(req);
+    if (dto.granted === false) {
+      return this.identityService.revokeDocumentManagement(id, dto.schoolId, actor, auditContext);
+    }
+    return this.identityService.grantDocumentManagement(id, dto.schoolId, actor, auditContext);
+  }
+
+  @Delete('users/:id/document-management')
+  @RequirePermission('users:assign_role')
+  @ApiOperation({
+    summary: 'Revoke document-management rights from a staff member (§4.5, #88)',
+    description: 'Revokes document-management rights from a staff member for the specified school.',
+  })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiQuery({ name: 'schoolId', description: 'School UUID', required: true })
+  @ApiResponse({ status: 200, description: 'Document management rights revoked', type: UserEntity })
+  @ApiResponse({ status: 403, description: 'Forbidden: school admin cannot revoke outside their school' })
+  @ApiResponse({ status: 404, description: 'User or school not found' })
+  async revokeDocumentManagement(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query('schoolId') schoolId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<UserEntity> {
+    return this.identityService.revokeDocumentManagement(id, schoolId, actor, auditContextFromRequest(req));
   }
 
   @Get('schools')

@@ -13,3 +13,5 @@ api/.idea
 api/node_modules
 mobile/.idea
 mobile/node_modules
+/storage/
+/api/storage/
