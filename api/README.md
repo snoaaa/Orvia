@@ -359,8 +359,9 @@ Soft delete, answered with 204. In one transaction:
 - `user_assignments` pointing to it lose the group but keep their school role.
 
 Deleted groups are hidden everywhere: `GET /groups` skips them, and `GET` / `PATCH` / `DELETE /groups/{id}`
-and `GET /users?groupId=` answer 404. Deactivated school → 400. Run `npm run db:migrate` after pulling
-(migration `8_groups_soft_delete`).
+and `GET /users?groupId=` answer 404. Deactivated school → 400. After pulling, run `npx prisma generate`
+then `npm run db:migrate` (migration `8_groups_soft_delete`); without the first, the API fails with
+`Unknown argument deletedAt`. `updated_at` is set to the deletion date, so the mobile delta sync sees it.
 
 > Content managers got `groups:read` in #34: re-run `npm run seed` on existing databases (safe to repeat).
 

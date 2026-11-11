@@ -208,9 +208,19 @@ describe('GroupsService', () => {
       expect(where).toEqual({ id: 'g1', deletedAt: null });
       expect(data.deletedAt).toBeInstanceOf(Date);
       expect(data.name).toBe(`Class 4-A [deleted ${data.deletedAt.toISOString()}]`);
+      expect(data.updatedAt).toBe(data.deletedAt);
       expect(prisma.groupMember.deleteMany).toHaveBeenCalledWith({ where: { groupId: 'g1' } });
       expect(prisma.documentAccess.deleteMany).toHaveBeenCalledWith({ where: { groupId: 'g1' } });
       expect(prisma.userAssignment.updateMany).toHaveBeenCalledWith({ where: { groupId: 'g1' }, data: { groupId: null } });
+    });
+
+    it('never splits an emoji when shortening the name', async () => {
+      prisma.group.findFirst.mockResolvedValue(existing({ name: '😀'.repeat(191) }));
+      await service.deleteGroup('g1', admin);
+      const { data } = prisma.group.updateMany.mock.calls[0][0];
+      const characters = Array.from(data.name as string);
+      expect(characters).toHaveLength(191);
+      expect(data.name).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     });
 
     it('keeps the renamed name within 191 characters', async () => {

@@ -116,6 +116,8 @@ describe('Group deletion (e2e)', () => {
       const row = await prisma.group.findUniqueOrThrow({ where: { id } });
       expect(row.deletedAt).not.toBeNull();
       expect(row.name).toBe(`${tag} ISI 4 [deleted ${row.deletedAt!.toISOString()}]`);
+      // The mobile delta sync compares updated_at, so it must move with the deletion.
+      expect(row.updatedAt.getTime()).toBe(row.deletedAt!.getTime());
     });
 
     it('removes its memberships but not those of other groups', async () => {

@@ -138,11 +138,12 @@ export class GroupsService {
 
     const deletedAt = new Date();
     const suffix = ` [deleted ${deletedAt.toISOString()}]`;
-    const name = group.name.slice(0, GROUP_NAME_MAX_LENGTH - suffix.length) + suffix;
+    // Cut by character, not UTF-16 unit, so an emoji is never split (MySQL also counts characters).
+    const name = Array.from(group.name).slice(0, GROUP_NAME_MAX_LENGTH - suffix.length).join('') + suffix;
 
     await this.prisma.$transaction(async (tx) => {
       // Conditional on deleted_at: of two simultaneous deletes, only one goes through.
-      const { count } = await tx.group.updateMany({ where: { id, deletedAt: null }, data: { deletedAt, name } });
+      const { count } = await tx.group.updateMany({ where: { id, deletedAt: null }, data: { deletedAt, name, updatedAt: deletedAt } });
       if (count === 0) {
         throw new NotFoundException(`Group with ID ${id} not found`);
       }
