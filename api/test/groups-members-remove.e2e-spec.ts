@@ -156,6 +156,23 @@ describe('Group members: remove (e2e)', () => {
       expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([204, 404]);
     });
 
+    it('never touches a group deleted at the same time', async () => {
+      for (let i = 0; i < 5; i++) {
+        const id = await group('A', `Delete race ${i}`, ['Student1']);
+        const past = new Date(Date.now() - 60_000);
+        const [removed, deleted] = await Promise.all([
+          remove(ids.AdminA, id, ids.Student1),
+          http().delete(`/groups/${id}`).set('Authorization', await bearer(ids.AdminA)),
+        ]);
+        expect(deleted.status).toBe(204);
+        expect([204, 404]).toContain(removed.status);
+        const row = await prisma.group.findUniqueOrThrow({ where: { id } });
+        // The deletion is the last write: updated_at is its date, not a later member removal.
+        expect(row.updatedAt.getTime()).toBe(row.deletedAt!.getTime());
+        expect(row.updatedAt.getTime()).toBeGreaterThan(past.getTime());
+      }
+    });
+
     it('answers 404 for an unknown or deleted group', async () => {
       check(await remove(platformAdminId, '00000000-0000-4000-8000-000000000000', ids.Student1), 404);
       const deleted = await group('A', 'Deleted', ['Student1']);

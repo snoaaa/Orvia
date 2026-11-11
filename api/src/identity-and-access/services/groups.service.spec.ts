@@ -354,6 +354,7 @@ describe('GroupsService', () => {
     beforeEach(() => {
       prisma.group.findFirst.mockResolvedValue(existing());
       prisma.groupMember.deleteMany.mockResolvedValue({ count: 1 });
+      prisma.$queryRaw.mockResolvedValue([{ id: 'g1' }]);
       prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => Promise<unknown>) => run(prisma));
     });
 
@@ -371,6 +372,13 @@ describe('GroupsService', () => {
       await service.removeMember('g1', 'u1', admin);
       expect(prisma.$queryRaw.mock.calls[0][1]).toBe('g1');
       expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.groupMember.deleteMany.mock.invocationCallOrder[0]);
+    });
+
+    it('answers 404 when the group was deleted after it was loaded, removing nothing', async () => {
+      prisma.$queryRaw.mockResolvedValue([]);
+      await expect(service.removeMember('g1', 'u1', admin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.groupMember.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.group.update).not.toHaveBeenCalled();
     });
 
     it('answers 404 with a clear message for a non-member, changing nothing else', async () => {
