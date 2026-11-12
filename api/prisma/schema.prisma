@@ -78,6 +78,7 @@ model Group {
   type      String        @default("class")
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
+  deletedAt DateTime?     @map("deleted_at")
 
   school         School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   members        GroupMember[]
@@ -86,6 +87,7 @@ model Group {
 
   @@unique([schoolId, name])
   @@index([schoolId])
+  @@index([schoolId, deletedAt])
   @@map("groups")
 }
 

@@ -349,6 +349,20 @@ school, or viewing / updating one of its groups, is 403.
 A name used by another group of the school → 409, deactivated school → 400. `updated_at` changes
 only when a value really changes.
 
+### Delete a group: `DELETE /groups/{id}` (#35, `groups:delete`)
+
+Soft delete, answered with 204. In one transaction:
+
+- the group keeps its row with `deleted_at`, and its name gets a ` [deleted <date>]` suffix so a new group
+  can take the name;
+- its `group_members` rows and the `document_access` rows it granted are deleted;
+- `user_assignments` pointing to it lose the group but keep their school role.
+
+Deleted groups are hidden everywhere: `GET /groups` skips them, and `GET` / `PATCH` / `DELETE /groups/{id}`
+and `GET /users?groupId=` answer 404. Deactivated school → 400. After pulling, run `npx prisma generate`
+then `npm run db:migrate` (migration `8_groups_soft_delete`); without the first, the API fails with
+`Unknown argument deletedAt`. `updated_at` is set to the deletion date, so the mobile delta sync sees it.
+
 > Content managers got `groups:read` in #34: re-run `npm run seed` on existing databases (safe to repeat).
 
 ## Audit trail
