@@ -123,6 +123,7 @@ export const ROLE_PERMISSIONS_MATRIX: Record<string, string[]> = {
     'metrics:view',
   ],
   CONTENT_MANAGER: [
+    'groups:read',
     'spaces:create',
     'spaces:read',
     'spaces:update',

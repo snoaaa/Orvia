@@ -1,51 +1,22 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateGroupDto } from '../dto/index.js';
-import { GroupEntity } from '../entities/index.js';
+import { CreateGroupDto, ListGroupsQueryDto, UpdateGroupDto } from '../dto/index.js';
+import { GroupDetailEntity, GroupEntity, PaginatedGroupsEntity } from '../entities/index.js';
 import { GroupsService } from '../services/groups.service.js';
 
-/** Groups of a school: platform admins act on every school, school admins on their own only. */
+/**
+ * Groups of a school: platform admins act on every school, school admins on their own only.
+ * Content managers can list and view the groups of their school, not change them.
+ */
 @ApiTags('Groups')
 @ApiBearerAuth('bearer-jwt')
 @ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })
-@ApiResponse({ status: 403, description: 'Missing permission (only platform and school admins) or another school' })
+@ApiResponse({ status: 403, description: 'Missing permission or another school' })
 @Controller('groups')
 export class GroupsController {
   constructor(private readonly groupsService: GroupsService) {}
-
-  @Get()
-  @RequirePermission('groups:read')
-  @ApiOperation({
-    summary: 'List groups of your school(s) (§4.5, §4.7, #89)',
-    description: 'School admins only get groups belonging to their assigned schools.',
-  })
-  @ApiQuery({ name: 'schoolId', required: false, description: 'Filter groups by school UUID' })
-  @ApiResponse({ status: 200, description: 'List of groups', type: [GroupEntity] })
-  async getGroups(
-    @Query('schoolId') schoolId: string | undefined,
-    @CurrentUser() actor: AuthenticatedUser,
-  ): Promise<GroupEntity[]> {
-    return this.groupsService.findAllGroups(actor, schoolId);
-  }
-
-  @Get(':id')
-  @RequirePermission('groups:read')
-  @ApiOperation({
-    summary: 'Get group by ID (scoped to school) (§4.5, §4.7, #89)',
-    description: 'Retrieves a single group. Throws 403 if belonging to another school.',
-  })
-  @ApiParam({ name: 'id', description: 'Group UUID' })
-  @ApiResponse({ status: 200, description: 'The group', type: GroupEntity })
-  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks access to this school' })
-  @ApiResponse({ status: 404, description: 'Group not found' })
-  async getGroupById(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() actor: AuthenticatedUser,
-  ): Promise<GroupEntity> {
-    return this.groupsService.findGroupById(id, actor);
-  }
 
   @Post()
   @RequirePermission('groups:create')
@@ -61,5 +32,56 @@ export class GroupsController {
   @ApiResponse({ status: 409, description: 'A group with this name already exists in the school' })
   async createGroup(@Body() dto: CreateGroupDto, @CurrentUser() actor: AuthenticatedUser): Promise<GroupEntity> {
     return this.groupsService.createGroup(dto, actor);
+  }
+
+  @Get()
+  @RequirePermission('groups:read')
+  @ApiOperation({
+    summary: 'List groups with filters and pagination',
+    description:
+      'Filter by school, type and part of the name. Platform admins see every school; school admins and content ' +
+      'managers only their own (filtering on another school returns 403). Each group carries its member count.',
+  })
+  @ApiResponse({ status: 200, description: 'One page of groups', type: PaginatedGroupsEntity })
+  @ApiResponse({ status: 400, description: 'Invalid query parameter' })
+  async listGroups(
+    @Query() query: ListGroupsQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedGroupsEntity> {
+    return this.groupsService.listGroups(actor, query);
+  }
+
+  @Get(':id')
+  @RequirePermission('groups:read')
+  @ApiOperation({ summary: 'View a group with its member count' })
+  @ApiParam({ name: 'id', description: 'Group UUID' })
+  @ApiResponse({ status: 200, description: 'The group', type: GroupDetailEntity })
+  @ApiResponse({ status: 400, description: 'id is not a valid UUID' })
+  @ApiResponse({ status: 404, description: 'Group not found' })
+  async getGroup(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<GroupDetailEntity> {
+    return this.groupsService.getGroup(id, actor);
+  }
+
+  @Patch(':id')
+  @RequirePermission('groups:update')
+  @ApiOperation({
+    summary: "Update a group's name or type",
+    description:
+      'The name stays unique within the school. The school cannot be changed. Content managers cannot update groups.',
+  })
+  @ApiParam({ name: 'id', description: 'Group UUID' })
+  @ApiResponse({ status: 200, description: 'The updated group', type: GroupDetailEntity })
+  @ApiResponse({ status: 400, description: 'Invalid id or body, nothing to update, or deactivated school' })
+  @ApiResponse({ status: 404, description: 'Group not found' })
+  @ApiResponse({ status: 409, description: 'A group with this name already exists in the school' })
+  async updateGroup(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateGroupDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<GroupDetailEntity> {
+    return this.groupsService.updateGroup(id, dto, actor);
   }
 }

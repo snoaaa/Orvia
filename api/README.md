@@ -331,6 +331,26 @@ Body: `schoolId`, `name` and optionally `type` (`class` by default, `department`
 unique within a school, ignoring case (409), enforced by a database index. Another school → 403,
 unknown school → 404, deactivated school → 400.
 
+### List, view and update groups (#34)
+
+| Endpoint | Permission | Who |
+|---|---|---|
+| `GET /groups` | `groups:read` | Platform admins, school admins and content managers (own school) |
+| `GET /groups/{id}` | `groups:read` | Same |
+| `PATCH /groups/{id}` | `groups:update` | Platform admins and school admins (own school) |
+
+`GET /groups` filters on `schoolId`, `type` and `search` (part of the name), pages with `page` / `limit`
+(default 1 and 10, `limit` at most 100) and sorts with `sortBy` (`createdAt`, `name`, `type`) and
+`sortOrder` (newest first for `createdAt`, A–Z otherwise). Answer: `{ data, total, page, limit, totalPages }`.
+Each group carries its `schoolName` and `memberCount` (rows of `group_members`). Filtering on another
+school, or viewing / updating one of its groups, is 403.
+
+`PATCH /groups/{id}` takes `name` and/or `type` (at least one, otherwise 400); the school cannot change.
+A name used by another group of the school → 409, deactivated school → 400. `updated_at` changes
+only when a value really changes.
+
+> Content managers got `groups:read` in #34: re-run `npm run seed` on existing databases (safe to repeat).
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of

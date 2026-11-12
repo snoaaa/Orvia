@@ -460,32 +460,37 @@ describe('Portal Endpoints Role and School Scoping (§4.5, §4.7, #89)', () => {
     describe('Groups Scoping (GroupsService)', () => {
       it('scopes group listing to caller school at query level', async () => {
         const mockPrisma = {
-          group: { findMany: vi.fn().mockResolvedValue([]) },
+          group: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
         };
         const service = new GroupsService(mockPrisma as any);
 
-        await service.findAllGroups(school1Admin);
+        await service.listGroups(school1Admin);
         expect(mockPrisma.group.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { schoolId: { in: ['school-1'] } },
+            where: expect.objectContaining({ schoolId: { in: ['school-1'] } }),
           }),
         );
       });
 
       it('throws 403 Forbidden when school admin queries another school group', async () => {
+        const foreignGroup = {
+          id: 'group-s2',
+          schoolId: 'school-2',
+          name: 'Foreign Group',
+          type: 'class',
+          school: { name: 'School Two', status: 'active' },
+          _count: { members: 0 },
+        };
         const mockPrisma = {
           group: {
-            findUnique: vi.fn().mockResolvedValue({
-              id: 'group-s2',
-              schoolId: 'school-2',
-              name: 'Foreign Group',
-            }),
+            findUnique: vi.fn().mockResolvedValue(foreignGroup),
+            findFirst: vi.fn().mockResolvedValue(foreignGroup),
           },
         };
         const service = new GroupsService(mockPrisma as any);
 
         await expect(
-          service.findGroupById('group-s2', school1Admin),
+          service.getGroup('group-s2', school1Admin),
         ).rejects.toBeInstanceOf(ForbiddenException);
       });
     });

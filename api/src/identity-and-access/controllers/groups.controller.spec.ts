@@ -31,8 +31,8 @@ describe('GroupsController (#89)', () => {
   beforeEach(() => {
     mockGroupsService = {
       createGroup: vi.fn(),
-      findAllGroups: vi.fn(),
-      findGroupById: vi.fn(),
+      listGroups: vi.fn(),
+      getGroup: vi.fn(),
     };
     controller = new GroupsController(mockGroupsService as unknown as GroupsService);
   });
@@ -46,19 +46,20 @@ describe('GroupsController (#89)', () => {
     expect(result.id).toBe('group-1');
   });
 
-  it('delegates getGroups to groupsService.findAllGroups with optional schoolId', async () => {
-    mockGroupsService.findAllGroups.mockResolvedValueOnce([{ id: 'group-1', name: 'Class 10-A' }]);
+  it('delegates listGroups to groupsService.listGroups with the query', async () => {
+    const page = { data: [{ id: 'group-1', name: 'Class 10-A' }], total: 1, page: 1, limit: 10, totalPages: 1 };
+    mockGroupsService.listGroups.mockResolvedValueOnce(page);
 
-    const result = await controller.getGroups('school-a', mockActor);
-    expect(mockGroupsService.findAllGroups).toHaveBeenCalledWith(mockActor, 'school-a');
-    expect(result).toHaveLength(1);
+    const result = await controller.listGroups({ schoolId: 'school-a' }, mockActor);
+    expect(mockGroupsService.listGroups).toHaveBeenCalledWith(mockActor, { schoolId: 'school-a' });
+    expect(result.data).toHaveLength(1);
   });
 
-  it('delegates getGroupById to groupsService.findGroupById', async () => {
-    mockGroupsService.findGroupById.mockResolvedValueOnce({ id: 'group-1', name: 'Class 10-A' });
+  it('delegates getGroup to groupsService.getGroup', async () => {
+    mockGroupsService.getGroup.mockResolvedValueOnce({ id: 'group-1', name: 'Class 10-A' });
 
-    const result = await controller.getGroupById('group-1', mockActor);
-    expect(mockGroupsService.findGroupById).toHaveBeenCalledWith('group-1', mockActor);
+    const result = await controller.getGroup('group-1', mockActor);
+    expect(mockGroupsService.getGroup).toHaveBeenCalledWith('group-1', mockActor);
     expect(result.id).toBe('group-1');
   });
 });
