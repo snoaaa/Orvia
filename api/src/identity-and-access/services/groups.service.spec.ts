@@ -336,4 +336,66 @@ describe('GroupsService', () => {
       expect(prisma.user.findMany).not.toHaveBeenCalled();
     });
   });
+
+  describe('removeMember', () => {
+    const existing = (overrides: Record<string, unknown> = {}) => ({
+      id: 'g1',
+      schoolId: 'school-a',
+      name: 'Class 4-A',
+      type: 'class',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      school: { name: 'School A', status: 'active' },
+      _count: { members: 1 },
+      ...overrides,
+    });
+    const admin = actor('school', ['groups:manage_members']);
+
+    beforeEach(() => {
+      prisma.group.findFirst.mockResolvedValue(existing());
+      prisma.groupMember.deleteMany.mockResolvedValue({ count: 1 });
+      prisma.$queryRaw.mockResolvedValue([{ id: 'g1' }]);
+      prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => Promise<unknown>) => run(prisma));
+    });
+
+    it('removes the membership, clears the group on the assignments and touches the group', async () => {
+      await service.removeMember('g1', 'u1', admin);
+      expect(prisma.groupMember.deleteMany).toHaveBeenCalledWith({ where: { groupId: 'g1', userId: 'u1' } });
+      expect(prisma.userAssignment.updateMany).toHaveBeenCalledWith({
+        where: { groupId: 'g1', userId: 'u1' },
+        data: { groupId: null },
+      });
+      expect(prisma.group.update.mock.calls[0][0].where).toEqual({ id: 'g1' });
+    });
+
+    it('locks the group row before removing the membership', async () => {
+      await service.removeMember('g1', 'u1', admin);
+      expect(prisma.$queryRaw.mock.calls[0][1]).toBe('g1');
+      expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.groupMember.deleteMany.mock.invocationCallOrder[0]);
+    });
+
+    it('answers 404 when the group was deleted after it was loaded, removing nothing', async () => {
+      prisma.$queryRaw.mockResolvedValue([]);
+      await expect(service.removeMember('g1', 'u1', admin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.groupMember.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.group.update).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 with a clear message for a non-member, changing nothing else', async () => {
+      prisma.groupMember.deleteMany.mockResolvedValue({ count: 0 });
+      await expect(service.removeMember('g1', 'u1', admin)).rejects.toThrow('User u1 is not a member of this group');
+      expect(prisma.userAssignment.updateMany).not.toHaveBeenCalled();
+      expect(prisma.group.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects another school, a deactivated school and an unknown group', async () => {
+      prisma.group.findFirst.mockResolvedValueOnce(existing({ schoolId: 'school-b' }));
+      await expect(service.removeMember('g1', 'u1', admin)).rejects.toBeInstanceOf(ForbiddenException);
+      prisma.group.findFirst.mockResolvedValueOnce(existing({ school: { name: 'School A', status: 'deactivated' } }));
+      await expect(service.removeMember('g1', 'u1', admin)).rejects.toBeInstanceOf(BadRequestException);
+      prisma.group.findFirst.mockResolvedValueOnce(null);
+      await expect(service.removeMember('g1', 'u1', admin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
 });
