@@ -17,6 +17,7 @@ import {
   PaginatedSchoolsEntity,
   PaginatedUsersEntity,
   PermissionHolderEntity,
+  PermissionEntity,
   PermissionOverviewEntity,
   RoleEntity,
   SchoolEntity,
@@ -1316,6 +1317,20 @@ export class IdentityAndAccessService {
       success: true,
       message: `Role '${role.name}' was successfully deleted`,
     };
+  }
+
+  /**
+   * GET /permissions: the permission catalogue, sorted by category then code. Platform admins only:
+   * the guard checks system:manage, and this also refuses a school-scoped role that would hold it.
+   */
+  async listPermissions(actor: AuthenticatedUser): Promise<PermissionEntity[]> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may list permissions');
+    }
+    const rows = await this.prisma.permission.findMany({ select: { code: true, description: true } });
+    return rows
+      .map((p) => new PermissionEntity({ code: p.code, description: p.description, category: p.code.split(':')[0] }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
   }
 
   /**
