@@ -127,7 +127,9 @@ describe('Group deletion (e2e)', () => {
 
     it('removes the document access it granted, and only that', async () => {
       const rows = await prisma.documentAccess.findMany({ where: { documentId } });
-      expect(rows.map((r) => r.groupId ?? r.schoolId).sort()).toEqual([otherId, schools.A].sort());
+      expect(rows.map((r) => r.groupId ?? r.schoolId).sort((a, b) => a.localeCompare(b))).toEqual(
+        [otherId, schools.A].sort((a, b) => a.localeCompare(b)),
+      );
     });
 
     it('members keep their school role without the group', async () => {
