@@ -2,8 +2,8 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPi
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateGroupDto, ListGroupsQueryDto, UpdateGroupDto } from '../dto/index.js';
-import { GroupDetailEntity, GroupEntity, PaginatedGroupsEntity } from '../entities/index.js';
+import { AddGroupMembersDto, CreateGroupDto, ListGroupsQueryDto, UpdateGroupDto } from '../dto/index.js';
+import { AddGroupMembersResultEntity, GroupDetailEntity, GroupEntity, PaginatedGroupsEntity } from '../entities/index.js';
 import { GroupsService } from '../services/groups.service.js';
 
 /**
@@ -100,5 +100,26 @@ export class GroupsController {
   @ApiResponse({ status: 404, description: 'Group not found or already deleted' })
   async deleteGroup(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: AuthenticatedUser): Promise<void> {
     await this.groupsService.deleteGroup(id, actor);
+  }
+
+  @Post(':id/members')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('groups:manage_members')
+  @ApiOperation({
+    summary: 'Add members to a group',
+    description:
+      "All or nothing: every user must belong to the group's school, otherwise nobody is added (400 listing them). " +
+      'Users already in the group are skipped and reported in alreadyMembers.',
+  })
+  @ApiParam({ name: 'id', description: 'Group UUID' })
+  @ApiResponse({ status: 200, description: 'Members added', type: AddGroupMembersResultEntity })
+  @ApiResponse({ status: 400, description: "Invalid id or body, a user outside the group's school, or deactivated school" })
+  @ApiResponse({ status: 404, description: 'Group not found or deleted' })
+  async addMembers(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AddGroupMembersDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<AddGroupMembersResultEntity> {
+    return this.groupsService.addMembers(id, dto, actor);
   }
 }

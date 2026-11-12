@@ -3,6 +3,7 @@ export * from './update-role.dto.js';
 export * from './create-school.dto.js';
 export * from './create-group.dto.js';
 export * from './update-group.dto.js';
+export * from './add-group-members.dto.js';
 export * from './list-groups-query.dto.js';
 export * from './update-school.dto.js';
 export * from './list-schools-query.dto.js';
