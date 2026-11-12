@@ -9,9 +9,9 @@ const SCOPE_LEVELS: Readonly<Record<string, number>> = {
   group: 1,
 };
 
-/** Level of one role scope; an unknown scope ranks lowest (0). */
-export function roleScopeLevel(scope: string): number {
-  return SCOPE_LEVELS[scope] ?? 0;
+/** Level of one role scope, case-insensitive; an unknown, empty or missing scope ranks lowest (0). */
+export function roleScopeLevel(scope: string | null | undefined): number {
+  return SCOPE_LEVELS[scope?.toLowerCase() ?? ''] ?? 0;
 }
 
 /** Highest level among `scopes`; 0 when there are none. */

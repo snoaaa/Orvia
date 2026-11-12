@@ -11,6 +11,19 @@ describe('role level', () => {
     expect(roleScopeLevel('custom')).toBe(0);
   });
 
+  it('ignores the case of the scope', () => {
+    expect(roleScopeLevel('PLATFORM')).toBe(roleScopeLevel('platform'));
+    expect(roleScopeLevel('Platform')).toBe(roleScopeLevel('platform'));
+    expect(roleScopeLevel('School')).toBe(roleScopeLevel('school'));
+    expect(highestRoleLevel(['group', 'PLATFORM'])).toBe(roleScopeLevel('platform'));
+  });
+
+  it('ranks an undefined, null or empty scope lowest', () => {
+    expect(roleScopeLevel(undefined)).toBe(0);
+    expect(roleScopeLevel(null)).toBe(0);
+    expect(roleScopeLevel('')).toBe(0);
+  });
+
   it('takes the highest level of several roles', () => {
     expect(highestRoleLevel(['group', 'platform', 'school'])).toBe(roleScopeLevel('platform'));
     expect(highestRoleLevel(['group', 'school'])).toBe(roleScopeLevel('school'));
