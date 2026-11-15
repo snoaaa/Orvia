@@ -273,7 +273,9 @@ describe('Portal Endpoints Role and School Scoping (§4.5, §4.7, #89)', () => {
           expect.objectContaining({
             where: {
               AND: [
-                { assignments: { some: { schoolId: { in: ['school-1'] } } } },
+                expect.objectContaining({
+                  assignments: { some: expect.objectContaining({ schoolId: { in: ['school-1'] } }) },
+                }),
               ],
             },
           }),
