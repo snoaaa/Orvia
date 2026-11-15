@@ -180,6 +180,21 @@ describe('IdentityAndAccessService - suspend a user (#41)', () => {
           status: 'SUSPENDED',
         });
       });
+
+      it('a platform admin ranks at platform level even when their assignments alone rank lower', async () => {
+        // isPlatformAdmin is set, but the only assignment carrying users:suspend is school-scoped:
+        // without the fallback the actor would rank at school level and be refused.
+        const flaggedAdmin: AuthenticatedUser = {
+          ...actorWith('flagged-admin', adminRole('school', 'A')),
+          isPlatformAdmin: true,
+        };
+        givenUser(userRow('other-platform-admin', [['A', 'platform']]));
+        prisma.user.update.mockResolvedValue({ ...userRow('other-platform-admin', []), status: 'SUSPENDED' });
+
+        await expect(service.suspendUser('other-platform-admin', flaggedAdmin)).resolves.toMatchObject({
+          status: 'SUSPENDED',
+        });
+      });
     });
   });
 

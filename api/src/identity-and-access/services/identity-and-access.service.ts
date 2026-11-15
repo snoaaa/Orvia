@@ -10,7 +10,7 @@ import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
-import { highestRoleLevel } from '../../auth/utils/role-level.util.js';
+import { highestRoleLevel, roleScopeLevel } from '../../auth/utils/role-level.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto, UpdateUserProfileDto } from '../dto/index.js';
@@ -263,9 +263,12 @@ export class IdentityAndAccessService {
       }
     }
 
-    const actorLevel = highestRoleLevel(
-      actor.assignments.filter((a) => a.permissions.includes('users:suspend')).map((a) => a.scope),
-    );
+    // A platform admin always acts at platform level, whatever shape their assignments have.
+    const actorLevel = actor.isPlatformAdmin
+      ? roleScopeLevel('platform')
+      : highestRoleLevel(
+          actor.assignments.filter((a) => a.permissions.includes('users:suspend')).map((a) => a.scope),
+        );
     const targetLevel = highestRoleLevel(target.assignments.map((a) => a.role.scope));
     if (targetLevel > actorLevel) {
       throw new ForbiddenException(`You cannot ${action} a user with a higher-level role`);
