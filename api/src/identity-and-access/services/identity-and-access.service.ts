@@ -290,9 +290,18 @@ export class IdentityAndAccessService {
   }
 
   /**
-   * PATCH /users/:id/reactivate (#42): sets a SUSPENDED user back to ACTIVE so they can sign in again.
+   * Status a SUSPENDED user gets back. A user suspended before finishing the invitation (no password
+   * set and no Google account linked) returns to INVITED, so the invitation flow is not skipped.
+   */
+  private statusAfterReactivation(user: Pick<User, 'passwordHash' | 'googleSub'>): UserStatus {
+    return !user.passwordHash && !user.googleSub ? 'INVITED' : 'ACTIVE';
+  }
+
+  /**
+   * PATCH /users/:id/reactivate (#42): lifts the suspension so the user can sign in again. The user goes
+   * back to ACTIVE, or to INVITED when they never finished the invitation (see statusAfterReactivation).
    * Sessions revoked by the suspension stay revoked: the user signs in again to get new ones.
-   * Idempotent for an ACTIVE user; an INVITED user is refused (409), so the invitation flow is not skipped.
+   * Idempotent for an ACTIVE user; a user who is currently INVITED is refused (409).
    */
   async reactivateUser(
     id: string,
@@ -308,7 +317,7 @@ export class IdentityAndAccessService {
     const user =
       target.status === 'ACTIVE'
         ? target
-        : await this.prisma.user.update({ where: { id }, data: { status: 'ACTIVE' } });
+        : await this.prisma.user.update({ where: { id }, data: { status: this.statusAfterReactivation(target) } });
     return UserMapper.toEntity(user);
   }
 
@@ -594,10 +603,15 @@ export class IdentityAndAccessService {
       }
     }
 
+    // Lifting a suspension follows PATCH /users/:id/reactivate: back to INVITED if the invitation was never finished.
+    const status =
+      dto.status?.toUpperCase() === 'ACTIVE' && target.status === 'SUSPENDED'
+        ? this.statusAfterReactivation(target)
+        : (dto.status?.toUpperCase() as UserStatus | undefined);
     const data: Prisma.UserUpdateInput = {
       ...(dto.email && { email: dto.email.trim().toLowerCase() }),
       ...(dto.fullName && { fullName: dto.fullName.trim() }),
-      ...(dto.status && !suspending && { status: dto.status.toUpperCase() as UserStatus }),
+      ...(status && !suspending && { status }),
     };
     const updated = Object.keys(data).length > 0 ? await this.prisma.user.update({ where: { id }, data }) : target;
     return suspending ? this.applySuspension(updated, actor, auditContext) : UserMapper.toEntity(updated);

@@ -172,13 +172,19 @@ export class UsersController {
   @ApiOperation({
     summary: 'Reactivate a suspended user (Section 4.6)',
     description:
-      'Sets a SUSPENDED user back to ACTIVE so they can sign in again. Sessions revoked by the suspension stay ' +
+      'Lifts the suspension so the user can sign in again: the status goes back to ACTIVE, or to INVITED when the ' +
+      'user was suspended before finishing the invitation (no password set and no Google account linked), so a ' +
+      'setup token that is still valid works again. Sessions revoked by the suspension stay ' +
       'revoked. Same rules as suspension: platform admins act on any user; school admins only on users whose ' +
       'schools are all theirs, never on a higher-level (platform) role, and never on themselves. Idempotent for an ' +
-      'ACTIVE user. An INVITED user cannot be reactivated (409).',
+      'ACTIVE user. A user who is currently INVITED cannot be reactivated (409).',
   })
   @ApiParam({ name: 'id', description: 'User UUID' })
-  @ApiResponse({ status: 200, description: 'The reactivated user', type: UserEntity })
+  @ApiResponse({
+    status: 200,
+    description: 'The reactivated user: ACTIVE, or INVITED if they never finished the invitation',
+    type: UserEntity,
+  })
   @ApiResponse({ status: 400, description: 'id is not a valid UUID' })
   @ApiResponse({
     status: 403,

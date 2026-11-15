@@ -261,10 +261,21 @@ describe('IdentityAndAccessService - suspend (#41) and reactivate (#42) a user',
       expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
       expect(result.status).toBe('ACTIVE');
     });
+
+    it('status ACTIVE sets a user suspended before finishing the invitation back to INVITED', async () => {
+      const row = { ...userRow('invited-a', [['A', 'group']], 'SUSPENDED'), passwordHash: null, googleSub: null };
+      givenUser(row as never);
+      prisma.user.update.mockResolvedValue({ ...row, status: 'INVITED' });
+
+      const result = await service.updateUser('invited-a', { status: 'ACTIVE' }, adminA);
+
+      expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'invited-a' }, data: { status: 'INVITED' } });
+      expect(result.status).toBe('INVITED');
+    });
   });
 
   describe('reactivateUser', () => {
-    it('sets a suspended user back to ACTIVE and leaves the sessions alone', async () => {
+    it('sets a suspended user with a password back to ACTIVE and leaves the sessions alone', async () => {
       const row = userRow('student-a', [['A', 'group']], 'SUSPENDED');
       givenUser(row);
       prisma.user.update.mockResolvedValue({ ...row, status: 'ACTIVE' });
@@ -275,6 +286,27 @@ describe('IdentityAndAccessService - suspend (#41) and reactivate (#42) a user',
       expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
       expect(result.status).toBe('ACTIVE');
       expect(result).not.toHaveProperty('passwordHash');
+    });
+
+    it('sets a user suspended before finishing the invitation (no password, no Google account) back to INVITED', async () => {
+      const row = { ...userRow('invited-a', [['A', 'group']], 'SUSPENDED'), passwordHash: null, googleSub: null };
+      givenUser(row as never);
+      prisma.user.update.mockResolvedValue({ ...row, status: 'INVITED' });
+
+      const result = await service.reactivateUser('invited-a', adminA);
+
+      expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'invited-a' }, data: { status: 'INVITED' } });
+      expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+      expect(result.status).toBe('INVITED');
+    });
+
+    it('sets a suspended user with a linked Google account but no password back to ACTIVE', async () => {
+      const row = { ...userRow('student-a', [['A', 'group']], 'SUSPENDED'), passwordHash: null, googleSub: 'google-sub' };
+      givenUser(row as never);
+      prisma.user.update.mockResolvedValue({ ...row, status: 'ACTIVE' });
+
+      await expect(service.reactivateUser('student-a', adminA)).resolves.toMatchObject({ status: 'ACTIVE' });
+      expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'student-a' }, data: { status: 'ACTIVE' } });
     });
 
     it('is idempotent for an ACTIVE user', async () => {

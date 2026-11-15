@@ -31,9 +31,14 @@ describe('User reactivation (e2e)', () => {
     http().patch(`/users/${id}/reactivate`).set('Authorization', await bearer(as));
   const legacyReactivate = async (as: string, id: string) =>
     http().patch(`/identity/users/${id}`).set('Authorization', await bearer(as)).send({ status: 'ACTIVE' });
-  /** A user suspended in the database, as #41 leaves them. */
-  async function suspended(key: string, assignments: Assignment[], data: { email?: string; passwordHash?: string } = {}) {
-    const id = await user(key, assignments, data);
+  type UserData = { email?: string; passwordHash?: string; googleSub?: string };
+  /**
+   * A user suspended in the database, as #41 leaves them. Unless a password is given they have a linked
+   * Google account: they finished the invitation, so reactivating them gives ACTIVE.
+   */
+  async function suspended(key: string, assignments: Assignment[], data: UserData = {}) {
+    const googleSub = data.googleSub ?? (data.passwordHash ? undefined : `sub-${key.toLowerCase()}-${stamp}`);
+    const id = await user(key, assignments, { ...data, googleSub });
     await prisma.user.update({ where: { id }, data: { status: 'SUSPENDED' } });
     return id;
   }
@@ -44,9 +49,15 @@ describe('User reactivation (e2e)', () => {
   };
   const statusOf = async (id: string) => (await prisma.user.findUniqueOrThrow({ where: { id } })).status;
 
-  async function user(key: string, assignments: Assignment[], data: { email?: string; passwordHash?: string } = {}) {
+  async function user(key: string, assignments: Assignment[], data: UserData = {}) {
     const created = await prisma.user.create({
-      data: { email: data.email ?? mail(key), fullName: key, status: 'ACTIVE', passwordHash: data.passwordHash },
+      data: {
+        email: data.email ?? mail(key),
+        fullName: key,
+        status: 'ACTIVE',
+        passwordHash: data.passwordHash,
+        googleSub: data.googleSub,
+      },
     });
     for (const a of assignments) {
       const role = await prisma.role.findUniqueOrThrow({ where: { name: a.role } });
@@ -177,8 +188,49 @@ describe('User reactivation (e2e)', () => {
       expect(await statusOf(target)).toBe('INVITED');
     });
 
+    it('a suspended user with a password goes back to ACTIVE', async () => {
+      const passwordHash = await argon2.hash('Reactivate123!', { timeCost: 1, memoryCost: 1024, parallelism: 1 });
+      const target = await suspended('WithPassword', [{ school: 'A', role: 'SCHOOL_ADMIN' }], { passwordHash });
+      const res = check(await reactivate(platformAdminId, target), 200);
+      expect(res.body.status).toBe('ACTIVE');
+      expect(await statusOf(target)).toBe('ACTIVE');
+    });
+
+    it('an admin suspended before finishing the invitation goes back to INVITED, and the setup token still works', async () => {
+      const email = mail('InvitedAdmin');
+      const invite = check(
+        await http()
+          .post('/identity/users/invite')
+          .set('Authorization', await bearer(platformAdminId))
+          .send({ email, fullName: 'InvitedAdmin', schoolId: schools.A, role: 'SCHOOL_ADMIN' }),
+        201,
+      );
+      const target: string = invite.body.id;
+      const token: string = invite.body.setupToken;
+      const newPassword = 'InvitedAdmin123!';
+      expect(invite.body.status).toBe('INVITED');
+
+      check(await suspend(platformAdminId, target), 200);
+      check(await http().post('/auth/password/setup').send({ token, newPassword }), 403);
+
+      const res = check(await reactivate(platformAdminId, target), 200);
+      expect(res.body.status).toBe('INVITED');
+      expect(await statusOf(target)).toBe('INVITED');
+
+      check(await http().post('/auth/password/setup').send({ token, newPassword }), 200);
+      expect(await statusOf(target)).toBe('ACTIVE');
+      check(await http().post('/auth/admin/login').send({ email, password: newPassword }), 200);
+    });
+
+    it('the legacy PATCH /identity/users/:id also sets a never-activated suspended user back to INVITED', async () => {
+      const target = await user('LegacyNeverActivated', [{ school: 'A', role: 'STUDENT' }]);
+      await prisma.user.update({ where: { id: target }, data: { status: 'SUSPENDED' } });
+      const res = check(await legacyReactivate(ids.AdminA, target), 200);
+      expect(res.body.status).toBe('INVITED');
+    });
+
     it('the sessions revoked by the suspension stay revoked', async () => {
-      const target = await user('OldSession', [{ school: 'A', role: 'STUDENT' }]);
+      const target = await user('OldSession', [{ school: 'A', role: 'STUDENT' }], { googleSub: `sub-oldsession-${stamp}` });
       const pair = await sessions.createSession(target, SYSTEM_AUDIT_CONTEXT);
       check(await suspend(ids.AdminA, target), 200);
 
@@ -206,10 +258,11 @@ describe('User reactivation (e2e)', () => {
 
     it('with Google', async () => {
       const email = mail('Google', googleDomain);
-      const target = await suspended('Google', [{ school: 'A', role: 'STUDENT' }], { email });
+      const googleSub = `sub-reactivate-${stamp}`;
+      const target = await suspended('Google', [{ school: 'A', role: 'STUDENT' }], { email, googleSub });
       const idToken = `reactivate-google-${stamp}`;
       googleTokens.set(idToken, {
-        sub: `sub-reactivate-${stamp}`,
+        sub: googleSub,
         email,
         email_verified: true,
         iss: 'https://accounts.google.com',

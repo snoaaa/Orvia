@@ -320,6 +320,23 @@ user who also belongs to a school without domain restrictions passes. An email u
 is 409. School admins can only edit users of their own school(s) (403). `updated_at` changes only when
 a value really changes. The older `PATCH /identity/users/{id}` applies the same email checks.
 
+### Reactivate a user: `PATCH /users/{id}/reactivate` (#42, `users:suspend`)
+
+Lifts a suspension so the user can sign in again. No body.
+
+| User before | Result |
+|---|---|
+| `SUSPENDED`, with a password or a linked Google account | **200**, status `ACTIVE` |
+| `SUSPENDED`, with neither (suspended before finishing the invitation) | **200**, status `INVITED`: the invitation flow resumes, and a setup token that is still valid works again on `POST /auth/password/setup` |
+| `ACTIVE` | **200**, nothing changes (idempotent) |
+| `INVITED` | **409**: only a suspended user can be reactivated |
+
+Sessions revoked by the suspension stay revoked: the user signs in again to get new ones. Same rules
+as suspension: platform admins act on any user; school admins only on users whose schools are **all**
+theirs, never on a user with a higher-level (platform) role, and nobody on their own account (403).
+Invalid UUID → 400, unknown user → 404. The older `PATCH /identity/users/{id}` with `status: ACTIVE`
+applies the same rules, including the return to `INVITED`.
+
 ## Groups
 
 `src/identity-and-access/controllers/groups.controller.ts`, under the **Groups** tag in Swagger
