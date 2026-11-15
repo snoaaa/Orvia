@@ -37,6 +37,12 @@ describe('grantableRoleLevel', () => {
   it('is 0 without users:assign_role', () => {
     expect(grantableRoleLevel(actor({ scope: 'school', schoolId: 'a', permissions: ['users:read'] }))).toBe(0);
   });
+
+  it('always evaluates to platform level for platform administrators', () => {
+    const admin = { ...actor(), isPlatformAdmin: true } as AuthenticatedUser;
+    expect(grantableRoleLevel(admin)).toBe(3);
+    expect(grantableRoleLevel(admin, 'any-school')).toBe(3);
+  });
 });
 
 describe('assertCanGrantRole', () => {

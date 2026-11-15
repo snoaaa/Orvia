@@ -638,6 +638,7 @@ export class IdentityAndAccessService {
     actor: AuthenticatedUser,
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<UserEntity> {
+    const actorScope = schoolsWithPermission(actor, 'users:assign_role');
     assertSchoolAccess(actor, 'users:assign_role', dto.schoolId);
 
     const target = await this.prisma.user.findUnique({
@@ -646,13 +647,6 @@ export class IdentityAndAccessService {
     });
     if (!target) {
       throw new NotFoundException(`User with ID ${userId} not found`);
-    }
-
-    if (actorScope !== 'all') {
-      const targetInSchool = target.assignments.some((a) => a.schoolId === dto.schoolId);
-      if (!targetInSchool) {
-        throw new ForbiddenException('A school admin cannot grant permissions to a user outside their school');
-      }
     }
 
     const school = await this.prisma.school.findUnique({
@@ -672,6 +666,13 @@ export class IdentityAndAccessService {
       throw new BadRequestException(`Unknown role '${roleName}'`);
     }
     assertCanGrantRole(actor, role, dto.schoolId);
+
+    if (actorScope !== 'all' && target.assignments.length > 0) {
+      const targetInSchool = target.assignments.some((a) => a.schoolId === dto.schoolId);
+      if (!targetInSchool) {
+        throw new ForbiddenException('A school admin cannot grant permissions to a user outside their school');
+      }
+    }
 
     const roleGrantsDocManage =
       role.name === 'CONTENT_MANAGER' ||

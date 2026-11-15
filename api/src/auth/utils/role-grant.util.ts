@@ -12,6 +12,7 @@ export const ASSIGN_ROLE_PERMISSION = 'users:assign_role';
  * roles, or roles held in that school.
  */
 export function grantableRoleLevel(actor: AuthenticatedUser, schoolId?: string): number {
+  if (actor.isPlatformAdmin) return roleScopeLevel('platform');
   return highestRoleLevel(
     actor.assignments
       .filter((a) => a.permissions.includes(ASSIGN_ROLE_PERMISSION))
