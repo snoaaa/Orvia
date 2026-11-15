@@ -156,6 +156,8 @@ export const AuditEvents = {
       schoolId: string;
       role: string;
       previousRole?: string | null;
+      /** Group of the assignment (POST /assignments); left out of the details when not given. */
+      groupId?: string | null;
       assignedBy?: AuditActor | null;
     },
     context: AuditRequestContext,
@@ -168,6 +170,7 @@ export const AuditEvents = {
       details: {
         email: p.email.trim().toLowerCase(),
         schoolId: p.schoolId,
+        ...(p.groupId !== undefined ? { groupId: p.groupId } : {}),
         role: p.role,
         previousRole: p.previousRole ?? null,
       },

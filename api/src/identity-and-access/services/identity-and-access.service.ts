@@ -10,6 +10,7 @@ import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
+import { assertCanGrantRole } from '../../auth/utils/role-grant.util.js';
 import { highestRoleLevel, roleScopeLevel } from '../../auth/utils/role-level.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -624,7 +625,8 @@ export class IdentityAndAccessService {
    * Enforces:
    *  - `users:assign_role` in the target school (platform admins may act on any school).
    *  - The school and the role must exist (404 / 400).
-   *  - A platform-scoped role can only be granted by someone who assigns roles platform-wide (403).
+   *  - The role must be at or below the admin's own level in that school (403), via `assertCanGrantRole`,
+   *    the same check as POST /assignments: only a platform admin can grant a platform-scoped role.
    *  - Idempotent: re-assigning the role the user already holds changes nothing and records nothing.
    *  - Tamper-evident audit event `identity_access/role_assigned` with the previous role.
    *
@@ -637,9 +639,7 @@ export class IdentityAndAccessService {
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<UserEntity> {
     const actorScope = schoolsWithPermission(actor, 'users:assign_role');
-    if (actorScope !== 'all') {
-      assertSchoolAccess(actor, 'users:assign_role', dto.schoolId);
-    }
+    assertSchoolAccess(actor, 'users:assign_role', dto.schoolId);
 
     const target = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -647,13 +647,6 @@ export class IdentityAndAccessService {
     });
     if (!target) {
       throw new NotFoundException(`User with ID ${userId} not found`);
-    }
-
-    if (actorScope !== 'all') {
-      const targetInSchool = target.assignments.some((a) => a.schoolId === dto.schoolId);
-      if (!targetInSchool) {
-        throw new ForbiddenException('A school admin cannot grant permissions to a user outside their school');
-      }
     }
 
     const school = await this.prisma.school.findUnique({
@@ -672,8 +665,13 @@ export class IdentityAndAccessService {
     if (!role) {
       throw new BadRequestException(`Unknown role '${roleName}'`);
     }
-    if (role.scope === 'platform' && actorScope !== 'all') {
-      throw new ForbiddenException(`Only a platform administrator can assign the ${role.name} role`);
+    assertCanGrantRole(actor, role, dto.schoolId);
+
+    if (actorScope !== 'all' && target.assignments.length > 0) {
+      const targetInSchool = target.assignments.some((a) => a.schoolId === dto.schoolId);
+      if (!targetInSchool) {
+        throw new ForbiddenException('A school admin cannot grant permissions to a user outside their school');
+      }
     }
 
     const roleGrantsDocManage =
