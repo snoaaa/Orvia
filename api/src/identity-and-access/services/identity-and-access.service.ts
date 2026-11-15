@@ -294,7 +294,12 @@ export class IdentityAndAccessService {
    * Sessions revoked by the suspension stay revoked: the user signs in again to get new ones.
    * Idempotent for an ACTIVE user; an INVITED user is refused (409), so the invitation flow is not skipped.
    */
-  async reactivateUser(id: string, actor: AuthenticatedUser): Promise<UserEntity> {
+  async reactivateUser(
+    id: string,
+    actor: AuthenticatedUser,
+    // Unused for now: #51 will use it to record the reactivation audit event.
+    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
     const target = await this.findUserWithAssignments(id);
     this.assertCanChangeAccountStatus(target, actor, 'reactivate');
     if (target.status === 'INVITED') {

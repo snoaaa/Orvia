@@ -191,7 +191,8 @@ export class UsersController {
   async reactivateUser(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
   ): Promise<UserEntity> {
-    return this.identityService.reactivateUser(id, actor);
+    return this.identityService.reactivateUser(id, actor, auditContextFromRequest(req));
   }
 }
