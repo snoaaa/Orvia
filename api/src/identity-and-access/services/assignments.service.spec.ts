@@ -24,12 +24,13 @@ const ROLES: Record<string, { id: string; name: string; scope: string }> = {
 describe('AssignmentsService', () => {
   const tx = {
     $queryRaw: vi.fn(),
-    userAssignment: { findFirst: vi.fn(), create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    userAssignment: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), count: vi.fn() },
     groupMember: { upsert: vi.fn(), deleteMany: vi.fn() },
+    role: { count: vi.fn() },
   };
   const prisma = {
     user: { findUnique: vi.fn() },
-    userAssignment: { findUnique: vi.fn() },
+    userAssignment: { findFirst: vi.fn() },
     school: { findUnique: vi.fn() },
     role: { findUnique: vi.fn(), findMany: vi.fn() },
     group: { findUnique: vi.fn() },
@@ -175,6 +176,18 @@ describe('AssignmentsService', () => {
         tx.userAssignment.findFirst.mock.invocationCallOrder[0],
       );
     });
+
+    it('ignores removed assignments (#49): for the 409 check and for the user level', async () => {
+      await service.createAssignment(dto, actor('school'));
+      expect(tx.userAssignment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'user-1', schoolId: 'school-a', deletedAt: null } }),
+      );
+      expect(prisma.user.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({ assignments: expect.objectContaining({ where: { deletedAt: null } }) }),
+        }),
+      );
+    });
   });
 
   describe('updateAssignment', () => {
@@ -200,8 +213,8 @@ describe('AssignmentsService', () => {
       };
     };
     const arrange = (row: ReturnType<typeof existing>) => {
-      prisma.userAssignment.findUnique.mockResolvedValue(row);
-      tx.userAssignment.findUnique.mockResolvedValue({
+      prisma.userAssignment.findFirst.mockResolvedValue(row);
+      tx.userAssignment.findFirst.mockResolvedValue({
         groupId: row.groupId,
         updatedAt: row.updatedAt,
         role: { id: row.role.id, name: row.role.name },
@@ -279,7 +292,7 @@ describe('AssignmentsService', () => {
     });
 
     it('writes nothing when a concurrent request already made the change', async () => {
-      tx.userAssignment.findUnique.mockResolvedValue({ groupId: 'group-1', updatedAt: after, role: { id: 'r-staff', name: 'STAFF' } });
+      tx.userAssignment.findFirst.mockResolvedValue({ groupId: 'group-1', updatedAt: after, role: { id: 'r-staff', name: 'STAFF' } });
       const result = await service.updateAssignment('assignment-1', { role: 'STAFF' }, actor('school'));
       expect(result.updatedAt).toEqual(after);
       expect(tx.userAssignment.update).not.toHaveBeenCalled();
@@ -287,19 +300,19 @@ describe('AssignmentsService', () => {
     });
 
     it('takes the old group from the locked re-read, after the user row is locked', async () => {
-      tx.userAssignment.findUnique.mockResolvedValue({ groupId: 'group-9', updatedAt: before, role: { id: 'r-student', name: 'STUDENT' } });
+      tx.userAssignment.findFirst.mockResolvedValue({ groupId: 'group-9', updatedAt: before, role: { id: 'r-student', name: 'STUDENT' } });
       await service.updateAssignment('assignment-1', { groupId: 'group-2' }, actor('school'));
       expect(tx.groupMember.deleteMany).toHaveBeenCalledWith({ where: { groupId: 'group-9', userId: 'user-1' } });
-      expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.userAssignment.findUnique.mock.invocationCallOrder[0]);
+      expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.userAssignment.findFirst.mock.invocationCallOrder[0]);
     });
 
     it('rejects an empty body', async () => {
       await expect(service.updateAssignment('assignment-1', {}, actor('school'))).rejects.toBeInstanceOf(BadRequestException);
-      expect(prisma.userAssignment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.userAssignment.findFirst).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown assignment (404)', async () => {
-      prisma.userAssignment.findUnique.mockResolvedValue(null);
+      prisma.userAssignment.findFirst.mockResolvedValue(null);
       await expect(service.updateAssignment('nope', { role: 'STAFF' }, actor('platform'))).rejects.toBeInstanceOf(
         NotFoundException,
       );
@@ -359,6 +372,173 @@ describe('AssignmentsService', () => {
       await expect(
         service.updateAssignment('assignment-1', { role: 'PLATFORM_ADMIN', groupId: null }, actor('platform')),
       ).resolves.toMatchObject({ role: 'PLATFORM_ADMIN', groupId: null });
+    });
+
+    it('only finds active assignments: a removed one is 404 (#49)', async () => {
+      await service.updateAssignment('assignment-1', { role: 'STAFF' }, actor('school'));
+      expect(prisma.userAssignment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'assignment-1', deletedAt: null } }),
+      );
+      expect(tx.userAssignment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'assignment-1', deletedAt: null } }),
+      );
+    });
+  });
+
+  describe('removeAssignment', () => {
+    /** Active assignment of user-1 in school-a: STAFF in group-1 by default. */
+    const existing = (over: { role?: string; userScopes?: string[]; status?: string; schoolId?: string } = {}) => {
+      const role = ROLES[over.role ?? 'STAFF'];
+      return {
+        id: 'assignment-1',
+        user: {
+          id: 'user-1',
+          email: 'U@school.edu',
+          assignments: (over.userScopes ?? [role.scope]).map((scope) => ({ role: { scope } })),
+        },
+        school: { id: over.schoolId ?? 'school-a', status: over.status ?? 'active' },
+        role: { name: role.name, scope: role.scope },
+      };
+    };
+    /** Arranges the row read before and under the locks; `otherAdmins` = other non-suspended school admins. */
+    const arrange = (
+      row: ReturnType<typeof existing>,
+      locked: { userStatus?: string; isAdminRole?: boolean; otherAdmins?: number; stillInSchool?: number } = {},
+    ) => {
+      prisma.userAssignment.findFirst.mockResolvedValue(row);
+      tx.userAssignment.findFirst.mockResolvedValue({
+        roleId: ROLES[row.role.name].id,
+        groupId: 'group-1',
+        role: { name: row.role.name },
+        user: { status: locked.userStatus ?? 'ACTIVE' },
+      });
+      tx.role.count.mockResolvedValue(locked.isAdminRole ? 1 : 0);
+      tx.userAssignment.count.mockImplementation(({ where }) =>
+        Promise.resolve(where.role ? (locked.otherAdmins ?? 0) : (locked.stillInSchool ?? 0)),
+      );
+    };
+
+    beforeEach(() => arrange(existing()));
+
+    it('sets deletedAt, removes the school group memberships and records assignment_removed', async () => {
+      await expect(service.removeAssignment('assignment-1', actor('school'))).resolves.toBeUndefined();
+      expect(tx.userAssignment.update).toHaveBeenCalledWith({
+        where: { id: 'assignment-1' },
+        data: { deletedAt: expect.any(Date), updatedAt: expect.any(Date) },
+      });
+      const { data } = tx.userAssignment.update.mock.calls[0][0];
+      expect(data.updatedAt).toBe(data.deletedAt);
+      expect(tx.groupMember.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'user-1', group: { schoolId: 'school-a' } },
+      });
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'assignment_removed',
+          actor: expect.objectContaining({ userId: 'actor' }),
+          entity: { type: 'user', id: 'user-1' },
+          details: {
+            assignmentId: 'assignment-1',
+            email: 'u@school.edu',
+            schoolId: 'school-a',
+            role: 'STAFF',
+            groupId: 'group-1',
+          },
+        }),
+      );
+    });
+
+    it('locks the school row, then the user row, before re-reading the assignment', async () => {
+      await service.removeAssignment('assignment-1', actor('school'));
+      const [school, user] = tx.$queryRaw.mock.calls.map((call) => (call[0] as string[]).join('?'));
+      expect(school).toContain('FROM schools');
+      expect(user).toContain('FROM users');
+      expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.userAssignment.findFirst.mock.invocationCallOrder[0]);
+      expect(tx.userAssignment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'assignment-1', deletedAt: null } }),
+      );
+    });
+
+    it('keeps the group memberships if another active assignment remains in the school', async () => {
+      arrange(existing(), { stillInSchool: 1 });
+      await service.removeAssignment('assignment-1', actor('school'));
+      expect(tx.groupMember.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown or already removed assignment (404) and records nothing', async () => {
+      prisma.userAssignment.findFirst.mockResolvedValue(null);
+      await expect(service.removeAssignment('assignment-1', actor('platform'))).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.userAssignment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'assignment-1', deletedAt: null } }),
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('rejects an assignment removed by a concurrent request (404 from the locked re-read)', async () => {
+      tx.userAssignment.findFirst.mockResolvedValue(null);
+      await expect(service.removeAssignment('assignment-1', actor('platform'))).rejects.toBeInstanceOf(NotFoundException);
+      expect(tx.userAssignment.update).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another school', existing({ schoolId: 'school-b' })],
+      ['a role above the school admin level', existing({ role: 'PLATFORM_ADMIN' })],
+      ['a user who outranks the admin', existing({ userScopes: ['school', 'platform'] })],
+    ])('rejects %s (403) before writing', async (_label, row) => {
+      arrange(row);
+      await expect(service.removeAssignment('assignment-1', actor('school'))).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a deactivated school (400)', async () => {
+      arrange(existing({ status: 'deactivated' }));
+      await expect(service.removeAssignment('assignment-1', actor('platform'))).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects the last school admin of the school (409) and writes nothing', async () => {
+      arrange(existing({ role: 'SCHOOL_ADMIN' }), { isAdminRole: true, otherAdmins: 0 });
+      await expect(service.removeAssignment('assignment-1', actor('platform'))).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.userAssignment.count).toHaveBeenCalledWith({
+        where: {
+          deletedAt: null,
+          schoolId: 'school-a',
+          id: { not: 'assignment-1' },
+          role: { scope: 'school', rolePermissions: { some: { permission: { code: 'users:assign_role' } } } },
+          user: { status: { not: 'SUSPENDED' } },
+        },
+      });
+      expect(tx.userAssignment.update).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('removes a school admin when another non-suspended admin remains', async () => {
+      arrange(existing({ role: 'SCHOOL_ADMIN' }), { isAdminRole: true, otherAdmins: 1 });
+      await service.removeAssignment('assignment-1', actor('school'));
+      expect(tx.userAssignment.update).toHaveBeenCalled();
+    });
+
+    it('removes a suspended last admin: the school does not lose a working admin', async () => {
+      arrange(existing({ role: 'SCHOOL_ADMIN' }), { isAdminRole: true, otherAdmins: 0, userStatus: 'SUSPENDED' });
+      await service.removeAssignment('assignment-1', actor('platform'));
+      expect(tx.role.count).not.toHaveBeenCalled();
+      expect(tx.userAssignment.update).toHaveBeenCalled();
+    });
+
+    it('does not count admins for a non-admin role', async () => {
+      await service.removeAssignment('assignment-1', actor('school'));
+      expect(tx.role.count).toHaveBeenCalledWith({
+        where: {
+          id: 'r-staff',
+          scope: 'school',
+          rolePermissions: { some: { permission: { code: 'users:assign_role' } } },
+        },
+      });
+      expect(tx.userAssignment.count).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ role: expect.anything() }) }),
+      );
     });
   });
 

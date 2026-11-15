@@ -8,6 +8,7 @@ import { PrismaService } from '../../database/prisma.service.js';
 import { DomainValidationService } from '../../identity-and-access/services/domain-validation.service.js';
 import { hasAdminAccess, toClassifiableRoles } from '../utils/admin-role.util.js';
 import { SessionService, type TokenPair } from './session.service.js';
+import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
 
 /**
  * Payload extracted from a verified Google OpenID Connect ID token.
@@ -88,6 +89,7 @@ export class GoogleLoginService {
       where: { googleSub: payload.sub },
       include: {
         assignments: {
+          where: ACTIVE_ASSIGNMENT,
           include: {
             role: {
               select: {
@@ -108,6 +110,7 @@ export class GoogleLoginService {
         where: { email },
         include: {
           assignments: {
+            where: ACTIVE_ASSIGNMENT,
             include: {
               role: {
                 select: {
@@ -182,6 +185,7 @@ export class GoogleLoginService {
         },
         include: {
           assignments: {
+            where: ACTIVE_ASSIGNMENT,
             include: {
               role: { select: { name: true, scope: true } },
               school: { select: { id: true, name: true } },

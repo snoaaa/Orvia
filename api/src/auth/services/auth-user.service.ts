@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser, AuthRoleAssignment } from '../types/authenticated-user.js';
+import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
 
 /** Builds the AuthenticatedUser from the database: user, assignments, roles and permissions. */
 @Injectable()
@@ -12,6 +13,7 @@ export class AuthUserService {
       where: { id: userId },
       include: {
         assignments: {
+          where: ACTIVE_ASSIGNMENT,
           orderBy: { createdAt: 'asc' },
           include: {
             school: { select: { id: true, status: true } },

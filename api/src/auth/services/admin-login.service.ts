@@ -10,6 +10,7 @@ import type { AuditRequestContext } from '../../audit/utils/audit-request-contex
 import { PrismaService } from '../../database/prisma.service.js';
 import { hasAdminAccess, isAdminRole, toClassifiableRoles } from '../utils/admin-role.util.js';
 import { SessionService, type TokenPair } from './session.service.js';
+import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
 
 /**
  * Precomputed argon2id hash of a throwaway string, used as the comparison target when there is no
@@ -109,6 +110,7 @@ export class AdminLoginService {
       where: { email: normalizedEmail },
       include: {
         assignments: {
+          where: ACTIVE_ASSIGNMENT,
           include: {
             role: {
               select: {
@@ -326,6 +328,7 @@ export class AdminLoginService {
         user: {
           include: {
             assignments: {
+              where: ACTIVE_ASSIGNMENT,
               include: {
                 role: { select: { name: true, scope: true } },
                 school: { select: { id: true, status: true } },
