@@ -1,11 +1,11 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SYSTEM_AUDIT_CONTEXT } from '../../audit/utils/audit-request-context.util.js';
 import type { AuthenticatedUser, AuthRoleAssignment } from '../../auth/types/authenticated-user.js';
 import { IdentityAndAccessService } from './identity-and-access.service.js';
 
-/** Suspending a user (#41): PATCH /users/:id/suspend and the legacy PATCH /identity/users/:id. */
-describe('IdentityAndAccessService - suspend a user (#41)', () => {
+/** Suspending (#41) and reactivating (#42) a user, and the legacy PATCH /identity/users/:id. */
+describe('IdentityAndAccessService - suspend (#41) and reactivate (#42) a user', () => {
   let service: IdentityAndAccessService;
   let prisma: { user: { findUnique: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> } };
   let sessions: { revokeAllForUser: ReturnType<typeof vi.fn> };
@@ -238,7 +238,19 @@ describe('IdentityAndAccessService - suspend a user (#41)', () => {
       expect(result.status).toBe('SUSPENDED');
     });
 
-    it('keeps the current behaviour for status ACTIVE (reactivation is #42)', async () => {
+    it('status ACTIVE applies the reactivation rules and does not touch sessions', async () => {
+      givenUser(userRow('admin-a', [['A', 'school']]));
+      await expect(service.updateUser('admin-a', { status: 'active' }, adminA)).rejects.toThrow(
+        new ForbiddenException('You cannot reactivate your own account'),
+      );
+      givenUser(userRow('mixed', [['A', 'group'], ['B', 'school']], 'SUSPENDED'));
+      await expect(service.updateUser('mixed', { status: 'ACTIVE' }, adminA)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('status ACTIVE reactivates when allowed', async () => {
       const row = userRow('student-a', [['A', 'group']], 'SUSPENDED');
       givenUser(row);
       prisma.user.update.mockResolvedValue({ ...row, status: 'ACTIVE' });
@@ -248,6 +260,86 @@ describe('IdentityAndAccessService - suspend a user (#41)', () => {
       expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'student-a' }, data: { status: 'ACTIVE' } });
       expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
       expect(result.status).toBe('ACTIVE');
+    });
+
+    it('status ACTIVE sets a user suspended before finishing the invitation back to INVITED', async () => {
+      const row = { ...userRow('invited-a', [['A', 'group']], 'SUSPENDED'), passwordHash: null, googleSub: null };
+      givenUser(row as never);
+      prisma.user.update.mockResolvedValue({ ...row, status: 'INVITED' });
+
+      const result = await service.updateUser('invited-a', { status: 'ACTIVE' }, adminA);
+
+      expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'invited-a' }, data: { status: 'INVITED' } });
+      expect(result.status).toBe('INVITED');
+    });
+  });
+
+  describe('reactivateUser', () => {
+    it('sets a suspended user with a password back to ACTIVE and leaves the sessions alone', async () => {
+      const row = userRow('student-a', [['A', 'group']], 'SUSPENDED');
+      givenUser(row);
+      prisma.user.update.mockResolvedValue({ ...row, status: 'ACTIVE' });
+
+      const result = await service.reactivateUser('student-a', adminA);
+
+      expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'student-a' }, data: { status: 'ACTIVE' } });
+      expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+      expect(result.status).toBe('ACTIVE');
+      expect(result).not.toHaveProperty('passwordHash');
+    });
+
+    it('sets a user suspended before finishing the invitation (no password, no Google account) back to INVITED', async () => {
+      const row = { ...userRow('invited-a', [['A', 'group']], 'SUSPENDED'), passwordHash: null, googleSub: null };
+      givenUser(row as never);
+      prisma.user.update.mockResolvedValue({ ...row, status: 'INVITED' });
+
+      const result = await service.reactivateUser('invited-a', adminA);
+
+      expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'invited-a' }, data: { status: 'INVITED' } });
+      expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+      expect(result.status).toBe('INVITED');
+    });
+
+    it('sets a suspended user with a linked Google account but no password back to ACTIVE', async () => {
+      const row = { ...userRow('student-a', [['A', 'group']], 'SUSPENDED'), passwordHash: null, googleSub: 'google-sub' };
+      givenUser(row as never);
+      prisma.user.update.mockResolvedValue({ ...row, status: 'ACTIVE' });
+
+      await expect(service.reactivateUser('student-a', adminA)).resolves.toMatchObject({ status: 'ACTIVE' });
+      expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'student-a' }, data: { status: 'ACTIVE' } });
+    });
+
+    it('is idempotent for an ACTIVE user', async () => {
+      givenUser(userRow('student-a', [['A', 'group']]));
+      await expect(service.reactivateUser('student-a', adminA)).resolves.toMatchObject({ status: 'ACTIVE' });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses an INVITED user with 409', async () => {
+      givenUser(userRow('invited-a', [['A', 'group']], 'INVITED'));
+      await expect(service.reactivateUser('invited-a', adminA)).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('throws 404 when the user does not exist', async () => {
+      givenUser(null);
+      await expect(service.reactivateUser('missing', platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('applies the shared rules: self, all of the schools, higher level', async () => {
+      givenUser(userRow('admin-a', [['A', 'school']], 'SUSPENDED'));
+      await expect(service.reactivateUser('admin-a', adminA)).rejects.toThrow(
+        new ForbiddenException('You cannot reactivate your own account'),
+      );
+      givenUser(userRow('mixed', [['A', 'group'], ['B', 'school']], 'SUSPENDED'));
+      await expect(service.reactivateUser('mixed', adminA)).rejects.toThrow(
+        new ForbiddenException('You can only reactivate users whose schools you all administer'),
+      );
+      givenUser(userRow('other-platform-admin', [['A', 'platform']], 'SUSPENDED'));
+      await expect(service.reactivateUser('other-platform-admin', adminA)).rejects.toThrow(
+        new ForbiddenException('You cannot reactivate a user with a higher-level role'),
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
   });
 });
