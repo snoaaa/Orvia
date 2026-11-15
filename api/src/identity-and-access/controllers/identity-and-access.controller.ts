@@ -309,12 +309,20 @@ export class IdentityAndAccessController {
 
   @Post('roles')
   @RequirePermission('system:manage')
-  @ApiOperation({ summary: 'Define a custom role (platform admin)' })
+  @ApiOperation({
+    summary: 'Define a custom role (platform admin)',
+    description: 'Older path of POST /roles, same rules and answers.',
+  })
   @ApiResponse({ status: 201, description: 'Role created', type: RoleEntity })
-  @ApiResponse({ status: 400, description: 'Reserved base role name or invalid payload' })
+  @ApiResponse({ status: 400, description: 'Reserved base role name, unknown permission code or invalid payload' })
+  @ApiResponse({ status: 403, description: 'Not a platform admin (missing platform-wide system:manage)' })
   @ApiResponse({ status: 409, description: 'Role already exists' })
-  async createRole(@Body() dto: CreateRoleDto): Promise<RoleEntity> {
-    return this.identityService.createRole(dto);
+  async createRole(
+    @Body() dto: CreateRoleDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<RoleEntity> {
+    return this.identityService.createRole(dto, actor, auditContextFromRequest(req));
   }
 
   @Patch('roles/:id')
