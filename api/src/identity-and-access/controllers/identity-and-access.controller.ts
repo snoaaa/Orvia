@@ -317,8 +317,12 @@ export class IdentityAndAccessController {
   @ApiResponse({ status: 400, description: 'Reserved base role name, unknown permission code or invalid payload' })
   @ApiResponse({ status: 403, description: 'Not a platform admin (missing platform-wide system:manage)' })
   @ApiResponse({ status: 409, description: 'Role already exists' })
-  async createRole(@Body() dto: CreateRoleDto, @CurrentUser() actor: AuthenticatedUser): Promise<RoleEntity> {
-    return this.identityService.createRole(dto, actor);
+  async createRole(
+    @Body() dto: CreateRoleDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<RoleEntity> {
+    return this.identityService.createRole(dto, actor, auditContextFromRequest(req));
   }
 
   @Patch('roles/:id')

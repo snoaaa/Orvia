@@ -1312,7 +1312,11 @@ export class IdentityAndAccessService {
    * permission codes. Platform admins only: the guard checks system:manage, and this also refuses a
    * school-scoped role that would hold it. The role and its permissions are written in one transaction.
    */
-  async createRole(dto: CreateRoleDto, actor: AuthenticatedUser): Promise<RoleEntity> {
+  async createRole(
+    dto: CreateRoleDto,
+    actor: AuthenticatedUser,
+    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<RoleEntity> {
     if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
       throw new ForbiddenException('Only platform administrators may create roles');
     }

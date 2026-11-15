@@ -1,5 +1,7 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
+import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { CreateRoleDto } from '../dto/index.js';
@@ -31,7 +33,11 @@ export class RolesController {
     description: 'Invalid name, scope or permission list, unknown permission code, or reserved base role name',
   })
   @ApiResponse({ status: 409, description: 'A role with this name already exists' })
-  async createRole(@Body() dto: CreateRoleDto, @CurrentUser() actor: AuthenticatedUser): Promise<RoleEntity> {
-    return this.identityService.createRole(dto, actor);
+  async createRole(
+    @Body() dto: CreateRoleDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<RoleEntity> {
+    return this.identityService.createRole(dto, actor, auditContextFromRequest(req));
   }
 }
