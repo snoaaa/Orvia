@@ -1,5 +1,5 @@
 import { SpaceEntity } from '../entities/space.entity.js';
-import type { CreateSpaceDto } from '../dto/create-space.dto.js';
+import { type CreateSpaceDto, DEFAULT_SPACE_LANGUAGE, DEFAULT_SPACE_PRIVACY } from '../dto/create-space.dto.js';
 
 export class SpaceMapper {
   static toEntity(raw: {
@@ -35,9 +35,9 @@ export class SpaceMapper {
     return {
       id,
       name: dto.name,
-      description: dto.description ?? null,
-      language: dto.language ?? 'en',
-      privacy: dto.privacy ?? 'public',
+      description: dto.description || null,
+      language: dto.language ?? DEFAULT_SPACE_LANGUAGE,
+      privacy: dto.privacy ?? DEFAULT_SPACE_PRIVACY,
       schoolId,
     };
   }

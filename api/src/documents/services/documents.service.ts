@@ -1,8 +1,8 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, canInSchool, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -37,6 +37,8 @@ import { ProcessingQueueService } from './processing-queue.service.js';
 
 /** 403 message when a document of the reader's school is not published to them (#109). */
 const NOT_PUBLISHED_TO_YOU = 'This document is not published to your school, role, class, group or account';
+
+const spaceNameTakenMessage = (name: string) => `A space named '${name}' already exists in this school`;
 
 @Injectable()
 export class DocumentsService {
@@ -512,36 +514,46 @@ export class DocumentsService {
     });
   }
 
-  /** School-scoped users must create the space in one of their schools. */
+  /**
+   * POST /documents/spaces (§4.1, #97): the school is always explicit. 403 outside the schools where
+   * the caller holds `spaces:create` (or `documents:manage`), 404 for an unknown school, 409 if the
+   * school already has a space with this name.
+   */
   async createSpace(dto: CreateSpaceDto, actor: AuthenticatedUser): Promise<SpaceEntity> {
-    if (dto.schoolId) {
-      assertSchoolAccess(actor, 'documents:manage', dto.schoolId);
-    } else if (schoolsWithPermission(actor, 'documents:manage') !== 'all') {
-      throw new BadRequestException('schoolId is required: you can only create spaces in your own school');
-    }
-    const id = randomUUID();
-    let schoolId = dto.schoolId;
-    if (!schoolId) {
-      const existingSchool = await this.prisma.school.findFirst();
-      if (existingSchool) {
-        schoolId = existingSchool.id;
-      } else {
-        const defaultSchool = await this.prisma.school.create({
-          data: {
-            id: randomUUID(),
-            name: 'Default Institution',
-            allowedDomains: '*',
-          },
-        });
-        schoolId = defaultSchool.id;
-      }
-    }
+    assertSchoolAccess(actor, 'spaces:create', dto.schoolId);
 
-    const data = SpaceMapper.fromDtoToCreateInput(dto, id, schoolId);
-    const created = await this.prisma.space.create({
-      data,
+    const school = await this.prisma.school.findUnique({ where: { id: dto.schoolId }, select: { id: true } });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${dto.schoolId} not found`);
+    }
+    await this.assertSpaceNameIsFree(dto.schoolId, dto.name);
+
+    const data = SpaceMapper.fromDtoToCreateInput(dto, randomUUID(), dto.schoolId);
+    try {
+      const created = await this.prisma.space.create({ data });
+      return SpaceMapper.toEntity(created);
+    } catch (error) {
+      throw this.spaceNameConflictOr(error, dto.name);
+    }
+  }
+
+  /** Clear 409 in the normal case; the unique index (school_id, name) still decides under concurrency. */
+  private async assertSpaceNameIsFree(schoolId: string, name: string, exceptSpaceId?: string): Promise<void> {
+    const taken = await this.prisma.space.findFirst({
+      where: { schoolId, name, ...(exceptSpaceId ? { id: { not: exceptSpaceId } } : {}) },
+      select: { id: true },
     });
-    return SpaceMapper.toEntity(created);
+    if (taken) {
+      throw new ConflictException(spaceNameTakenMessage(name));
+    }
+  }
+
+  /** Maps the unique-index violation (two simultaneous requests) to the same 409; returns other errors as is. */
+  private spaceNameConflictOr(error: unknown, name: string): unknown {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return new ConflictException(spaceNameTakenMessage(name));
+    }
+    return error;
   }
 
   /** Get a single space by ID, scoped to caller's school access (§4.5, §4.7, #89). */

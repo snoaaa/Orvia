@@ -100,9 +100,19 @@ export class DocumentsController {
   }
 
   @Post('spaces')
-  @RequirePermission('documents:manage')
-  @ApiOperation({ summary: 'Create a new document space in one of your schools' })
+  @RequirePermission('spaces:create')
+  @ApiOperation({
+    summary: 'Create a document space in one of your schools (§4.1, #97)',
+    description:
+      'Requires spaces:create (also covered by documents:manage) in the school given by schoolId, which is ' +
+      'mandatory for everyone, platform admins included. The name is unique within the school. ' +
+      'language defaults to en, privacy to public.',
+  })
   @ApiResponse({ status: 201, description: 'Space created', type: SpaceEntity })
+  @ApiResponse({ status: 400, description: 'Invalid payload: missing or malformed schoolId, empty or too long name, unknown language or privacy, unknown field' })
+  @ApiResponse({ status: 403, description: 'Missing spaces:create, or the school is outside your scope' })
+  @ApiResponse({ status: 404, description: 'School not found' })
+  @ApiResponse({ status: 409, description: 'The school already has a space with this name' })
   async createSpace(@Body() dto: CreateSpaceDto, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
     return this.documentsService.createSpace(dto, actor);
   }
