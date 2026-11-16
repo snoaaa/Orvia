@@ -424,9 +424,13 @@ export class DocumentsService {
   /**
    * POST /documents/spaces (§4.1, #97): the school is always explicit. 403 outside the schools where
    * the caller holds `spaces:create` (or `documents:manage`), 404 for an unknown school, 409 if the
-   * school already has a space with this name.
+   * school already has a space with this name. Records `space_created`.
    */
-  async createSpace(dto: CreateSpaceDto, actor: AuthenticatedUser): Promise<SpaceEntity> {
+  async createSpace(
+    dto: CreateSpaceDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SpaceEntity> {
     assertSchoolAccess(actor, 'spaces:create', dto.schoolId);
 
     const school = await this.prisma.school.findUnique({ where: { id: dto.schoolId }, select: { id: true } });
@@ -436,12 +440,27 @@ export class DocumentsService {
     await this.assertSpaceNameIsFree(dto.schoolId, dto.name);
 
     const data = SpaceMapper.fromDtoToCreateInput(dto, randomUUID(), dto.schoolId);
+    let created;
     try {
-      const created = await this.prisma.space.create({ data });
-      return SpaceMapper.toEntity(created);
+      created = await this.prisma.space.create({ data });
     } catch (error) {
       throw this.spaceNameConflictOr(error, dto.name);
     }
+
+    await this.audit.record(
+      AuditEvents.spaceCreated(
+        {
+          spaceId: created.id,
+          schoolId: created.schoolId,
+          name: created.name,
+          language: created.language,
+          privacy: created.privacy,
+          actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+    return SpaceMapper.toEntity(created);
   }
 
   /** Clear 409 in the normal case; the unique index (school_id, name) still decides under concurrency. */

@@ -450,6 +450,32 @@ describe('DocumentsService', () => {
       expect(space).toMatchObject({ description: 'Cours de droit', language: 'fr', privacy: 'restricted' });
     });
 
+    it('records space_created with the school, name, language and privacy', async () => {
+      const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
+      const space = await service.createSpace({ schoolId: 'school-1', name: 'Droit', language: 'fr' }, schoolAdmin, context);
+
+      expect(mockAudit.record).toHaveBeenCalledTimes(1);
+      expect(mockAudit.record).toHaveBeenCalledWith({
+        category: 'documents',
+        action: 'space_created',
+        actor: { userId: schoolAdmin.id, role: 'school_admin', schoolId: 'school-1' },
+        entity: { type: 'space', id: space.id },
+        details: { schoolId: 'school-1', name: 'Droit', language: 'fr', privacy: 'public' },
+        context,
+      });
+    });
+
+    it('records nothing when the creation is refused', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-existing' });
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Droit' }, schoolAdmin)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      await expect(service.createSpace({ schoolId: 'school-2', name: 'Droit' }, schoolAdmin)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
     it('lets a platform admin create a space in any school', async () => {
       mockPrisma.school.findUnique.mockResolvedValueOnce({ id: 'school-9' });
       const space = await service.createSpace({ schoolId: 'school-9', name: 'Physics' }, platformAdmin);

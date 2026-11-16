@@ -90,8 +90,12 @@ export class DocumentsController {
   @ApiResponse({ status: 403, description: 'Missing spaces:create, or the school is outside your scope' })
   @ApiResponse({ status: 404, description: 'School not found' })
   @ApiResponse({ status: 409, description: 'The school already has a space with this name' })
-  async createSpace(@Body() dto: CreateSpaceDto, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
-    return this.documentsService.createSpace(dto, actor);
+  async createSpace(
+    @Body() dto: CreateSpaceDto,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SpaceEntity> {
+    return this.documentsService.createSpace(dto, actor, auditContextFromRequest(req));
   }
 
   @Get('spaces/:id')
