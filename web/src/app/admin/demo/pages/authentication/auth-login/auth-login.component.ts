@@ -19,7 +19,7 @@ interface TokenPair {
   selector: 'app-auth-login',
   imports: [RouterModule],
   templateUrl: './auth-login.component.html',
-  styleUrl: './auth-login.component.scss'
+  styleUrl: './auth-login.component.scss',
 })
 export class AuthLoginComponent {
   private readonly http = inject(HttpClient);
@@ -33,8 +33,8 @@ export class AuthLoginComponent {
   SignInOptions = [
     {
       image: 'assets/images/authentication/google.svg',
-      name: 'Google'
-    }
+      name: 'Google',
+    },
   ];
 
   /** Signs in through the backend and, on success, redirects to the admin dashboard. */
@@ -44,21 +44,23 @@ export class AuthLoginComponent {
     this.loading.set(true);
     this.error.set('');
 
-    this.http.post<TokenPair>(`${environment.apiUrl}/auth/admin/login`, { email, password }).subscribe({
-      next: ({ accessToken, refreshToken }) => {
-        localStorage.setItem('accessToken', accessToken);
-        localStorage.setItem('refreshToken', refreshToken);
-        this.loading.set(false);
-        this.toast.success('Signed In', { description: 'Welcome to the WAMDP Admin Console.' });
-        void this.router.navigateByUrl('/admin/dashboard/default');
-      },
-      error: (response: HttpErrorResponse) => {
-        this.loading.set(false);
-        const errorMsg = readErrorMessage(response);
-        this.error.set(errorMsg);
-        this.toast.error('Authentication Failed', { description: errorMsg });
-      }
-    });
+    this.http
+      .post<TokenPair>(`${environment.apiUrl}/auth/admin/login`, { email, password })
+      .subscribe({
+        next: ({ accessToken, refreshToken }) => {
+          localStorage.setItem('accessToken', accessToken);
+          localStorage.setItem('refreshToken', refreshToken);
+          this.loading.set(false);
+          this.toast.success('Signed In', { description: 'Welcome to the WAMDP Admin Console.' });
+          void this.router.navigateByUrl('/admin/dashboard/default');
+        },
+        error: (response: HttpErrorResponse) => {
+          this.loading.set(false);
+          const errorMsg = readErrorMessage(response);
+          this.error.set(errorMsg);
+          this.toast.error('Authentication Failed', { description: errorMsg });
+        },
+      });
   }
 }
 
