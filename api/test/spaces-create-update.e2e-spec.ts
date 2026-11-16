@@ -215,7 +215,7 @@ describe('Create and update a space (e2e)', () => {
           create(ids.ManagerA, { schoolId: schools.A, name }),
         ]);
 
-        expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+        expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([201, 409]);
         expect(await prisma.space.count({ where: { schoolId: schools.A, name } })).toBe(1);
       });
     });
