@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { assertSchoolAccess, canInSchool, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
+import { assertSchoolAccess, canInSchool, schoolIdFilter } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
