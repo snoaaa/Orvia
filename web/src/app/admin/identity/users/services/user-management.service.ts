@@ -2,10 +2,16 @@ import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http'
 import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, of, throwError } from 'rxjs';
 import { environment } from 'src/environments/environment';
-import { ActiveSession, PaginatedUsers, UpdateUserPayload, UserEntity, UserListFilter } from '../models/user.model';
+import {
+  ActiveSession,
+  PaginatedUsers,
+  UpdateUserPayload,
+  UserEntity,
+  UserListFilter,
+} from '../models/user.model';
 
 @Injectable({
-  providedIn: 'root'
+  providedIn: 'root',
 })
 export class UserManagementService {
   private readonly http = inject(HttpClient);
@@ -35,7 +41,7 @@ export class UserManagementService {
     return this.http.get<PaginatedUsers>(`${this.apiUrl}/identity/users`, { params }).pipe(
       catchError((error) => {
         return throwError(() => error);
-      })
+      }),
     );
   }
 
@@ -46,7 +52,7 @@ export class UserManagementService {
     return this.http.get<UserEntity>(`${this.apiUrl}/users/${id}`).pipe(
       catchError((error) => {
         return throwError(() => error);
-      })
+      }),
     );
   }
 
@@ -57,22 +63,32 @@ export class UserManagementService {
     return this.http.patch<UserEntity>(`${this.apiUrl}/identity/users/${id}`, payload).pipe(
       catchError((error) => {
         return throwError(() => error);
-      })
+      }),
     );
   }
 
   /**
    * Suspends a user account and immediately revokes all their active sessions.
+   * Calls the dedicated endpoint PATCH /users/:id/suspend (Section 4.6).
    */
   suspendUser(id: string): Observable<UserEntity> {
-    return this.updateUser(id, { status: 'SUSPENDED' });
+    return this.http.patch<UserEntity>(`${this.apiUrl}/users/${id}/suspend`, {}).pipe(
+      catchError((error) => {
+        return throwError(() => error);
+      }),
+    );
   }
 
   /**
    * Reactivates a suspended user account.
+   * Calls the dedicated endpoint PATCH /users/:id/reactivate (Section 4.6).
    */
   reactivateUser(id: string): Observable<UserEntity> {
-    return this.updateUser(id, { status: 'ACTIVE' });
+    return this.http.patch<UserEntity>(`${this.apiUrl}/users/${id}/reactivate`, {}).pipe(
+      catchError((error) => {
+        return throwError(() => error);
+      }),
+    );
   }
 
   /**
@@ -82,7 +98,7 @@ export class UserManagementService {
     return this.http.get<ActiveSession[]>(`${this.apiUrl}/identity/users/${userId}/sessions`).pipe(
       catchError((error) => {
         return throwError(() => error);
-      })
+      }),
     );
   }
 
@@ -90,22 +106,26 @@ export class UserManagementService {
    * Revokes a single session for the specified user.
    */
   revokeSession(userId: string, sessionId: string): Observable<void> {
-    return this.http.delete<void>(`${this.apiUrl}/identity/users/${userId}/sessions/${sessionId}`).pipe(
-      catchError((error) => {
-        return throwError(() => error);
-      })
-    );
+    return this.http
+      .delete<void>(`${this.apiUrl}/identity/users/${userId}/sessions/${sessionId}`)
+      .pipe(
+        catchError((error) => {
+          return throwError(() => error);
+        }),
+      );
   }
 
   /**
    * Revokes all active sessions for the specified user (e.g. account compromised).
    */
   revokeAllSessions(userId: string): Observable<{ revoked: number }> {
-    return this.http.delete<{ revoked: number }>(`${this.apiUrl}/identity/users/${userId}/sessions`).pipe(
-      catchError((error) => {
-        return throwError(() => error);
-      })
-    );
+    return this.http
+      .delete<{ revoked: number }>(`${this.apiUrl}/identity/users/${userId}/sessions`)
+      .pipe(
+        catchError((error) => {
+          return throwError(() => error);
+        }),
+      );
   }
 
   /**
@@ -144,4 +164,3 @@ export class UserManagementService {
     return fallback;
   }
 }
-

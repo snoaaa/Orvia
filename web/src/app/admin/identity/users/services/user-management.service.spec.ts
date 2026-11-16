@@ -16,7 +16,7 @@ describe('UserManagementService', () => {
     authProvider: 'local',
     status: 'ACTIVE',
     createdAt: '2026-10-20T10:00:00.000Z',
-    updatedAt: '2026-10-20T10:00:00.000Z'
+    updatedAt: '2026-10-20T10:00:00.000Z',
   };
 
   const mockSession: ActiveSession = {
@@ -27,16 +27,12 @@ describe('UserManagementService', () => {
     userAgent: 'Mozilla/5.0',
     createdAt: '2026-10-20T10:00:00.000Z',
     lastUsedAt: '2026-10-20T10:30:00.000Z',
-    expiresAt: '2026-11-20T10:00:00.000Z'
+    expiresAt: '2026-11-20T10:00:00.000Z',
   };
 
   beforeEach(() => {
     TestBed.configureTestingModule({
-      providers: [
-        UserManagementService,
-        provideHttpClient(),
-        provideHttpClientTesting()
-      ]
+      providers: [UserManagementService, provideHttpClient(), provideHttpClientTesting()],
     });
     service = TestBed.inject(UserManagementService);
     httpMock = TestBed.inject(HttpTestingController);
@@ -56,7 +52,7 @@ describe('UserManagementService', () => {
       total: 1,
       page: 1,
       limit: 10,
-      totalPages: 1
+      totalPages: 1,
     };
 
     service.getUsers({ page: 1, limit: 10, status: 'ACTIVE', search: 'admin' }).subscribe((res) => {
@@ -98,29 +94,29 @@ describe('UserManagementService', () => {
     req.flush(updated);
   });
 
-  it('should suspend user account and return updated user with status SUSPENDED', () => {
+  it('should suspend user account and return updated user with status SUSPENDED via dedicated endpoint', () => {
     const suspended = { ...mockUser, status: 'SUSPENDED' as const };
 
     service.suspendUser('user-uuid-1').subscribe((user) => {
       expect(user.status).toBe('SUSPENDED');
     });
 
-    const req = httpMock.expectOne(`${environment.apiUrl}/identity/users/user-uuid-1`);
+    const req = httpMock.expectOne(`${environment.apiUrl}/users/user-uuid-1/suspend`);
     expect(req.request.method).toBe('PATCH');
-    expect(req.request.body).toEqual({ status: 'SUSPENDED' });
+    expect(req.request.body).toEqual({});
     req.flush(suspended);
   });
 
-  it('should reactivate user account and return updated user with status ACTIVE', () => {
+  it('should reactivate user account and return updated user with status ACTIVE via dedicated endpoint', () => {
     const reactivated = { ...mockUser, status: 'ACTIVE' as const };
 
     service.reactivateUser('user-uuid-1').subscribe((user) => {
       expect(user.status).toBe('ACTIVE');
     });
 
-    const req = httpMock.expectOne(`${environment.apiUrl}/identity/users/user-uuid-1`);
+    const req = httpMock.expectOne(`${environment.apiUrl}/users/user-uuid-1/reactivate`);
     expect(req.request.method).toBe('PATCH');
-    expect(req.request.body).toEqual({ status: 'ACTIVE' });
+    expect(req.request.body).toEqual({});
     req.flush(reactivated);
   });
 
@@ -141,7 +137,9 @@ describe('UserManagementService', () => {
       expect(true).toBe(true);
     });
 
-    const req = httpMock.expectOne(`${environment.apiUrl}/identity/users/user-uuid-1/sessions/session-uuid-1`);
+    const req = httpMock.expectOne(
+      `${environment.apiUrl}/identity/users/user-uuid-1/sessions/session-uuid-1`,
+    );
     expect(req.request.method).toBe('DELETE');
     req.flush(null);
   });
@@ -156,4 +154,3 @@ describe('UserManagementService', () => {
     req.flush({ revoked: 3 });
   });
 });
-
