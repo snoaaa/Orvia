@@ -453,6 +453,23 @@ describe('DocumentsService', () => {
       expect(space.schoolId).toBe('school-other');
     });
 
+    it('returns the stored language and privacy, not the defaults (#97)', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-3',
+        schoolId: 'school-1',
+        name: 'Droit',
+        description: null,
+        language: 'fr',
+        privacy: 'restricted',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const space = await service.findSpaceById('space-3', schoolAdmin);
+      expect(space.language).toBe('fr');
+      expect(space.privacy).toBe('restricted');
+    });
+
     it('throws ForbiddenException when caller accesses space of another school', async () => {
       mockPrisma.space.findUnique.mockResolvedValueOnce({
         id: 'space-other',
