@@ -230,6 +230,7 @@ model Space {
   conversations     Conversation[]
   offlineSelections OfflineSelection[]
 
+  @@unique([schoolId, name])
   @@index([schoolId])
   @@map("spaces")
 }
