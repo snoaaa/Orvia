@@ -40,6 +40,7 @@ describe('DocumentsController', () => {
       updateDocument: vi.fn(),
       findAllSpaces: vi.fn(),
       createSpace: vi.fn(),
+      updateSpace: vi.fn(),
       findSpaceById: vi.fn(),
       validateUploadedFile: vi.fn(),
       uploadPdf: vi.fn(),
@@ -129,6 +130,21 @@ describe('DocumentsController', () => {
         expect.objectContaining({ ip: '127.0.0.1' }),
       );
       expect(res.id).toBe('space-1');
+    });
+
+    it('delegates updateSpace to documentsService.updateSpace with the audit context (#97)', async () => {
+      const dto = { name: 'Renamed', privacy: 'private' as const };
+      mockDocumentsService.updateSpace.mockResolvedValueOnce({ id: 'space-1', name: 'Renamed' });
+      const mockReq = { ip: '127.0.0.1', header: vi.fn().mockReturnValue(undefined) } as any;
+
+      const res = await controller.updateSpace('space-1', dto, mockReq, mockActor);
+      expect(mockDocumentsService.updateSpace).toHaveBeenCalledWith(
+        'space-1',
+        dto,
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
+      expect(res.name).toBe('Renamed');
     });
 
     it('delegates getSpaceById to documentsService.findSpaceById', async () => {
