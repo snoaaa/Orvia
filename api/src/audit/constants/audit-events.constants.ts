@@ -36,6 +36,7 @@ export const AuditAction = {
   DOCUMENT_PUBLISHED: 'document_published',
   DOCUMENT_ACCESS_CHANGED: 'document_access_changed',
   SPACE_CREATED: 'space_created',
+  SPACE_UPDATED: 'space_updated',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
@@ -62,6 +63,7 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.DOCUMENT_PUBLISHED]: AuditCategory.DOCUMENTS,
   [AuditAction.DOCUMENT_ACCESS_CHANGED]: AuditCategory.DOCUMENTS,
   [AuditAction.SPACE_CREATED]: AuditCategory.DOCUMENTS,
+  [AuditAction.SPACE_UPDATED]: AuditCategory.DOCUMENTS,
 };
 
 /** Primary key of the single audit_chain_head row. */

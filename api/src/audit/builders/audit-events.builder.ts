@@ -544,4 +544,34 @@ export const AuditEvents = {
       context,
     };
   },
+
+  /**
+   * Name, description, language and/or privacy of a space changed (PATCH /documents/spaces/:id, #97).
+   * `changes` only holds the fields whose value really changed. The school of a space never changes.
+   */
+  spaceUpdated(
+    p: {
+      spaceId: string;
+      schoolId: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+      changes: Record<string, { from: unknown; to: unknown }>;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.SPACE_UPDATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'space', id: p.spaceId },
+      details: {
+        schoolId: p.schoolId,
+        changes: p.changes,
+      },
+      context,
+    };
+  },
 };

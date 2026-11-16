@@ -29,6 +29,7 @@ import {
   ListSpacesQueryDto,
   ReplaceDocumentAccessDto,
   UpdateDocumentDto,
+  UpdateSpaceDto,
   UploadDocumentDto,
 } from '../dto/index.js';
 import {
@@ -133,6 +134,30 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Space not found' })
   async getSpaceById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
     return this.documentsService.findSpaceById(id, actor);
+  }
+
+  @Patch('spaces/:id')
+  @RequirePermission('spaces:update')
+  @ApiOperation({
+    summary: 'Edit a document space (§4.1, #97)',
+    description:
+      'Updates the name, description, main language and/or privacy; fields left out are unchanged and at least ' +
+      'one is required. The school of a space cannot be changed. Requires spaces:update (also covered by ' +
+      'documents:manage) in the school of the space. Writes a space_updated audit event listing the changed fields.',
+  })
+  @ApiParam({ name: 'id', description: 'Space UUID' })
+  @ApiResponse({ status: 200, description: 'Space updated (or already up to date)', type: SpaceEntity })
+  @ApiResponse({ status: 400, description: 'Invalid UUID, empty body, empty or too long name, unknown language or privacy, unknown field (including schoolId)' })
+  @ApiResponse({ status: 403, description: 'Missing spaces:update, or the space belongs to a school outside your scope' })
+  @ApiResponse({ status: 404, description: 'Space not found' })
+  @ApiResponse({ status: 409, description: 'The school already has a space with this name' })
+  async updateSpace(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateSpaceDto,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SpaceEntity> {
+    return this.documentsService.updateSpace(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Get(':id')
