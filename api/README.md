@@ -211,7 +211,8 @@ student in B cannot read users of B). Helpers in `src/auth/utils/school-scope.ut
 | `schoolsWithPermission(user, permission)` | `'all'` or the list of school ids (also for the RAG filters, 4.7) |
 
 Applied today to users, schools, spaces, documents and the audit trail. A school admin must pass one of
-their own `schoolId`s when inviting a user or creating a space.
+their own `schoolId`s when inviting a user. Creating a space always needs a `schoolId`, for platform
+admins too (see "Document spaces").
 
 **Inviting into a school** (`POST /identity/users` with `schoolId`): the new user is assigned to that
 school in the same transaction, with `role` (default `STUDENT`), so the inviting school admin sees
@@ -511,6 +512,49 @@ The roles the current admin may assign, as `{ id, name, scope, level }`, highest
 gets school and group roles, a platform admin every role. With `?schoolId=`, only the admin's roles in that school
 (and platform roles) count; a school outside their scope → 403.
 
+## Document spaces
+
+`src/documents/controllers/documents.controller.ts`, under the **Documents** tag in Swagger (Section 4.1).
+A space is a folder-like area of one school that groups related documents.
+
+Who can create and edit spaces: platform admins in every school, school admins in their school(s), and
+staff with document-management rights (`documents:manage`, #88) in the school(s) where they hold them.
+Other staff, students and guests get 403. The routes ask for `spaces:create` / `spaces:update`, which
+`documents:manage` also covers.
+
+| Field | Rules |
+|---|---|
+| `name` | Required on create. Trimmed, 1 to 100 characters, unique within the school (409) |
+| `description` | Optional, trimmed, up to 2000 characters. On update, `null` or `""` clears it |
+| `language` | `en` (default) or `fr` |
+| `privacy` | `public` (default), `restricted` or `private`. Stored and validated only; no read rule uses it yet |
+
+### Create a space: `POST /documents/spaces` (#97, `spaces:create`)
+
+Body: `schoolId` (UUID, **always required**: the API no longer picks or creates a school), `name`, and
+optionally `description`, `language`, `privacy`. Invalid data → 400, a school outside the caller's
+scope → 403, unknown school → 404 (platform admins; scoped users get 403), name already used in the
+school → 409 `A space named '<name>' already exists in this school`. Audited as `documents/space_created`.
+
+### Update a space: `PATCH /documents/spaces/{id}` (#97, `spaces:update`)
+
+Body: any of `name`, `description`, `language`, `privacy`; fields left out are unchanged. **The school of
+a space cannot change**: `schoolId` in the body is a 400, like any unknown field. Invalid UUID or empty
+body → 400, another school's space → 403, unknown space → 404, name used by another space of the
+school → 409. Audited as `documents/space_updated` with the previous and new value of each changed
+field; a request that changes nothing returns 200 without a write or an audit event.
+
+### Unique names
+
+A unique index on `spaces (school_id, name)` (migration `9_spaces_unique_name`) backs the 409, so two
+simultaneous requests cannot both succeed; MySQL compares names ignoring case. **`npm run db:migrate`
+fails if a school already has two spaces with the same name**: rename them first, for example after
+listing them with:
+
+```sql
+SELECT school_id, name, COUNT(*) FROM spaces GROUP BY school_id, name HAVING COUNT(*) > 1;
+```
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of
@@ -561,6 +605,8 @@ gets school and group roles, a platform admin every role. With `?schoolId=`, onl
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
+| `documents` | `space_created` | A space is created (`POST /documents/spaces`) | the creator | `space` | `schoolId`, `name`, `language`, `privacy` |
+| `documents` | `space_updated` | A space is edited (`PATCH /documents/spaces/{id}`); not recorded when nothing changes | the editor | `space` | `schoolId`, `changes` (`{ field: { from, to } }` for `name`, `description`, `language`, `privacy`) |
 | `security` | `access_denied` | Any HTTP 403 | the user if authenticated | `route` (`METHOD /path`) | `reason`, `requiredPermission` |
 | `security` | `account_locked` | An account is locked (e.g. too many failed logins) | anonymous | `user` | `email`, `reason`, `failedAttempts`, `lockedUntil` |
 
