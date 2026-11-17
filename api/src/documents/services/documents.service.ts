@@ -629,15 +629,16 @@ export class DocumentsService {
     return error;
   }
 
-  /** Get a single space by ID, scoped to caller's school access (§4.5, §4.7, #89). */
+  /**
+   * Get a single space by ID (§4.5, §4.7, #89, #99). Same visibility rule as the list: a space the caller may not
+   * see answers 404, exactly like an unknown or deleted one, so its existence is not revealed.
+   */
   async findSpaceById(id: string, actor: AuthenticatedUser): Promise<SpaceEntity> {
-    const space = await this.prisma.space.findUnique({
-      where: { id, ...ACTIVE_SPACE },
-    });
+    const visible = await this.visibleSpacesWhere(actor);
+    const space = await this.prisma.space.findFirst({ where: { AND: [{ id }, visible] } });
     if (!space) {
       throw new NotFoundException(`Space with ID ${id} not found`);
     }
-    assertSchoolAccess(actor, 'spaces:read', space.schoolId);
     return SpaceMapper.toEntity(space);
   }
 
