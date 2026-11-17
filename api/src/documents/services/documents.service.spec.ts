@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Readable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
@@ -138,7 +139,11 @@ describe('DocumentsService', () => {
         findMany: vi.fn(),
         findFirst: vi.fn(),
         create: vi.fn(),
+        update: vi.fn(),
         count: vi.fn(),
+      },
+      school: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'school-1' }),
       },
       document: {
         findUnique: vi.fn(),
@@ -379,6 +384,23 @@ describe('DocumentsService', () => {
       expect(space.schoolId).toBe('school-other');
     });
 
+    it('returns the stored language and privacy, not the defaults (#97)', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({
+        id: 'space-3',
+        schoolId: 'school-1',
+        name: 'Droit',
+        description: null,
+        language: 'fr',
+        privacy: 'restricted',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const space = await service.findSpaceById('space-3', schoolAdmin);
+      expect(space.language).toBe('fr');
+      expect(space.privacy).toBe('restricted');
+    });
+
     it('throws ForbiddenException when caller accesses space of another school', async () => {
       mockPrisma.space.findUnique.mockResolvedValueOnce({
         id: 'space-other',
@@ -394,6 +416,266 @@ describe('DocumentsService', () => {
       await expect(service.findSpaceById('space-other', schoolAdmin)).rejects.toThrow(
         ForbiddenException,
       );
+    });
+  });
+
+  describe('createSpace (#97)', () => {
+    const row = (data: Record<string, unknown>) => ({ ...data, createdAt: new Date(), updatedAt: new Date() });
+
+    beforeEach(() => {
+      mockPrisma.space.findFirst.mockResolvedValue(null);
+      mockPrisma.space.create.mockImplementation(async ({ data }: any) => row(data));
+    });
+
+    it('creates the space in the given school with the defaults en / public', async () => {
+      const space = await service.createSpace({ schoolId: 'school-1', name: 'Mathematics' }, schoolAdmin);
+
+      expect(mockPrisma.space.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          schoolId: 'school-1',
+          name: 'Mathematics',
+          description: null,
+          language: 'en',
+          privacy: 'public',
+        }),
+      });
+      expect(space).toMatchObject({ schoolId: 'school-1', name: 'Mathematics', language: 'en', privacy: 'public' });
+    });
+
+    it('stores the given description, language and privacy', async () => {
+      const space = await service.createSpace(
+        { schoolId: 'school-1', name: 'Droit', description: 'Cours de droit', language: 'fr', privacy: 'restricted' },
+        schoolAdmin,
+      );
+      expect(space).toMatchObject({ description: 'Cours de droit', language: 'fr', privacy: 'restricted' });
+    });
+
+    it('records space_created with the school, name, language and privacy', async () => {
+      const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
+      const space = await service.createSpace({ schoolId: 'school-1', name: 'Droit', language: 'fr' }, schoolAdmin, context);
+
+      expect(mockAudit.record).toHaveBeenCalledTimes(1);
+      expect(mockAudit.record).toHaveBeenCalledWith({
+        category: 'documents',
+        action: 'space_created',
+        actor: { userId: schoolAdmin.id, role: 'school_admin', schoolId: 'school-1' },
+        entity: { type: 'space', id: space.id },
+        details: { schoolId: 'school-1', name: 'Droit', language: 'fr', privacy: 'public' },
+        context,
+      });
+    });
+
+    it('records nothing when the creation is refused', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-existing' });
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Droit' }, schoolAdmin)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      await expect(service.createSpace({ schoolId: 'school-2', name: 'Droit' }, schoolAdmin)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('lets a platform admin create a space in any school', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: 'school-9' });
+      const space = await service.createSpace({ schoolId: 'school-9', name: 'Physics' }, platformAdmin);
+      expect(space.schoolId).toBe('school-9');
+    });
+
+    it('rejects another school with 403 before looking the school up', async () => {
+      await expect(service.createSpace({ schoolId: 'school-2', name: 'Physics' }, schoolAdmin)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(mockPrisma.school.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.space.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['staff', staffUser],
+      ['student', studentUser],
+    ])('rejects a %s without space rights with 403', async (_label, actor) => {
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Physics' }, actor)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(mockPrisma.space.create).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 for an unknown school and never creates one', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce(null);
+      await expect(service.createSpace({ schoolId: 'school-404', name: 'Physics' }, platformAdmin)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(mockPrisma.space.create).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 when the school already has a space with this name', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-existing' });
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Mathematics' }, schoolAdmin)).rejects.toThrow(
+        new ConflictException("A space named 'Mathematics' already exists in this school"),
+      );
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+        where: { schoolId: 'school-1', name: 'Mathematics' },
+        select: { id: true },
+      });
+      expect(mockPrisma.space.create).not.toHaveBeenCalled();
+    });
+
+    it('maps the unique index violation (P2002) of a simultaneous request to the same 409', async () => {
+      mockPrisma.space.create.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }),
+      );
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Mathematics' }, schoolAdmin)).rejects.toThrow(
+        new ConflictException("A space named 'Mathematics' already exists in this school"),
+      );
+    });
+
+    it('rethrows other database errors unchanged', async () => {
+      const failure = new Error('connection lost');
+      mockPrisma.space.create.mockRejectedValueOnce(failure);
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Mathematics' }, schoolAdmin)).rejects.toBe(failure);
+    });
+  });
+
+  describe('updateSpace (#97)', () => {
+    const stored = {
+      id: 'space-1',
+      schoolId: 'school-1',
+      name: 'Mathematics',
+      description: 'Algebra and analysis',
+      language: 'en',
+      privacy: 'public',
+      createdAt: new Date('2026-11-01T00:00:00Z'),
+      updatedAt: new Date('2026-11-01T00:00:00Z'),
+    };
+    const updater: AuthenticatedUser = {
+      ...schoolAdmin,
+      permissions: ['spaces:read', 'spaces:update'],
+      assignments: [{ ...schoolAdmin.assignments[0], permissions: ['spaces:read', 'spaces:update'] }],
+    };
+    const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
+
+    beforeEach(() => {
+      mockPrisma.space.findUnique.mockResolvedValue(stored);
+      mockPrisma.space.findFirst.mockResolvedValue(null);
+      mockPrisma.space.update.mockImplementation(async ({ data }: any) => ({ ...stored, ...data }));
+    });
+
+    it('updates the given fields only and returns the new values', async () => {
+      const space = await service.updateSpace('space-1', { name: 'Maths', language: 'fr' }, updater, context);
+
+      expect(mockPrisma.space.update).toHaveBeenCalledWith({
+        where: { id: 'space-1' },
+        data: { name: 'Maths', language: 'fr' },
+      });
+      expect(space).toMatchObject({
+        id: 'space-1',
+        schoolId: 'school-1',
+        name: 'Maths',
+        description: 'Algebra and analysis',
+        language: 'fr',
+        privacy: 'public',
+      });
+    });
+
+    it('records space_updated with the previous and new value of each changed field', async () => {
+      await service.updateSpace('space-1', { name: 'Maths', privacy: 'private', language: 'en' }, updater, context);
+
+      expect(mockAudit.record).toHaveBeenCalledTimes(1);
+      expect(mockAudit.record).toHaveBeenCalledWith({
+        category: 'documents',
+        action: 'space_updated',
+        actor: { userId: updater.id, role: 'school_admin', schoolId: 'school-1' },
+        entity: { type: 'space', id: 'space-1' },
+        details: {
+          schoolId: 'school-1',
+          changes: {
+            name: { from: 'Mathematics', to: 'Maths' },
+            privacy: { from: 'public', to: 'private' },
+          },
+        },
+        context,
+      });
+    });
+
+    it.each([null, ''])('clears the description with %j', async (description) => {
+      const space = await service.updateSpace('space-1', { description }, updater);
+      expect(mockPrisma.space.update).toHaveBeenCalledWith({ where: { id: 'space-1' }, data: { description: null } });
+      expect(space.description).toBe('');
+    });
+
+    it('writes nothing and records nothing when no value changes', async () => {
+      const space = await service.updateSpace('space-1', { name: 'Mathematics', privacy: 'public' }, updater);
+
+      expect(space.name).toBe('Mathematics');
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty body with 400', async () => {
+      await expect(service.updateSpace('space-1', {}, updater)).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 for an unknown space', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      await expect(service.updateSpace('space-404', { name: 'Maths' }, platformAdmin)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('lets a platform admin update a space of any school', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
+      await service.updateSpace('space-1', { name: 'Maths' }, platformAdmin);
+      expect(mockPrisma.space.update).toHaveBeenCalled();
+    });
+
+    it('lets a holder of documents:manage update a space of their school', async () => {
+      const manager: AuthenticatedUser = {
+        ...staffUser,
+        permissions: ['documents:manage'],
+        assignments: [{ ...staffUser.assignments[0], permissions: ['documents:manage'] }],
+      };
+      await service.updateSpace('space-1', { name: 'Maths' }, manager);
+      expect(mockPrisma.space.update).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a space of another school', updater, 'school-2'],
+      ['a staff member without space rights', staffUser, 'school-1'],
+      ['a student', studentUser, 'school-1'],
+      ['a holder of spaces:create only', schoolAdmin, 'school-1'],
+    ])('rejects %s with 403', async (_label, actor, schoolId) => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId });
+      await expect(service.updateSpace('space-1', { name: 'Maths' }, actor)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 when another space of the school already has the new name', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-2' });
+      await expect(service.updateSpace('space-1', { name: 'Physics' }, updater)).rejects.toThrow(
+        new ConflictException("A space named 'Physics' already exists in this school"),
+      );
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+        where: { schoolId: 'school-1', name: 'Physics', id: { not: 'space-1' } },
+        select: { id: true },
+      });
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+    });
+
+    it('does not look for a name conflict when the name is unchanged', async () => {
+      await service.updateSpace('space-1', { privacy: 'restricted' }, updater);
+      expect(mockPrisma.space.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('maps the unique index violation (P2002) to the same 409 and records nothing', async () => {
+      mockPrisma.space.update.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }),
+      );
+      await expect(service.updateSpace('space-1', { name: 'Physics' }, updater)).rejects.toThrow(
+        new ConflictException("A space named 'Physics' already exists in this school"),
+      );
+      expect(mockAudit.record).not.toHaveBeenCalled();
     });
   });
 
