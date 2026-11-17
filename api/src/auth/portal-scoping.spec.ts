@@ -400,7 +400,8 @@ describe('Portal Endpoints Role and School Scoping (§4.5, §4.7, #89)', () => {
         await service.findAllSpaces(school1Admin);
         expect(mockPrisma.space.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { schoolId: { in: ['school-1'] } },
+            // Scoped to the school's spaces, and deleted spaces are left out (#98).
+            where: { deletedAt: null, schoolId: { in: ['school-1'] } },
           }),
         );
       });
