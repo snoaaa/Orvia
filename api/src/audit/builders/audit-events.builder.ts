@@ -652,4 +652,36 @@ export const AuditEvents = {
       context,
     };
   },
+
+  /**
+   * A space was soft-deleted (DELETE /documents/spaces/:id, #98). `name` is the name before the row was
+   * renamed; `documentsCount` is the number of documents that became hidden with the space.
+   */
+  spaceDeleted(
+    p: {
+      spaceId: string;
+      schoolId: string;
+      name: string;
+      documentsCount: number;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.SPACE_DELETED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'space', id: p.spaceId },
+      details: {
+        schoolId: p.schoolId,
+        name: p.name,
+        documentsCount: p.documentsCount,
+      },
+      context,
+    };
+  },
 };
