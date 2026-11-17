@@ -15,6 +15,7 @@ import {
   OverviewUsersEntity,
 } from '../entities/overview.entity.js';
 import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
+import { ACTIVE_DOCUMENT, ACTIVE_SPACE } from '../../documents/utils/active-space.util.js';
 
 /** `all` = platform-wide; otherwise `schoolIds` restricts, and an empty list means "no school". */
 interface Scope {
@@ -118,16 +119,17 @@ export class OverviewService {
     const scope = this.scopeFor(actor, 'documents:read');
     if (!scope.allowed) return undefined;
 
+    // Deleted spaces (#98) and the documents inside them are not counted.
     const where: Prisma.DocumentWhereInput = {
-      deletedAt: null,
-      ...(scope.all ? {} : { space: { schoolId: { in: scope.schoolIds } } }),
+      ...ACTIVE_DOCUMENT,
+      ...(scope.all ? {} : { space: { ...ACTIVE_SPACE, schoolId: { in: scope.schoolIds } } }),
     };
     const [total, spaces, jobs] = await Promise.all([
       this.prisma.document.count({ where }),
-      this.prisma.space.count({ where: scope.all ? {} : { schoolId: { in: scope.schoolIds } } }),
+      this.prisma.space.count({ where: { ...ACTIVE_SPACE, ...(scope.all ? {} : { schoolId: { in: scope.schoolIds } }) } }),
       this.prisma.processingJob.groupBy({
         by: ['status'],
-        where: scope.all ? {} : { version: { document: { space: { schoolId: { in: scope.schoolIds } } } } },
+        where: { version: { document: { ...ACTIVE_DOCUMENT, ...(scope.all ? {} : { space: { ...ACTIVE_SPACE, schoolId: { in: scope.schoolIds } } }) } } },
         _count: true,
       }),
     ]);
@@ -143,7 +145,7 @@ export class OverviewService {
     if (!scope.allowed) return undefined;
 
     const rows = await this.prisma.space.findMany({
-      where: scope.all ? {} : { schoolId: { in: scope.schoolIds } },
+      where: { ...ACTIVE_SPACE, ...(scope.all ? {} : { schoolId: { in: scope.schoolIds } }) },
       select: { id: true, name: true, _count: { select: { documents: true } } },
       orderBy: { documents: { _count: 'desc' } },
       take: 7,
