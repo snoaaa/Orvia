@@ -1,4 +1,4 @@
-import { ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { ExecutionContext, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuditQueryService } from '../audit/services/audit-query.service.js';
@@ -400,23 +400,14 @@ describe('Portal Endpoints Role and School Scoping (§4.5, §4.7, #89)', () => {
         await service.findAllSpaces(school1Admin);
         expect(mockPrisma.space.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            // Scoped to the school's spaces, and deleted spaces are left out (#98).
-            where: { deletedAt: null, schoolId: { in: ['school-1'] } },
+            // Scoped to the school's spaces (#99), and deleted spaces are left out (#98).
+            where: { deletedAt: null, AND: [{ OR: [{ schoolId: { in: ['school-1'] } }] }] },
           }),
         );
       });
 
-      it('throws 403 Forbidden when school admin or doc manager accesses space of another school', async () => {
-        const mockPrisma = {
-          space: {
-            findFirst: vi.fn().mockResolvedValue({
-              id: 'space-s2',
-              schoolId: 'school-2',
-              name: 'School 2 Space',
-              privacy: 'public',
-            }),
-          },
-        };
+      it('answers 404 when school admin or doc manager asks for a space the visibility filter hides (#99)', async () => {
+        const mockPrisma = { space: { findFirst: vi.fn().mockResolvedValue(null) } };
         const service = new DocumentsService(
           mockPrisma as any,
           {} as any,
@@ -425,13 +416,13 @@ describe('Portal Endpoints Role and School Scoping (§4.5, §4.7, #89)', () => {
           {} as any,
         );
 
-        await expect(
-          service.findSpaceById('space-s2', school1Admin),
-        ).rejects.toBeInstanceOf(ForbiddenException);
-
-        await expect(
-          service.findSpaceById('space-s2', staffDocManager),
-        ).rejects.toBeInstanceOf(ForbiddenException);
+        await expect(service.findSpaceById('space-s2', school1Admin)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(service.findSpaceById('space-s2', staffDocManager)).rejects.toBeInstanceOf(NotFoundException);
+        expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+          where: {
+            AND: [{ id: 'space-s2' }, { deletedAt: null, AND: [{ OR: [{ schoolId: { in: ['school-1'] } }] }] }],
+          },
+        });
       });
 
       it('allows platform admin to access space belonging to any school', async () => {
