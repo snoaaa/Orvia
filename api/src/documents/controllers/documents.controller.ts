@@ -63,13 +63,18 @@ export class DocumentsController {
   @Get('spaces')
   @RequirePermission('spaces:read')
   @ApiOperation({
-    summary: 'List document spaces of your schools, paginated and alphabetical',
+    summary: 'List the document spaces you may see, paginated and alphabetical (§4.7, #99)',
     description:
+      'Platform admins see every space; roles with documents:manage see every space of their school(s); staff, ' +
+      'students and guests only the spaces holding at least one available document published to them ' +
+      '(guests: explicitly shared with their role or group). ' +
       'Same page/limit contract as the other lists: page defaults to 1, limit to 10 and is capped at 100. ' +
       'Returns { data, total, page, limit, totalPages }.',
   })
   @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
   @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Name contains (case-insensitive)' })
+  @ApiQuery({ name: 'schoolId', required: false, description: 'Only the spaces of this school (UUID)' })
   @ApiResponse({ status: 200, description: 'Paginated list of spaces', type: PaginatedSpacesEntity })
   async getSpaces(
     @Query() query: ListSpacesQueryDto,

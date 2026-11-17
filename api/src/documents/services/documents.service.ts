@@ -5,6 +5,7 @@ import type { Readable } from 'node:stream';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, canInSchool, schoolIdFilter } from '../../auth/utils/school-scope.util.js';
+import { buildVisibilityContext, buildVisibleSpacesWhere, needsGroups } from '../utils/space-visibility.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
@@ -396,16 +397,39 @@ export class DocumentsService {
   }
 
   /**
-   * Spaces of the caller's schools, paginated with the shared `page`/`limit` contract and ordered
-   * alphabetically (stable id tie-breaker). The table is small, so no extra index is needed.
+   * Where clause of the spaces `actor` may see (#99, rule in `space-visibility.util.ts`). The groups of the
+   * caller are loaded only when a non-manager assignment needs them.
+   */
+  private async visibleSpacesWhere(
+    actor: AuthenticatedUser,
+    filters: { schoolId?: string; search?: string } = {},
+  ): Promise<Prisma.SpaceWhereInput> {
+    const groupIdsBySchool = new Map<string, string[]>();
+    if (needsGroups(actor)) {
+      const assignmentGroupIds = actor.assignments.map((a) => a.groupId).filter((g): g is string => !!g);
+      const groups = await this.prisma.group.findMany({
+        where: {
+          deletedAt: null,
+          schoolId: { in: actor.schoolIds },
+          OR: [{ id: { in: assignmentGroupIds } }, { members: { some: { userId: actor.id } } }],
+        },
+        select: { id: true, schoolId: true },
+      });
+      for (const g of groups) groupIdsBySchool.set(g.schoolId, [...(groupIdsBySchool.get(g.schoolId) ?? []), g.id]);
+    }
+    return buildVisibleSpacesWhere(buildVisibilityContext(actor, groupIdsBySchool), filters);
+  }
+
+  /**
+   * Spaces the caller may see (§4.7, #99), optionally filtered by `schoolId` and `search` (name), paginated with
+   * the shared `page`/`limit` contract and ordered alphabetically (stable id tie-breaker).
    */
   async findAllSpaces(actor: AuthenticatedUser, query?: ListSpacesQueryDto): Promise<PaginatedSpacesEntity> {
     const page = Math.max(1, query?.page ?? 1);
     const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
     const skip = (page - 1) * limit;
 
-    const schoolId = schoolIdFilter(actor, 'spaces:read');
-    const where: Prisma.SpaceWhereInput = { ...ACTIVE_SPACE, ...(schoolId ? { schoolId } : {}) };
+    const where = await this.visibleSpacesWhere(actor, { schoolId: query?.schoolId, search: query?.search });
 
     const [total, spaces] = await Promise.all([
       this.prisma.space.count({ where }),
