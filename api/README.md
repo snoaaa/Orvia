@@ -246,7 +246,7 @@ so one call per filter also gives a counter (e.g. `GET /identity/users?status=IN
 | `GET /identity/users` | `status`, `search` (email or full name), `sortBy` (`createdAt`/`email`/`fullName`/`status`), `sortOrder` |
 | `GET /schools`, `GET /identity/schools` | `status`, `search` (name) |
 | `GET /documents` | newest first (`created_at DESC, id DESC`, indexed) |
-| `GET /documents/spaces` | alphabetical (`name`, then `id`) |
+| `GET /documents/spaces` | alphabetical (`name`, then `id`); only the spaces the caller may see (#99) |
 | `GET /audit/events`, `GET /identity/permissions` | **not paginated** — `audit` takes `limit` (≤500); `permissions` returns the matrix with holder counts (see below) |
 
 ### Permission overview
@@ -782,6 +782,34 @@ Other staff, students and guests get 403. The routes ask for `spaces:create` / `
 | `description` | Optional, trimmed, up to 2000 characters. On update, `null` or `""` clears it |
 | `language` | `en` (default) or `fr`; trimmed and lower-cased first, so `EN` and ` Fr ` are accepted and stored as `en` / `fr` |
 | `privacy` | `public` (default), `restricted` or `private`. Stored and validated only; no read rule uses it yet |
+
+### Which spaces a user sees: `GET /documents/spaces` and `GET /documents/spaces/{id}` (#99, Section 4.7)
+
+One rule for the list and the detail, in `src/documents/utils/space-visibility.util.ts` (the document list, #111, reuses
+`buildPublishedDocumentWhere`). The filter is applied **in the query**, so a space outside the scope is never loaded.
+Deleted spaces (`ACTIVE_SPACE`) are never returned.
+
+| Caller | Sees |
+|---|---|
+| Platform admin | Every space; `?schoolId=` narrows to one school |
+| `documents:manage` in a school (school admin, content manager, or any role with a document-management right) | Every space of that school, including spaces with no document yet |
+| Staff, student | Spaces of their school with at least one **published** document (below) |
+| Guest / parent (`PARENT_GUEST`) | Only spaces with a document **explicitly** shared with their role or one of their groups |
+
+A user with several assignments gets the union. A document is **published to** an assignment (school S, role R,
+groups G) when it is not deleted, in a non-deleted space of S, has at least one version with status `indexed` (a
+document still being processed does not count), and has a `document_access` row where:
+- `school_id` = S (a row with `school_id` NULL matches nobody);
+- `role_id` is NULL or R;
+- `group_id` is NULL or one of G: the group of the assignment plus the user's `group_members`, ignoring deleted groups.
+
+So a row with only `school_id` is published to the whole school (staff and students), **not** to guests: for a guest the
+row must also set `role_id` or `group_id`. `document_access` has no user column, so sharing with one single person is not
+possible yet.
+
+Query parameters: `page`, `limit` (same contract as the other lists), `search` (name contains, case-insensitive, max 100),
+`schoolId` (UUID; for anyone but a platform admin it can only narrow what they already see, so another school gives an
+empty list). The detail answers **404** (not 403) for a space the caller may not see, like an unknown or deleted one.
 
 ### Create a space: `POST /documents/spaces` (#97, `spaces:create`)
 
