@@ -46,16 +46,18 @@ describe('buildVisibilityContext', () => {
     expect(needsGroups(schoolAdmin)).toBe(false);
   });
 
-  it('other roles become grants; the guest is flagged; groups merge assignment group and memberships', () => {
+  it('other roles become grants; the guest is flagged; groups come from the loaded non-deleted groups', () => {
     expect(needsGroups(student)).toBe(true);
     expect(buildVisibilityContext(student, new Map([['S1', ['G2', 'G1']]]))).toEqual({
       all: false,
       manageSchoolIds: [],
       grants: [{ schoolId: 'S1', roleId: 'role-student', isGuest: false, groupIds: ['G2', 'G1'] }],
     });
-    expect(buildVisibilityContext(guest).grants).toEqual([
+    expect(buildVisibilityContext(guest, new Map([['S1', ['G9']]])).grants).toEqual([
       { schoolId: 'S1', roleId: 'role-guest', isGuest: true, groupIds: ['G9'] },
     ]);
+    // No group loaded (deleted group): the assignment's own group id does not count by itself.
+    expect(buildVisibilityContext(guest).grants[0].groupIds).toEqual([]);
   });
 
   it('mixes tiers across schools: manager in S1, student in S2', () => {

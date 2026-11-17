@@ -55,7 +55,11 @@ export function needsGroups(user: AuthenticatedUser): boolean {
   return manage !== 'all' && user.assignments.some((a) => !manage.includes(a.schoolId));
 }
 
-/** Builds the context from the authenticated user; `groupIdsBySchool` holds the user's groups per school. */
+/**
+ * Builds the context from the authenticated user. `groupIdsBySchool` holds the user's NON-DELETED groups per school
+ * (the group of the assignment and `group_members`): the caller loads them, because a soft-deleted group must not
+ * keep giving access.
+ */
 export function buildVisibilityContext(
   user: AuthenticatedUser,
   groupIdsBySchool: ReadonlyMap<string, readonly string[]> = new Map(),
@@ -68,7 +72,7 @@ export function buildVisibilityContext(
       schoolId: a.schoolId,
       roleId: a.roleId,
       isGuest: a.role === GUEST_ROLE,
-      groupIds: [...new Set([...(groupIdsBySchool.get(a.schoolId) ?? []), ...(a.groupId ? [a.groupId] : [])])],
+      groupIds: [...(groupIdsBySchool.get(a.schoolId) ?? [])],
     }));
   return { all: false, manageSchoolIds: manage, grants };
 }
