@@ -224,6 +224,10 @@ model Space {
   privacy     String   @default("public")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
+  /// Soft delete (#98): a deleted space keeps its row (renamed, so the name can be reused in the school).
+  /// Every reader must filter with ACTIVE_SPACE, and every reader of documents, versions or chunks with
+  /// ACTIVE_DOCUMENT (src/documents/utils/active-space.util.ts): its documents are hidden through the space.
+  deletedAt   DateTime? @map("deleted_at") @db.DateTime(3)
 
   school            School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   documents         Document[]
@@ -232,6 +236,7 @@ model Space {
 
   @@unique([schoolId, name])
   @@index([schoolId])
+  @@index([schoolId, deletedAt])
   @@map("spaces")
 }
 
