@@ -40,6 +40,8 @@ describe('DocumentsController', () => {
       updateDocument: vi.fn(),
       findAllSpaces: vi.fn(),
       createSpace: vi.fn(),
+      updateSpace: vi.fn(),
+      deleteSpace: vi.fn(),
       findSpaceById: vi.fn(),
       validateUploadedFile: vi.fn(),
       uploadPdf: vi.fn(),
@@ -117,13 +119,46 @@ describe('DocumentsController', () => {
       expect(res.total).toBe(0);
     });
 
-    it('delegates createSpace to documentsService.createSpace', async () => {
+    it('delegates createSpace to documentsService.createSpace with the audit context (#97)', async () => {
       const dto = { name: 'New Space', schoolId: 'school-1' };
       mockDocumentsService.createSpace.mockResolvedValueOnce({ id: 'space-1', name: 'New Space' });
+      const mockReq = { ip: '127.0.0.1', header: vi.fn().mockReturnValue(undefined) } as any;
 
-      const res = await controller.createSpace(dto as any, mockActor);
-      expect(mockDocumentsService.createSpace).toHaveBeenCalledWith(dto, mockActor);
+      const res = await controller.createSpace(dto as any, mockReq, mockActor);
+      expect(mockDocumentsService.createSpace).toHaveBeenCalledWith(
+        dto,
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
       expect(res.id).toBe('space-1');
+    });
+
+    it('delegates updateSpace to documentsService.updateSpace with the audit context (#97)', async () => {
+      const dto = { name: 'Renamed', privacy: 'private' as const };
+      mockDocumentsService.updateSpace.mockResolvedValueOnce({ id: 'space-1', name: 'Renamed' });
+      const mockReq = { ip: '127.0.0.1', header: vi.fn().mockReturnValue(undefined) } as any;
+
+      const res = await controller.updateSpace('space-1', dto, mockReq, mockActor);
+      expect(mockDocumentsService.updateSpace).toHaveBeenCalledWith(
+        'space-1',
+        dto,
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
+      expect(res.name).toBe('Renamed');
+    });
+
+    it('delegates deleteSpace to documentsService.deleteSpace with the audit context (#98)', async () => {
+      mockDocumentsService.deleteSpace.mockResolvedValueOnce(undefined);
+      const mockReq = { ip: '127.0.0.1', header: vi.fn().mockReturnValue(undefined) } as any;
+
+      const res = await controller.deleteSpace('space-1', mockReq, mockActor);
+      expect(mockDocumentsService.deleteSpace).toHaveBeenCalledWith(
+        'space-1',
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
+      expect(res).toBeUndefined();
     });
 
     it('delegates getSpaceById to documentsService.findSpaceById', async () => {

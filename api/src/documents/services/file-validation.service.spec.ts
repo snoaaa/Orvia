@@ -230,9 +230,11 @@ describe('FileValidationService', () => {
     expect(mockPrisma.documentVersion.findFirst).toHaveBeenCalledWith({
       where: {
         checksum: expect.any(String),
+        // ACTIVE_DOCUMENT: not deleted itself, and its space is not deleted (#98).
         document: {
-          spaceId: 'space-1',
           deletedAt: null,
+          space: { deletedAt: null },
+          spaceId: 'space-1',
         },
       },
       include: {

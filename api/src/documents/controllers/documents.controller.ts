@@ -3,8 +3,10 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -18,7 +20,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
+import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UpdateSpaceDto, UploadDocumentDto } from '../dto/index.js';
 import {
   DocumentEntity,
   DocumentVersionItemEntity,
@@ -77,11 +79,25 @@ export class DocumentsController {
   }
 
   @Post('spaces')
-  @RequirePermission('documents:manage')
-  @ApiOperation({ summary: 'Create a new document space in one of your schools' })
+  @RequirePermission('spaces:create')
+  @ApiOperation({
+    summary: 'Create a document space in one of your schools (§4.1, #97)',
+    description:
+      'Requires spaces:create (also covered by documents:manage) in the school given by schoolId, which is ' +
+      'mandatory for everyone, platform admins included. The name is unique within the school. ' +
+      'language defaults to en, privacy to public.',
+  })
   @ApiResponse({ status: 201, description: 'Space created', type: SpaceEntity })
-  async createSpace(@Body() dto: CreateSpaceDto, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
-    return this.documentsService.createSpace(dto, actor);
+  @ApiResponse({ status: 400, description: 'Invalid payload: missing or malformed schoolId, empty or too long name, unknown language or privacy, unknown field' })
+  @ApiResponse({ status: 403, description: 'Missing spaces:create, or the school is outside your scope' })
+  @ApiResponse({ status: 404, description: 'School not found' })
+  @ApiResponse({ status: 409, description: 'The school already has a space with this name' })
+  async createSpace(
+    @Body() dto: CreateSpaceDto,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SpaceEntity> {
+    return this.documentsService.createSpace(dto, actor, auditContextFromRequest(req));
   }
 
   @Get('spaces/:id')
@@ -96,6 +112,53 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Space not found' })
   async getSpaceById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
     return this.documentsService.findSpaceById(id, actor);
+  }
+
+  @Patch('spaces/:id')
+  @RequirePermission('spaces:update')
+  @ApiOperation({
+    summary: 'Edit a document space (§4.1, #97)',
+    description:
+      'Updates the name, description, main language and/or privacy; fields left out are unchanged and at least ' +
+      'one is required. The school of a space cannot be changed. Requires spaces:update (also covered by ' +
+      'documents:manage) in the school of the space. Writes a space_updated audit event listing the changed fields.',
+  })
+  @ApiParam({ name: 'id', description: 'Space UUID' })
+  @ApiResponse({ status: 200, description: 'Space updated (or already up to date)', type: SpaceEntity })
+  @ApiResponse({ status: 400, description: 'Invalid UUID, empty body, empty or too long name, unknown language or privacy, unknown field (including schoolId)' })
+  @ApiResponse({ status: 403, description: 'Missing spaces:update, or the space belongs to a school outside your scope' })
+  @ApiResponse({ status: 404, description: 'Space not found' })
+  @ApiResponse({ status: 409, description: 'The school already has a space with this name' })
+  async updateSpace(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateSpaceDto,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SpaceEntity> {
+    return this.documentsService.updateSpace(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Delete('spaces/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('spaces:delete')
+  @ApiOperation({
+    summary: 'Delete a document space (soft delete) (§4.1, #98)',
+    description:
+      'The space disappears from every list, search and retrieval, and so do its documents; the row stays in the ' +
+      'database and its name can be reused in the school. Requires spaces:delete (also covered by ' +
+      'documents:manage) in the school of the space. Writes a space_deleted audit event.',
+  })
+  @ApiParam({ name: 'id', description: 'Space UUID' })
+  @ApiResponse({ status: 204, description: 'Space deleted' })
+  @ApiResponse({ status: 400, description: 'Invalid UUID' })
+  @ApiResponse({ status: 403, description: 'Missing spaces:delete, or the space belongs to a school outside your scope' })
+  @ApiResponse({ status: 404, description: 'Space not found or already deleted' })
+  async deleteSpace(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.documentsService.deleteSpace(id, actor, auditContextFromRequest(req));
   }
 
   @Get(':id')

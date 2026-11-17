@@ -1,15 +1,15 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { assertSchoolAccess, canInSchool, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
+import { assertSchoolAccess, canInSchool, schoolIdFilter } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { buildDocumentStorageKey } from '../../storage/utils/storage-key.util.js';
-import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
+import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UpdateSpaceDto, UploadDocumentDto } from '../dto/index.js';
 import {
   DocumentEntity,
   DocumentVersionItemEntity,
@@ -21,6 +21,7 @@ import {
 } from '../entities/index.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
+import { ACTIVE_DOCUMENT, ACTIVE_SPACE } from '../utils/active-space.util.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
 import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
@@ -30,6 +31,11 @@ import { type AuditRequestContext, SYSTEM_AUDIT_CONTEXT } from '../../audit/util
 import { FileValidationService } from './file-validation.service.js';
 import { ImageConversionService } from './image-conversion.service.js';
 import { ProcessingQueueService } from './processing-queue.service.js';
+
+/** Column size of `spaces.name` (VARCHAR(191)); the API limit for new names is lower (SPACE_NAME_MAX_LENGTH). */
+const SPACE_NAME_COLUMN_LENGTH = 191;
+
+const spaceNameTakenMessage =(name: string) => `A space named '${name}' already exists in this school`;
 
 @Injectable()
 export class DocumentsService {
@@ -57,8 +63,8 @@ export class DocumentsService {
 
     const schoolId = schoolIdFilter(actor, 'documents:read');
     const where: Prisma.DocumentWhereInput = {
-      deletedAt: null,
-      ...(schoolId ? { space: { schoolId } } : {}),
+      ...ACTIVE_DOCUMENT,
+      ...(schoolId ? { space: { ...ACTIVE_SPACE, schoolId } } : {}),
     };
 
     const [total, docs] = await Promise.all([
@@ -88,11 +94,11 @@ export class DocumentsService {
 
   /** Loads a document and throws 403 unless `actor` has `permission` in the school of its space. */
   private async findDocumentInScope(id: string, actor: AuthenticatedUser, permission: string) {
-    const doc = await this.prisma.document.findUnique({
-      where: { id },
+    const doc = await this.prisma.document.findFirst({
+      where: { id, ...ACTIVE_DOCUMENT },
       include: { space: { select: { schoolId: true } } },
     });
-    if (!doc || doc.deletedAt) {
+    if (!doc) {
       throw new NotFoundException(`Document with ID ${id} not found`);
     }
     assertSchoolAccess(actor, permission, doc.space.schoolId);
@@ -100,7 +106,10 @@ export class DocumentsService {
   }
 
   async createDocument(dto: CreateDocumentDto, actor: AuthenticatedUser): Promise<DocumentEntity> {
-    const space = await this.prisma.space.findUnique({ where: { id: dto.spaceId }, select: { schoolId: true } });
+    const space = await this.prisma.space.findUnique({
+      where: { id: dto.spaceId, ...ACTIVE_SPACE },
+      select: { schoolId: true },
+    });
     if (!space) {
       throw new NotFoundException(`Space with ID ${dto.spaceId} not found`);
     }
@@ -396,7 +405,7 @@ export class DocumentsService {
     const skip = (page - 1) * limit;
 
     const schoolId = schoolIdFilter(actor, 'spaces:read');
-    const where: Prisma.SpaceWhereInput = schoolId ? { schoolId } : {};
+    const where: Prisma.SpaceWhereInput = { ...ACTIVE_SPACE, ...(schoolId ? { schoolId } : {}) };
 
     const [total, spaces] = await Promise.all([
       this.prisma.space.count({ where }),
@@ -419,42 +428,187 @@ export class DocumentsService {
     });
   }
 
-  /** School-scoped users must create the space in one of their schools. */
-  async createSpace(dto: CreateSpaceDto, actor: AuthenticatedUser): Promise<SpaceEntity> {
-    if (dto.schoolId) {
-      assertSchoolAccess(actor, 'documents:manage', dto.schoolId);
-    } else if (schoolsWithPermission(actor, 'documents:manage') !== 'all') {
-      throw new BadRequestException('schoolId is required: you can only create spaces in your own school');
+  /**
+   * POST /documents/spaces (§4.1, #97): the school is always explicit. 403 outside the schools where
+   * the caller holds `spaces:create` (or `documents:manage`), 404 for an unknown school, 409 if the
+   * school already has a space with this name. Records `space_created`.
+   */
+  async createSpace(
+    dto: CreateSpaceDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SpaceEntity> {
+    assertSchoolAccess(actor, 'spaces:create', dto.schoolId);
+
+    const school = await this.prisma.school.findUnique({ where: { id: dto.schoolId }, select: { id: true } });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${dto.schoolId} not found`);
     }
-    const id = randomUUID();
-    let schoolId = dto.schoolId;
-    if (!schoolId) {
-      const existingSchool = await this.prisma.school.findFirst();
-      if (existingSchool) {
-        schoolId = existingSchool.id;
-      } else {
-        const defaultSchool = await this.prisma.school.create({
-          data: {
-            id: randomUUID(),
-            name: 'Default Institution',
-            allowedDomains: '*',
-          },
-        });
-        schoolId = defaultSchool.id;
-      }
+    await this.assertSpaceNameIsFree(dto.schoolId, dto.name);
+
+    const data = SpaceMapper.fromDtoToCreateInput(dto, randomUUID(), dto.schoolId);
+    let created;
+    try {
+      created = await this.prisma.space.create({ data });
+    } catch (error) {
+      throw this.spaceNameConflictOr(error, dto.name);
     }
 
-    const data = SpaceMapper.fromDtoToCreateInput(dto, id, schoolId);
-    const created = await this.prisma.space.create({
-      data,
-    });
+    await this.audit.record(
+      AuditEvents.spaceCreated(
+        {
+          spaceId: created.id,
+          schoolId: created.schoolId,
+          name: created.name,
+          language: created.language,
+          privacy: created.privacy,
+          actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
     return SpaceMapper.toEntity(created);
+  }
+
+  /**
+   * PATCH /documents/spaces/:id (§4.1, #97): edits the name, description, main language and privacy.
+   * The school of a space never changes. 404 for an unknown space, 403 outside the schools where the
+   * caller holds `spaces:update` (or `documents:manage`), 400 for an empty body, 409 on a name already
+   * used in the school. Records `space_updated` with the changed fields; a request that changes
+   * nothing writes nothing and records nothing.
+   */
+  async updateSpace(
+    id: string,
+    dto: UpdateSpaceDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SpaceEntity> {
+    const space = await this.prisma.space.findUnique({ where: { id, ...ACTIVE_SPACE } });
+    if (!space) {
+      throw new NotFoundException(`Space with ID ${id} not found`);
+    }
+    assertSchoolAccess(actor, 'spaces:update', space.schoolId);
+
+    const next = {
+      name: dto.name,
+      // null and '' both clear the description.
+      description: dto.description === undefined ? undefined : dto.description || null,
+      language: dto.language,
+      privacy: dto.privacy,
+    };
+    if (Object.values(next).every((value) => value === undefined)) {
+      throw new BadRequestException('Provide at least one field to update: name, description, language or privacy');
+    }
+
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    for (const field of ['name', 'description', 'language', 'privacy'] as const) {
+      if (next[field] !== undefined && next[field] !== space[field]) {
+        changes[field] = { from: space[field], to: next[field] };
+      }
+    }
+    if (Object.keys(changes).length === 0) {
+      return SpaceMapper.toEntity(space);
+    }
+
+    if (changes.name) {
+      await this.assertSpaceNameIsFree(space.schoolId, changes.name.to as string, id);
+    }
+
+    let updated;
+    try {
+      updated = await this.prisma.space.update({
+        where: { id },
+        data: Object.fromEntries(Object.entries(changes).map(([field, change]) => [field, change.to])),
+      });
+    } catch (error) {
+      throw this.spaceNameConflictOr(error, dto.name ?? space.name);
+    }
+
+    await this.audit.record(
+      AuditEvents.spaceUpdated(
+        {
+          spaceId: id,
+          schoolId: space.schoolId,
+          actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          changes,
+        },
+        auditContext,
+      ),
+    );
+    return SpaceMapper.toEntity(updated);
+  }
+
+  /**
+   * DELETE /documents/spaces/:id (§4.1, #98): soft delete. 404 for an unknown or already deleted space, 403
+   * outside the schools where the caller holds `spaces:delete` (or `documents:manage`). One write sets
+   * `deleted_at` and renames the row (`<name> [deleted <date>]`) so the name can be reused in the school
+   * despite the unique index (school_id, name). The documents are not modified: they are hidden through the
+   * space (ACTIVE_DOCUMENT). Records `space_deleted` with the original name.
+   */
+  async deleteSpace(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<void> {
+    const space = await this.prisma.space.findUnique({ where: { id, ...ACTIVE_SPACE } });
+    if (!space) {
+      throw new NotFoundException(`Space with ID ${id} not found`);
+    }
+    assertSchoolAccess(actor, 'spaces:delete', space.schoolId);
+
+    const documentsCount = await this.prisma.document.count({ where: { spaceId: id, deletedAt: null } });
+
+    const deletedAt = new Date();
+    const suffix = ` [deleted ${deletedAt.toISOString()}]`;
+    // Array.from keeps multi-byte characters whole when an old, long name has to be shortened.
+    const name = Array.from(space.name).slice(0, SPACE_NAME_COLUMN_LENGTH - suffix.length).join('') + suffix;
+
+    // Conditional on deleted_at: of two simultaneous deletes, only one goes through.
+    const { count } = await this.prisma.space.updateMany({
+      where: { id, ...ACTIVE_SPACE },
+      data: { deletedAt, name, updatedAt: deletedAt },
+    });
+    if (count === 0) {
+      throw new NotFoundException(`Space with ID ${id} not found`);
+    }
+
+    await this.audit.record(
+      AuditEvents.spaceDeleted(
+        {
+          spaceId: id,
+          schoolId: space.schoolId,
+          name: space.name,
+          documentsCount,
+          actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+  }
+
+  /** Clear 409 in the normal case; the unique index (school_id, name) still decides under concurrency. */
+  private async assertSpaceNameIsFree(schoolId: string, name: string, exceptSpaceId?: string): Promise<void> {
+    const taken = await this.prisma.space.findFirst({
+      where: { ...ACTIVE_SPACE, schoolId, name, ...(exceptSpaceId ? { id: { not: exceptSpaceId } } : {}) },
+      select: { id: true },
+    });
+    if (taken) {
+      throw new ConflictException(spaceNameTakenMessage(name));
+    }
+  }
+
+  /** Maps the unique-index violation (two simultaneous requests) to the same 409; returns other errors as is. */
+  private spaceNameConflictOr(error: unknown, name: string): unknown {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return new ConflictException(spaceNameTakenMessage(name));
+    }
+    return error;
   }
 
   /** Get a single space by ID, scoped to caller's school access (§4.5, §4.7, #89). */
   async findSpaceById(id: string, actor: AuthenticatedUser): Promise<SpaceEntity> {
     const space = await this.prisma.space.findUnique({
-      where: { id },
+      where: { id, ...ACTIVE_SPACE },
     });
     if (!space) {
       throw new NotFoundException(`Space with ID ${id} not found`);
@@ -474,7 +628,7 @@ export class DocumentsService {
     actor: AuthenticatedUser,
   ): Promise<ValidatedFileEntity> {
     const space = await this.prisma.space.findUnique({
-      where: { id: spaceId },
+      where: { id: spaceId, ...ACTIVE_SPACE },
       select: { schoolId: true },
     });
     if (!space) {
@@ -520,7 +674,7 @@ export class DocumentsService {
     auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
     const space = await this.prisma.space.findUnique({
-      where: { id: spaceId },
+      where: { id: spaceId, ...ACTIVE_SPACE },
       select: { id: true, schoolId: true },
     });
     if (!space) {
@@ -667,7 +821,7 @@ export class DocumentsService {
     auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
     const space = await this.prisma.space.findUnique({
-      where: { id: spaceId },
+      where: { id: spaceId, ...ACTIVE_SPACE },
       select: { id: true, schoolId: true },
     });
     if (!space) {
@@ -927,15 +1081,15 @@ export class DocumentsService {
   }> {
     const { documentId, versionRef, actor, rangeHeader, disposition = 'attachment' } = options;
 
-    const document = await this.prisma.document.findUnique({
-      where: { id: documentId },
+    const document = await this.prisma.document.findFirst({
+      where: { id: documentId, ...ACTIVE_DOCUMENT },
       include: {
         space: { select: { id: true, schoolId: true, privacy: true } },
         access: { select: { schoolId: true, roleId: true, groupId: true } },
       },
     });
 
-    if (!document || document.deletedAt) {
+    if (!document) {
       throw new NotFoundException(`Document with ID ${documentId} not found`);
     }
 
