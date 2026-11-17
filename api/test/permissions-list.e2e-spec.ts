@@ -82,7 +82,12 @@ describe('Permissions list (e2e)', () => {
   it('is sorted by category, then code', async () => {
     const res = await list(platformAdminId);
     expect(res.status).toBe(200);
-    const keys = res.body.map((p: { category: string; code: string }) => `${p.category}|${p.code}`);
-    expect(keys).toEqual([...keys].sort((a: string, b: string) => a.localeCompare(b)));
+    const rows: Array<{ category: string; code: string }> = res.body;
+    const keys = rows.map((p) => `${p.category}|${p.code}`);
+    // Compare category first, then code. Sorting the joined string would let '.' and '|' decide the order
+    // (the alias permissions documents.manage / documents.access.manage, #88).
+    const byCategoryThenCode = (a: { category: string; code: string }, b: { category: string; code: string }) =>
+      a.category < b.category ? -1 : a.category > b.category ? 1 : a.code < b.code ? -1 : a.code > b.code ? 1 : 0;
+    expect(keys).toEqual([...rows].sort(byCategoryThenCode).map((p) => `${p.category}|${p.code}`));
   });
 });
