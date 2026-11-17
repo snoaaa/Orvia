@@ -13,6 +13,7 @@ import {
   type AllowedMimeType,
   detectMimeTypeFromBuffer,
 } from '../utils/magic-bytes.util.js';
+import { ACTIVE_DOCUMENT, ACTIVE_SPACE } from '../utils/active-space.util.js';
 import { AntivirusService } from './antivirus.service.js';
 
 export interface ValidateUploadOptions {
@@ -87,7 +88,7 @@ export class FileValidationService {
     // 5. Detect duplicates in space if spaceId is provided
     if (spaceId) {
       const space = await this.prisma.space.findUnique({
-        where: { id: spaceId },
+        where: { id: spaceId, ...ACTIVE_SPACE },
         select: { id: true, name: true },
       });
       if (!space) {
@@ -99,8 +100,8 @@ export class FileValidationService {
           where: {
             checksum,
             document: {
+              ...ACTIVE_DOCUMENT,
               spaceId,
-              deletedAt: null,
             },
           },
           include: {
