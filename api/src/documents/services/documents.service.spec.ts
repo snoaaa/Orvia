@@ -140,6 +140,7 @@ describe('DocumentsService', () => {
         findFirst: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn(),
         count: vi.fn(),
       },
       school: {
@@ -675,6 +676,101 @@ describe('DocumentsService', () => {
       await expect(service.updateSpace('space-1', { name: 'Physics' }, updater)).rejects.toThrow(
         new ConflictException("A space named 'Physics' already exists in this school"),
       );
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteSpace (#98)', () => {
+    const stored = { id: 'space-1', schoolId: 'school-1', name: 'Mathematics' };
+    const deleter: AuthenticatedUser = {
+      ...schoolAdmin,
+      permissions: ['spaces:read', 'spaces:delete'],
+      assignments: [{ ...schoolAdmin.assignments[0], permissions: ['spaces:read', 'spaces:delete'] }],
+    };
+    const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
+
+    beforeEach(() => {
+      mockPrisma.space.findUnique.mockResolvedValue(stored);
+      mockPrisma.space.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.document.count.mockResolvedValue(3);
+    });
+
+    it('looks the space up with the active filter and soft-deletes it, renaming the row', async () => {
+      await service.deleteSpace('space-1', deleter, context);
+
+      expect(mockPrisma.space.findUnique).toHaveBeenCalledWith({ where: { id: 'space-1', deletedAt: null } });
+      const call = mockPrisma.space.updateMany.mock.calls[0][0];
+      expect(call.where).toEqual({ id: 'space-1', deletedAt: null });
+      expect(call.data.deletedAt).toBeInstanceOf(Date);
+      expect(call.data.name).toBe(`Mathematics [deleted ${call.data.deletedAt.toISOString()}]`);
+    });
+
+    it('never modifies the documents of the space', async () => {
+      await service.deleteSpace('space-1', deleter, context);
+      expect(mockPrisma.document.update).not.toHaveBeenCalled();
+      expect(mockPrisma.document.count).toHaveBeenCalledWith({ where: { spaceId: 'space-1', deletedAt: null } });
+    });
+
+    it('keeps the renamed value inside the column size for a very long name', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, name: 'é'.repeat(191) });
+      await service.deleteSpace('space-1', deleter);
+      const { name } = mockPrisma.space.updateMany.mock.calls[0][0].data;
+      expect(Array.from(name).length).toBeLessThanOrEqual(191);
+      expect(name).toMatch(/ \[deleted .+\]$/);
+    });
+
+    it('records space_deleted with the original name and the number of hidden documents', async () => {
+      await service.deleteSpace('space-1', deleter, context);
+
+      expect(mockAudit.record).toHaveBeenCalledTimes(1);
+      expect(mockAudit.record).toHaveBeenCalledWith({
+        category: 'documents',
+        action: 'space_deleted',
+        actor: { userId: deleter.id, role: 'school_admin', schoolId: 'school-1' },
+        entity: { type: 'space', id: 'space-1' },
+        details: { schoolId: 'school-1', name: 'Mathematics', documentsCount: 3 },
+        context,
+      });
+    });
+
+    it('returns 404 for an unknown or already deleted space', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      await expect(service.deleteSpace('space-404', platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 and records nothing when a simultaneous request deleted the space first', async () => {
+      mockPrisma.space.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.deleteSpace('space-1', deleter)).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('lets a platform admin delete a space of any school', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
+      await service.deleteSpace('space-1', platformAdmin);
+      expect(mockPrisma.space.updateMany).toHaveBeenCalled();
+    });
+
+    it('lets a holder of documents:manage delete a space of their school', async () => {
+      const manager: AuthenticatedUser = {
+        ...staffUser,
+        permissions: ['documents:manage'],
+        assignments: [{ ...staffUser.assignments[0], permissions: ['documents:manage'] }],
+      };
+      await service.deleteSpace('space-1', manager);
+      expect(mockPrisma.space.updateMany).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a space of another school', deleter, 'school-2'],
+      ['a staff member without space rights', staffUser, 'school-1'],
+      ['a student', studentUser, 'school-1'],
+      ['a holder of spaces:update only', { ...deleter, permissions: ['spaces:update'], assignments: [{ ...deleter.assignments[0], permissions: ['spaces:update'] }] }, 'school-1'],
+    ])('rejects %s with 403', async (_label, actor, schoolId) => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId });
+      await expect(service.deleteSpace('space-1', actor as AuthenticatedUser)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
       expect(mockAudit.record).not.toHaveBeenCalled();
     });
   });

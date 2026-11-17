@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
@@ -135,6 +136,29 @@ export class DocumentsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<SpaceEntity> {
     return this.documentsService.updateSpace(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Delete('spaces/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('spaces:delete')
+  @ApiOperation({
+    summary: 'Delete a document space (soft delete) (§4.1, #98)',
+    description:
+      'The space disappears from every list, search and retrieval, and so do its documents; the row stays in the ' +
+      'database and its name can be reused in the school. Requires spaces:delete (also covered by ' +
+      'documents:manage) in the school of the space. Writes a space_deleted audit event.',
+  })
+  @ApiParam({ name: 'id', description: 'Space UUID' })
+  @ApiResponse({ status: 204, description: 'Space deleted' })
+  @ApiResponse({ status: 400, description: 'Invalid UUID' })
+  @ApiResponse({ status: 403, description: 'Missing spaces:delete, or the space belongs to a school outside your scope' })
+  @ApiResponse({ status: 404, description: 'Space not found or already deleted' })
+  async deleteSpace(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.documentsService.deleteSpace(id, actor, auditContextFromRequest(req));
   }
 
   @Get(':id')

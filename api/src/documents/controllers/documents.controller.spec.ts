@@ -41,6 +41,7 @@ describe('DocumentsController', () => {
       findAllSpaces: vi.fn(),
       createSpace: vi.fn(),
       updateSpace: vi.fn(),
+      deleteSpace: vi.fn(),
       findSpaceById: vi.fn(),
       validateUploadedFile: vi.fn(),
       uploadPdf: vi.fn(),
@@ -145,6 +146,19 @@ describe('DocumentsController', () => {
         expect.objectContaining({ ip: '127.0.0.1' }),
       );
       expect(res.name).toBe('Renamed');
+    });
+
+    it('delegates deleteSpace to documentsService.deleteSpace with the audit context (#98)', async () => {
+      mockDocumentsService.deleteSpace.mockResolvedValueOnce(undefined);
+      const mockReq = { ip: '127.0.0.1', header: vi.fn().mockReturnValue(undefined) } as any;
+
+      const res = await controller.deleteSpace('space-1', mockReq, mockActor);
+      expect(mockDocumentsService.deleteSpace).toHaveBeenCalledWith(
+        'space-1',
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
+      expect(res).toBeUndefined();
     });
 
     it('delegates getSpaceById to documentsService.findSpaceById', async () => {
