@@ -249,7 +249,7 @@ describe('Visible spaces (e2e)', () => {
     it('search by name is case-insensitive and partial', async () => {
       expect(await seen(ids.AdminA, '')).toContain('empty');
       const res = check(await get(ids.AdminA, `/documents/spaces?search=${prefix.toUpperCase()}%20ROLE`), 200);
-      expect((res.body.data as { id: string }[]).map((s) => labelOf.get(s.id)).sort()).toEqual(['roleGuest', 'roleStaff']);
+      expect((res.body.data as { id: string }[]).map((s) => labelOf.get(s.id)).sort((a, b) => (a ?? '').localeCompare(b ?? ''))).toEqual(['roleGuest', 'roleStaff']);
     });
 
     it('search never widens the scope', async () => {
