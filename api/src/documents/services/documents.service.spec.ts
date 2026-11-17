@@ -343,7 +343,7 @@ describe('DocumentsService', () => {
 
   describe('findSpaceById (#89)', () => {
     it('throws NotFoundException if space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       await expect(service.findSpaceById('space-missing', platformAdmin)).rejects.toThrow(
         NotFoundException,
@@ -351,7 +351,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns space when school admin has access to the space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
         name: 'Computer Science',
@@ -369,7 +369,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns space for platform admin regardless of school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-2',
         schoolId: 'school-other',
         name: 'Biology',
@@ -386,7 +386,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns the stored language and privacy, not the defaults (#97)', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-3',
         schoolId: 'school-1',
         name: 'Droit',
@@ -402,21 +402,18 @@ describe('DocumentsService', () => {
       expect(space.privacy).toBe('restricted');
     });
 
-    it('throws ForbiddenException when caller accesses space of another school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
-        id: 'space-other',
-        schoolId: 'school-other',
-        name: 'Law',
-        privacy: 'public',
-        description: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        school: { id: 'school-other', name: 'Law School' },
-      });
+    it('returns 404, not 403, for a space the caller may not see, and asks the database for visible spaces only (#99)', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
-      await expect(service.findSpaceById('space-other', schoolAdmin)).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(service.findSpaceById('space-other', schoolAdmin)).rejects.toThrow(NotFoundException);
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+        where: {
+          AND: [
+            { id: 'space-other' },
+            { deletedAt: null, AND: [{ OR: [{ schoolId: { in: ['school-1'] } }] }] },
+          ],
+        },
+      });
     });
   });
 
@@ -706,9 +703,11 @@ describe('DocumentsService', () => {
     });
 
     it('returns 404 for a deleted space on get, and looks it up with the filter', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
       await expect(service.findSpaceById('space-1', platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
-      expect(mockPrisma.space.findUnique).toHaveBeenCalledWith({ where: { id: 'space-1', deletedAt: null } });
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+        where: { AND: [{ id: 'space-1' }, { deletedAt: null }] },
+      });
     });
 
     it('returns 404 for a deleted space on update', async () => {
