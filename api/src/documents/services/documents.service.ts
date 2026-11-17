@@ -23,6 +23,7 @@ import {
 } from '../entities/index.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
+import { ACTIVE_SPACE } from '../utils/active-space.util.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
 import { normalizeTags, tagWhere } from '../utils/document-filters.util.js';
 import { isDocumentVisibleTo, versionFiltersWhere, visibleDocumentsWhere } from '../utils/document-visibility.util.js';
@@ -37,6 +38,9 @@ import { ProcessingQueueService } from './processing-queue.service.js';
 
 /** 403 message when a document of the reader's school is not published to them (#109). */
 const NOT_PUBLISHED_TO_YOU = 'This document is not published to your school, role, class, group or account';
+
+/** Column size of `spaces.name` (VARCHAR(191)); the API limit for new names is lower (SPACE_NAME_MAX_LENGTH). */
+const SPACE_NAME_COLUMN_LENGTH = 191;
 
 const spaceNameTakenMessage = (name: string) => `A space named '${name}' already exists in this school`;
 
@@ -642,6 +646,54 @@ export class DocumentsService {
     } catch (error) {
       throw this.spaceNameConflictOr(error, dto.name ?? id);
     }
+  }
+
+  /**
+   * DELETE /documents/spaces/:id (§4.1, #98): soft delete. 404 for an unknown or already deleted space, 403
+   * outside the schools where the caller holds `spaces:delete` (or `documents:manage`). One write sets
+   * `deleted_at` and renames the row (`<name> [deleted <date>]`) so the name can be reused in the school
+   * despite the unique index (school_id, name). The documents are not modified: they are hidden through the
+   * space (ACTIVE_DOCUMENT). Records `space_deleted` with the original name.
+   */
+  async deleteSpace(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<void> {
+    const space = await this.prisma.space.findUnique({ where: { id, ...ACTIVE_SPACE } });
+    if (!space) {
+      throw new NotFoundException(`Space with ID ${id} not found`);
+    }
+    assertSchoolAccess(actor, 'spaces:delete', space.schoolId);
+
+    const documentsCount = await this.prisma.document.count({ where: { spaceId: id, deletedAt: null } });
+
+    const deletedAt = new Date();
+    const suffix = ` [deleted ${deletedAt.toISOString()}]`;
+    // Array.from keeps multi-byte characters whole when an old, long name has to be shortened.
+    const name = Array.from(space.name).slice(0, SPACE_NAME_COLUMN_LENGTH - suffix.length).join('') + suffix;
+
+    // Conditional on deleted_at: of two simultaneous deletes, only one goes through.
+    const { count } = await this.prisma.space.updateMany({
+      where: { id, ...ACTIVE_SPACE },
+      data: { deletedAt, name, updatedAt: deletedAt },
+    });
+    if (count === 0) {
+      throw new NotFoundException(`Space with ID ${id} not found`);
+    }
+
+    await this.audit.record(
+      AuditEvents.spaceDeleted(
+        {
+          spaceId: id,
+          schoolId: space.schoolId,
+          name: space.name,
+          documentsCount,
+          actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
   }
 
   /** Clear 409 in the normal case; the unique index (school_id, name) still decides under concurrency. */
