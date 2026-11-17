@@ -11,6 +11,9 @@ describe('ProcessingQueueService', () => {
       processingJob: {
         update: vi.fn().mockResolvedValue({ id: 'job-1' }),
       },
+      document: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'doc-1' }),
+      },
     };
 
     service = new ProcessingQueueService(mockPrisma as unknown as PrismaService);
@@ -53,6 +56,27 @@ describe('ProcessingQueueService', () => {
         updatedAt: expect.any(Date),
       },
     });
+  });
+
+  it('skips a job whose document or space was deleted while it waited (#98)', async () => {
+    mockPrisma.document.findFirst.mockResolvedValueOnce(null);
+
+    service.enqueueJob({
+      jobId: 'job-3',
+      versionId: 'ver-3',
+      documentId: 'doc-3',
+      spaceId: 'space-1',
+      storageKey: 'spaces/space-1/docs/doc-3/v1.pdf',
+      mimeType: 'application/pdf',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockPrisma.document.findFirst).toHaveBeenCalledWith({
+      where: { id: 'doc-3', deletedAt: null, space: { deletedAt: null } },
+      select: { id: true },
+    });
+    expect(mockPrisma.processingJob.update).not.toHaveBeenCalled();
+    expect(service.getPendingJobCount()).toBe(0);
   });
 
   it('handles background processing errors without crashing', async () => {
