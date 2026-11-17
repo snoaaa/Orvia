@@ -338,6 +338,26 @@ theirs, never on a user with a higher-level (platform) role, and nobody on their
 Invalid UUID → 400, unknown user → 404. The older `PATCH /identity/users/{id}` with `status: ACTIVE`
 applies the same rules, including the return to `INVITED`.
 
+## School domains
+
+`src/identity-and-access/controllers/school-domains.controller.ts`, under the **Schools** tag in Swagger
+(Section 4.6). The allowed email domains of a school decide who can be invited and sign in with Google;
+`school_domains` is read on every request, so a change applies to the next invitation and login.
+
+| Endpoint | Permission | Answer |
+|---|---|---|
+| `GET /schools/{id}/domains` | `schools:read` | The domains with their ids |
+| `POST /schools/{id}/domains` `{ "domain": "..." }` | `schools:update` | 201 with the new domain |
+| `DELETE /schools/{id}/domains/{domainId}` | `schools:update` | 204 |
+
+Platform admins act on every school, school admins on their own (403 otherwise). Domains are trimmed,
+lowercased and stripped of a leading `@`, and must be a plain domain name with a top-level part
+(`school`, `*.x.edu`, `user@x.edu`, `http://x.edu` → 400). A domain cannot belong to two schools, and
+neither can its parent or subdomains, because login accepts subdomains (409). Already on this school → 409,
+domain of another school through this school → 404. `schools.allowed_domains` is kept equal to the rows.
+**Removing the last domain lifts the restriction:** a school without domains accepts any email domain.
+`POST /schools` and `PATCH /schools/{id}` (`allowedDomains`) apply the same format and overlap rules.
+
 ## Groups
 
 `src/identity-and-access/controllers/groups.controller.ts`, under the **Groups** tag in Swagger

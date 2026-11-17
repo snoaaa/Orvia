@@ -29,6 +29,7 @@ import {
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
 import { DomainValidationService } from './domain-validation.service.js';
+import { assertDomainsAvailable, parseDomainList } from '../utils/school-domain.util.js';
 import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 
 /** Role given to invited users when none is specified. */
@@ -1081,22 +1082,9 @@ export class IdentityAndAccessService {
     // `undefined` = leave the domains untouched. `''` = clear them.
     let domainList: string[] | null = null;
     if (dto.allowedDomains !== undefined) {
-      domainList = [
-        ...new Set(
-          dto.allowedDomains
-            .split(',')
-            .map((domain) => domain.trim().toLowerCase())
-            .filter((domain) => domain.length > 0),
-        ),
-      ];
-      if (domainList.length > 0) {
-        const taken = await this.prisma.schoolDomain.findFirst({
-          where: { domain: { in: domainList }, schoolId: { not: id } },
-        });
-        if (taken) {
-          throw new ConflictException(`Domain '${taken.domain}' is already assigned to another school`);
-        }
-      }
+      // Same rules as POST /schools/:id/domains (#32): valid format, no overlap with another school.
+      domainList = parseDomainList(dto.allowedDomains);
+      await assertDomainsAvailable(this.prisma, domainList, id);
     }
 
     const data = {
@@ -1222,19 +1210,9 @@ export class IdentityAndAccessService {
     }
 
     const id = randomUUID();
-    const domainList = (dto.allowedDomains || '')
-      .split(',')
-      .map((d) => d.trim().toLowerCase())
-      .filter((d) => d.length > 0);
-
-    if (domainList.length > 0) {
-      const existingDomain = await this.prisma.schoolDomain.findFirst({
-        where: { domain: { in: domainList } },
-      });
-      if (existingDomain) {
-        throw new ConflictException(`Domain '${existingDomain.domain}' is already assigned to another school`);
-      }
-    }
+    // Same rules as POST /schools/:id/domains (#32): valid format, no overlap with another school.
+    const domainList = parseDomainList(dto.allowedDomains || '');
+    await assertDomainsAvailable(this.prisma, domainList);
 
     const status = dto.status?.trim() || 'active';
 
@@ -1243,7 +1221,7 @@ export class IdentityAndAccessService {
         id,
         name: trimmedName,
         status,
-        allowedDomains: dto.allowedDomains ? dto.allowedDomains.trim() : '',
+        allowedDomains: domainList.join(','),
         settings: (dto.settings as object) || null,
         domains:
           domainList.length > 0
