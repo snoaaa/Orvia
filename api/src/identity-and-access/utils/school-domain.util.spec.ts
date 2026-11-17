@@ -11,6 +11,14 @@ describe('school domain utils (#32)', () => {
     expect(isValidDomain(domain)).toBe(true);
   });
 
+  it.each(['edu.cm', 'ac.uk', 'co.za', 'gov.ng'])('rejects the shared suffix %s', (domain) => {
+    expect(isValidDomain(domain)).toBe(false);
+  });
+
+  it.each(['school.edu.cm', 'ox.ac.uk', 'edu.com'])('accepts %s under a shared suffix or a gTLD', (domain) => {
+    expect(isValidDomain(domain)).toBe(true);
+  });
+
   it.each(['school', 'a..edu', '-x.edu', 'x-.edu', 'user@x.edu', 'http://x.edu', '*.x.edu', 'x.edu.', 'x.123', 'sch ool.edu', 'x_y.edu', ''])(
     'rejects %j',
     (domain) => {
@@ -21,6 +29,8 @@ describe('school domain utils (#32)', () => {
   it('parses a comma-separated list, normalized and without duplicates', () => {
     expect(parseDomainList(' A.edu, @b.EDU ,a.edu,, ')).toEqual(['a.edu', 'b.edu']);
     expect(parseDomainList('')).toEqual([]);
+    expect(parseDomainList(null)).toEqual([]);
+    expect(parseDomainList(undefined)).toEqual([]);
   });
 
   it('rejects a list with an invalid domain', () => {

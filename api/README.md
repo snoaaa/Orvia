@@ -352,11 +352,15 @@ applies the same rules, including the return to `INVITED`.
 
 Platform admins act on every school, school admins on their own (403 otherwise). Domains are trimmed,
 lowercased and stripped of a leading `@`, and must be a plain domain name with a top-level part
-(`school`, `*.x.edu`, `user@x.edu`, `http://x.edu` → 400). A domain cannot belong to two schools, and
-neither can its parent or subdomains, because login accepts subdomains (409). Already on this school → 409,
-domain of another school through this school → 404. `schools.allowed_domains` is kept equal to the rows.
+(`school`, `*.x.edu`, `user@x.edu`, `http://x.edu` → 400). A suffix shared by a whole country (`edu.cm`,
+`ac.uk`, `co.za`...) is refused (400), so it cannot block every school under it. A domain cannot belong to
+two schools, and neither can its parent or subdomains, because login accepts subdomains (409). Already on this
+school, or a subdomain of one of its domains (redundant) → 409; a broader parent is allowed. Domain of another
+school through this school → 404. `schools.allowed_domains` (TEXT since migration
+`9_schools_allowed_domains_text`) is kept equal to the rows.
 **Removing the last domain lifts the restriction:** a school without domains accepts any email domain.
-`POST /schools` and `PATCH /schools/{id}` (`allowedDomains`) apply the same format and overlap rules.
+`POST /schools` and `PATCH /schools/{id}` (`allowedDomains`) apply the same format and overlap rules;
+`allowedDomains: null` clears the list like `""`. After pulling, run `npx prisma generate` and `npm run db:migrate`.
 
 ## Groups
 

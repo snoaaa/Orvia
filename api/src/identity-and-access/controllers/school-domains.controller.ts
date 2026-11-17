@@ -23,6 +23,7 @@ export class SchoolDomainsController {
   @RequirePermission('schools:read')
   @ApiOperation({ summary: "List a school's allowed email domains, with their ids" })
   @ApiResponse({ status: 200, type: [SchoolDomainEntity] })
+  @ApiResponse({ status: 400, description: 'Invalid school id' })
   @ApiResponse({ status: 404, description: 'School not found' })
   async listDomains(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -32,17 +33,19 @@ export class SchoolDomainsController {
   }
 
   @Post()
+  @HttpCode(HttpStatus.CREATED)
   @RequirePermission('schools:update')
   @ApiOperation({
     summary: 'Allow an email domain for a school',
     description:
-      'The domain is trimmed, lowercased and stripped of a leading "@". It cannot belong to two schools, and ' +
-      'neither can its parent or subdomains (login accepts subdomains). Applies to the next invitation and login.',
+      'The domain is trimmed, lowercased and stripped of a leading "@"; a shared suffix such as edu.cm is refused. ' +
+      'It cannot belong to two schools, and neither can its parent or subdomains (login accepts subdomains). ' +
+      'A subdomain of a domain this school already has is redundant (409). Applies to the next invitation and login.',
   })
   @ApiResponse({ status: 201, description: 'Domain allowed', type: SchoolDomainEntity })
   @ApiResponse({ status: 400, description: 'Invalid school id or domain format' })
   @ApiResponse({ status: 404, description: 'School not found' })
-  @ApiResponse({ status: 409, description: 'Already allowed for this school, or overlapping a domain of another school' })
+  @ApiResponse({ status: 409, description: 'Already allowed or covered for this school, or overlapping a domain of another school' })
   async addDomain(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AddSchoolDomainDto,

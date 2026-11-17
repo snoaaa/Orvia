@@ -1,11 +1,17 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AddSchoolDomainDto } from '../dto/index.js';
 import { SchoolDomainEntity } from '../entities/index.js';
-import { assertDomainsAvailable } from '../utils/school-domain.util.js';
+import {
+  assertDomainsAvailable,
+  INVALID_DOMAIN_MESSAGE,
+  isValidDomain,
+  normalizeDomain,
+  parentDomains,
+} from '../utils/school-domain.util.js';
 
 /**
  * Allowed email domains of a school (#32, Section 4.6). Invitations and Google login read `school_domains`
@@ -23,14 +29,27 @@ export class SchoolDomainsService {
     return rows.map((row) => this.toEntity(row));
   }
 
-  /** POST /schools/:id/domains: 409 if this school already has it, or another school has it, a parent or a subdomain. */
+  /**
+   * POST /schools/:id/domains: 409 if this school already has it or one of its parents (it would be redundant),
+   * or if another school has it, a parent or a subdomain. Adding a broader parent to this school is allowed.
+   */
   async addDomain(schoolId: string, dto: AddSchoolDomainDto, actor: AuthenticatedUser): Promise<SchoolDomainEntity> {
     assertSchoolAccess(actor, 'schools:update', schoolId);
     await this.findSchool(schoolId);
-    const { domain } = dto;
+    // Also normalized here, for callers that do not go through the validation pipe.
+    const domain = normalizeDomain(dto.domain);
+    if (!isValidDomain(domain)) {
+      throw new BadRequestException(`'${domain}' ${INVALID_DOMAIN_MESSAGE}`);
+    }
 
-    if (await this.prisma.schoolDomain.findFirst({ where: { schoolId, domain } })) {
+    const covering = await this.prisma.schoolDomain.findFirst({
+      where: { schoolId, domain: { in: [domain, ...parentDomains(domain)] } },
+    });
+    if (covering?.domain === domain) {
       throw new ConflictException(`Domain '${domain}' is already allowed for this school`);
+    }
+    if (covering) {
+      throw new ConflictException(`Domain '${domain}' is already covered by '${covering.domain}' for this school`);
     }
     await assertDomainsAvailable(this.prisma, [domain], schoolId);
 

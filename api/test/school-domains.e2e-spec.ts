@@ -112,7 +112,7 @@ describe('School domains (e2e)', () => {
       expect(school.allowedDomains.split(',')).toContain(`lycee.${tld}`);
     });
 
-    it.each(['school', 'a..edu', '-x.edu', `user@x.${tld}`, `http://x.${tld}`, `*.x.${tld}`, 'x.123', '', 42])(
+    it.each(['edu.cm', 'ac.uk', 'school', 'a..edu', '-x.edu', `user@x.${tld}`, `http://x.${tld}`, `*.x.${tld}`, 'x.123', '', 42])(
       'rejects the invalid domain %j',
       async (domain) => {
         check(await add(ids.AdminA, schools.A, domain), 400);
@@ -123,6 +123,24 @@ describe('School domains (e2e)', () => {
       check(await add(ids.AdminA, schools.A, `twice.${tld}`), 201);
       const res = check(await add(ids.AdminA, schools.A, `TWICE.${tld}`), 409);
       expect(res.body.message).toContain('already allowed for this school');
+    });
+
+    it('refuses a subdomain of a domain the school already has, but allows a broader parent', async () => {
+      check(await add(ids.AdminA, schools.A, `own.${tld}`), 201);
+      expect(check(await add(ids.AdminA, schools.A, `cs.own.${tld}`), 409).body.message).toContain(`covered by 'own.${tld}'`);
+      check(await add(ids.AdminA, schools.A, `x.wide.${tld}`), 201);
+      check(await add(ids.AdminA, schools.A, `wide.${tld}`), 201);
+    });
+
+    it('stores a text copy longer than 191 characters', async () => {
+      const school = (await prisma.school.create({ data: { name: `Test E2E SchoolDomains School Long ${stamp}` } })).id;
+      const long = (n: number) => `${'a'.repeat(60)}${n}.${tld}`;
+      for (const n of [1, 2, 3, 4]) {
+        check(await add(platformAdminId, school, long(n)), 201);
+      }
+      const row = await prisma.school.findUniqueOrThrow({ where: { id: school } });
+      expect(row.allowedDomains.length).toBeGreaterThan(191);
+      expect(row.allowedDomains.split(',')).toHaveLength(4);
     });
 
     it('a domain cannot belong to two schools, nor its parent or subdomains', async () => {
@@ -187,6 +205,15 @@ describe('School domains (e2e)', () => {
         await http().post('/schools').set('Authorization', auth).send({ name: `Test E2E SchoolDomains School C ${stamp}`, allowedDomains: 'bad' }),
         400,
       );
+    });
+
+    it('PATCH with allowedDomains null clears the list', async () => {
+      const auth = await bearer(platformAdminId);
+      const school = (await prisma.school.create({ data: { name: `Test E2E SchoolDomains School Null ${stamp}` } })).id;
+      check(await add(platformAdminId, school, `null.${tld}`), 201);
+      const res = check(await http().patch(`/schools/${school}`).set('Authorization', auth).send({ allowedDomains: null }), 200);
+      expect(res.body.allowedDomains).toBe('');
+      expect(await prisma.schoolDomain.count({ where: { schoolId: school } })).toBe(0);
     });
 
     it('reject a subdomain of another school, and normalize the text copy', async () => {

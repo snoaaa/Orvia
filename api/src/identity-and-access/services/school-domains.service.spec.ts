@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
@@ -44,11 +44,27 @@ describe('SchoolDomainsService (#32)', () => {
   });
 
   it('rejects a domain this school already has', async () => {
-    prisma.schoolDomain.findFirst.mockResolvedValueOnce(row);
+    prisma.schoolDomain.findFirst.mockResolvedValueOnce({ ...row, domain: 'school.edu' });
     await expect(service.addDomain('school-a', { domain: 'school.edu' }, admin)).rejects.toThrow(
       "Domain 'school.edu' is already allowed for this school",
     );
     expect(prisma.schoolDomain.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a subdomain of a domain this school already has', async () => {
+    prisma.schoolDomain.findFirst.mockResolvedValueOnce(row);
+    await expect(service.addDomain('school-a', { domain: 'cs.school.edu' }, admin)).rejects.toThrow(
+      "Domain 'cs.school.edu' is already covered by 'school.edu' for this school",
+    );
+    expect(prisma.schoolDomain.findFirst.mock.calls[0][0]).toEqual({
+      where: { schoolId: 'school-a', domain: { in: ['cs.school.edu', 'school.edu'] } },
+    });
+  });
+
+  it('normalizes and validates even without the validation pipe', async () => {
+    await service.addDomain('school-a', { domain: '  @School.EDU ' }, admin);
+    expect(prisma.schoolDomain.create).toHaveBeenCalledWith({ data: { schoolId: 'school-a', domain: 'school.edu' } });
+    await expect(service.addDomain('school-a', { domain: 'edu.cm' }, admin)).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('rejects a domain overlapping another school', async () => {
