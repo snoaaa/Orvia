@@ -1,0 +1,56 @@
+@if (canManage()) {
+  <app-card cardTitle="Assignments">
+    @if (assignments().length === 0) {
+      <div class="py-4 text-center text-muted">
+        <p class="mb-0">This user has no assignment in the schools you manage.</p>
+      </div>
+    } @else {
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>SCHOOL</th>
+              <th>GROUP</th>
+              <th>ROLE</th>
+              <th class="text-end">ACTION</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (assignment of assignments(); track assignment.id) {
+              <tr>
+                <td class="f-w-500">{{ assignment.schoolName }}</td>
+                <td>{{ assignment.groupName || '—' }}</td>
+                <td>
+                  <span class="badge bg-light-primary border border-primary">{{ assignment.role }}</span>
+                </td>
+                <td class="text-end">
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1"
+                    (click)="openRemoveModal(assignment)"
+                    title="Remove assignment"
+                  >
+                    <i class="ti ti-trash f-14"></i>
+                    <span>Remove</span>
+                  </button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </app-card>
+
+  <app-confirmation-modal
+    [isOpen]="removeTarget() !== null"
+    title="Remove Assignment"
+    message="Are you sure you want to remove this assignment? The user loses this role in the school right away."
+    [detailText]="(removeTarget()?.role || '') + ' · ' + (removeTarget()?.schoolName || '') + (removeTarget()?.groupName ? ' · ' + removeTarget()?.groupName : '')"
+    confirmText="Remove Assignment"
+    confirmButtonClass="btn-danger"
+    [isLoading]="modalLoading()"
+    (confirmed)="confirmRemove()"
+    (cancelled)="closeModal()"
+  />
+}

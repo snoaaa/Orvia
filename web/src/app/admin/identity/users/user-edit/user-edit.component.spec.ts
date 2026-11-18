@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { of, throwError } from 'rxjs';
+import { AssignmentService } from '../../assignments/services/assignment.service';
 import { ActiveSession, UserEntity } from '../models/user.model';
 import { UserManagementService } from '../services/user-management.service';
 import { UserEditComponent } from './user-edit.component';
@@ -50,6 +51,12 @@ describe('UserEditComponent', () => {
       providers: [
         { provide: UserManagementService, useValue: mockUserService },
         {
+          provide: AssignmentService,
+          useValue: {
+            getCurrentAdmin: vi.fn().mockReturnValue(of({ id: 'me', permissions: ['users:assign_role'], isPlatformAdmin: true }))
+          }
+        },
+        {
           provide: ActivatedRoute,
           useValue: {
             snapshot: {
@@ -73,6 +80,19 @@ describe('UserEditComponent', () => {
     expect(component.sessions().length).toBe(1);
     expect(component.editForm.get('fullName')?.value).toBe('Test User');
     expect(component.editForm.get('email')?.value).toBe('test@school.edu');
+  });
+
+  it('should refresh only the assignments after a change', () => {
+    const assignment = { id: 'as-1', schoolId: 's1', schoolName: 'A', role: 'STAFF', groupId: null, groupName: null };
+    mockUserService.getUserById.mockReturnValue(of({ ...mockUser, fullName: 'Server Name', assignments: [assignment] }));
+    component.refreshAssignments();
+    expect(component.user()?.assignments).toEqual([assignment]);
+    expect(component.user()?.fullName).toBe('Test User');
+  });
+
+  it('should show the assignments card for an admin who can assign roles', () => {
+    expect(fixture.nativeElement.querySelector('app-user-assignments')).not.toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('Assignments');
   });
 
   it('should validate edit form fields correctly', () => {
