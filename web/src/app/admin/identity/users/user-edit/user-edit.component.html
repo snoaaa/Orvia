@@ -339,6 +339,14 @@
         </div>
       }
     </app-card>
+
+    @if (user()) {
+      <app-user-assignments
+        [userId]="userId()"
+        [assignments]="user()?.assignments ?? []"
+        (changed)="refreshAssignments()"
+      />
+    }
   </div>
 </div>
 

@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormBuilder, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
+import { UserAssignmentsComponent } from '../../assignments/user-assignments/user-assignments.component';
 import { GoeyToastService } from 'goey-toast-angular';
 import { CardComponent } from '../../../theme/shared/components/card/card.component';
 import { PortalSessionService } from '../../services/portal-session.service';
@@ -24,7 +25,8 @@ import { UserManagementService } from '../services/user-management.service';
     ReactiveFormsModule,
     RouterModule,
     CardComponent,
-    ConfirmationModalComponent
+    ConfirmationModalComponent,
+    UserAssignmentsComponent
   ],
   templateUrl: './user-edit.component.html',
   styleUrls: ['./user-edit.component.scss']
@@ -299,6 +301,17 @@ export class UserEditComponent implements OnInit {
         this.isAssigningRole.set(false);
         const msg = this.userService.extractErrorMessage(error, 'Failed to assign role.');
         this.toast.error('Role Assignment Failed', { description: msg });
+      }
+    });
+  }
+
+  /** Reloads the user after an assignment changed, without the full-page loader or touching the profile form. */
+  refreshAssignments(): void {
+    this.userService.getUserById(this.userId()).subscribe({
+      next: (userData) => this.user.update((current) => (current ? { ...current, assignments: userData.assignments } : userData)),
+      error: (error) => {
+        const msg = this.userService.extractErrorMessage(error, 'Failed to refresh the assignments.');
+        this.toast.error('Refresh Failed', { description: msg });
       }
     });
   }
