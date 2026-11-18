@@ -1,18 +1,7 @@
+import { UserAssignment } from '../../assignments/models/assignment.model';
+
 export type UserStatus = 'INVITED' | 'ACTIVE' | 'SUSPENDED';
 
-export interface UserSchoolAssignment {
-  schoolId: string;
-  roleId: string;
-  role?: {
-    id: string;
-    name: string;
-    scope: 'platform' | 'school';
-  };
-  school?: {
-    id: string;
-    name: string;
-  };
-}
 
 export interface UserEntity {
   id: string;
@@ -24,7 +13,7 @@ export interface UserEntity {
   setupTokenExpiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
-  assignments?: UserSchoolAssignment[];
+  assignments?: UserAssignment[];
 }
 
 export interface PaginatedUsers {
