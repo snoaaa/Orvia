@@ -165,6 +165,13 @@ describe('Document publication (e2e)', () => {
       await prisma.document.update({ where: { id: deleted }, data: { deletedAt: new Date() } });
       check(await publish(ids.AdminA, deleted, [{ type: 'school', id: schools.A }]), 404);
       check(await rules(ids.AdminA, 'abc'), 400);
+      // Every document route checks the id the same way.
+      const auth = { Authorization: await bearer(ids.AdminA) };
+      for (const path of ['abc', 'abc/versions', 'abc/download', 'abc/stream', 'abc/versions/1/download']) {
+        check(await http().get(`/documents/${path}`).set(auth), 400);
+      }
+      check(await http().patch('/documents/abc').set(auth).send({ title: 'x' }), 400);
+      check(await http().delete('/documents/abc').set(auth), 400);
     });
   });
 
@@ -217,14 +224,18 @@ describe('Document publication (e2e)', () => {
         ]),
         201,
       );
-      expect(first.body.map((r: { type: string; targetName: string }) => [r.type, r.targetName])).toEqual([
-        ['school', `Test E2E DocAccess School A ${stamp}`],
-        ['class', `${tag} 6e A`],
-        ['group', `${tag} Sciences`],
-        ['role', 'STAFF'],
-        ['user', 'ParentA Name'],
-      ]);
-      expect(first.body[0]).toMatchObject({ documentId: doc, targetId: schools.A });
+      // Rules added together share their creation time, so their order among themselves is not part of the contract.
+      expect(first.body.map((r: { type: string; targetName: string }) => [r.type, r.targetName])).toEqual(
+        expect.arrayContaining([
+          ['school', `Test E2E DocAccess School A ${stamp}`],
+          ['class', `${tag} 6e A`],
+          ['group', `${tag} Sciences`],
+          ['role', 'STAFF'],
+          ['user', 'ParentA Name'],
+        ]),
+      );
+      expect(first.body).toHaveLength(5);
+      expect(first.body.find((r: { type: string }) => r.type === 'school')).toMatchObject({ documentId: doc, targetId: schools.A });
 
       const again = check(await publish(ids.AdminA, doc, [{ type: 'class', id: groups.classA }]), 201);
       expect(again.body).toHaveLength(5);

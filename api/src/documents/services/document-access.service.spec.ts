@@ -1,5 +1,4 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditService } from '../../audit/services/audit.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
@@ -21,7 +20,9 @@ const manager = (scope: 'platform' | 'school' = 'school') =>
 describe('DocumentAccessService (#109)', () => {
   const prisma = {
     document: { findUnique: vi.fn() },
-    documentAccess: { create: vi.fn(), findMany: vi.fn() },
+    $transaction: vi.fn(),
+    $queryRaw: vi.fn(),
+    documentAccess: { createMany: vi.fn(), findMany: vi.fn() },
     role: { findMany: vi.fn() },
     group: { findMany: vi.fn() },
     user: { findMany: vi.fn() },
@@ -29,10 +30,12 @@ describe('DocumentAccessService (#109)', () => {
   const audit = { record: vi.fn() };
   const service = new DocumentAccessService(prisma as unknown as PrismaService, audit as unknown as AuditService);
   const add = (rules: DocumentAccessTargetDto[], actor = manager()) => service.addRules('doc-1', { rules }, actor);
-  const created = () => prisma.documentAccess.create.mock.calls.map(([args]) => args.data);
+  const created = () => prisma.documentAccess.createMany.mock.calls.flatMap(([args]) => args.data);
 
   beforeEach(() => {
     vi.resetAllMocks();
+    prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => Promise<unknown>) => run(prisma));
+    prisma.$queryRaw.mockResolvedValue([{ id: 'doc-1' }]);
     prisma.document.findUnique.mockResolvedValue({
       id: 'doc-1',
       spaceId: 'space-1',
@@ -101,19 +104,20 @@ describe('DocumentAccessService (#109)', () => {
     const error = await add([{ type: 'school', id: 'school-a' }, rule]).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(BadRequestException);
     expect((error as Error).message).toContain(message);
-    expect(prisma.documentAccess.create).not.toHaveBeenCalled();
+    expect(prisma.documentAccess.createMany).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('skips targets the document already has and audits only the new ones', async () => {
-    prisma.documentAccess.create
-      .mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: '5.22.0' }))
-      .mockResolvedValueOnce({});
+  it('skips targets the document already has and audits only the new ones, in the same transaction', async () => {
+    prisma.documentAccess.findMany.mockResolvedValueOnce([{ targetType: 'school', targetId: 'school-a' }]);
     await add([
       { type: 'school', id: 'school-a' },
       { type: 'role', id: 'role-staff' },
     ]);
+    expect(prisma.$queryRaw.mock.calls[0][0].join('?')).toContain('FOR UPDATE');
+    expect(created()).toEqual([expect.objectContaining({ targetType: 'role', targetId: 'role-staff' })]);
     expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record.mock.calls[0][1]).toBe(prisma);
     expect(audit.record.mock.calls[0][0]).toMatchObject({
       action: 'document_published',
       entity: { type: 'document', id: 'doc-1' },
@@ -122,16 +126,28 @@ describe('DocumentAccessService (#109)', () => {
   });
 
   it('records nothing when every target was already there', async () => {
-    prisma.documentAccess.create.mockRejectedValue(
-      new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: '5.22.0' }),
-    );
+    prisma.documentAccess.findMany.mockResolvedValueOnce([{ targetType: 'school', targetId: 'school-a' }]);
     await add([{ type: 'school', id: 'school-a' }]);
+    expect(prisma.documentAccess.createMany).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('does not hide other database errors', async () => {
-    prisma.documentAccess.create.mockRejectedValue(new Error('db down'));
+  it('does not hide database errors, and records nothing when the rules cannot be stored', async () => {
+    prisma.documentAccess.createMany.mockRejectedValue(new Error('db down'));
     await expect(add([{ type: 'school', id: 'school-a' }])).rejects.toThrow('db down');
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('fails, and so rolls the new rules back, when the audit event cannot be stored', async () => {
+    audit.record.mockRejectedValue(new Error('audit down'));
+    await expect(add([{ type: 'school', id: 'school-a' }])).rejects.toThrow('audit down');
+    expect(prisma.documentAccess.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers 404 when the document is deleted while publishing', async () => {
+    prisma.$queryRaw.mockResolvedValue([]);
+    await expect(add([{ type: 'school', id: 'school-a' }])).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.documentAccess.createMany).not.toHaveBeenCalled();
   });
 
   it('answers with all the rules and their target names', async () => {

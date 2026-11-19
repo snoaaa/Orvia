@@ -47,6 +47,7 @@ export class DocumentAccessService {
   /**
    * Publishes a document to more targets. Every target must belong to the document's school (400 otherwise);
    * targets the document already has are skipped. Records `document_published` with the targets added.
+   * The new rules and the audit event are written in one transaction: both are stored, or neither.
    * Answers with all the rules of the document.
    */
   async addRules(
@@ -59,19 +60,23 @@ export class DocumentAccessService {
     const schoolId = doc.space.schoolId;
     const targets = await this.resolveTargets(schoolId, dto.rules);
 
-    const added: ResolvedTarget[] = [];
-    for (const target of targets) {
-      const { type, ...columns } = target;
-      try {
-        await this.prisma.documentAccess.create({ data: { documentId: doc.id, schoolId, targetType: type, ...columns } });
-        added.push(target);
-      } catch (error) {
-        // Already published to this target, possibly by a simultaneous request: nothing to add.
-        if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) throw error;
-      }
-    }
+    await this.prisma.$transaction(async (tx) => {
+      // Lock the document, so a simultaneous publication waits and then sees the rules added here.
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM documents WHERE id = ${doc.id} AND deleted_at IS NULL FOR UPDATE`;
+      if (locked.length === 0) throw new NotFoundException(`Document with ID ${doc.id} not found`);
 
-    if (added.length > 0) {
+      const existing = await tx.documentAccess.findMany({
+        where: { documentId: doc.id },
+        select: { targetType: true, targetId: true },
+      });
+      const known = new Set(existing.map((r) => `${r.targetType}:${r.targetId}`));
+      const added = targets.filter((t) => !known.has(`${t.type}:${t.targetId}`));
+      if (added.length === 0) return;
+
+      await tx.documentAccess.createMany({
+        data: added.map(({ type, ...columns }) => ({ documentId: doc.id, schoolId, targetType: type, ...columns })),
+      });
       await this.audit.record(
         AuditEvents.documentPublished(
           {
@@ -83,8 +88,9 @@ export class DocumentAccessService {
           },
           auditContext ?? SYSTEM_AUDIT_CONTEXT,
         ),
+        tx,
       );
-    }
+    });
 
     return this.loadRules(doc.id);
   }
@@ -202,7 +208,7 @@ export class DocumentAccessService {
 function ruleTargetName(row: Prisma.DocumentAccessGetPayload<{ include: typeof RULE_INCLUDE }>): string | null {
   switch (row.targetType) {
     case 'school':
-      return row.school?.name ?? null;
+      return row.school.name;
     case 'role':
       return row.role?.name ?? null;
     case 'class':
