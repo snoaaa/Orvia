@@ -47,8 +47,8 @@ describe('DocumentAccessService (#109, #110)', () => {
   const add = (rules: DocumentAccessTargetDto[], actor = manager()) => service.addRules('doc-1', { rules }, actor);
   const replace = (rules: DocumentAccessTargetDto[], actor = manager()) => service.replaceRules('doc-1', { rules }, actor);
   const rows = () => prisma.documentAccess.createMany.mock.calls.flatMap(([args]) => args.data);
-  /** The rules written, without their creation time. */
-  const created = () => rows().map(({ createdAt: _createdAt, ...rule }: { createdAt: Date }) => rule);
+  /** The rules written. */
+  const created = rows;
   /** Current rules of the document, as read inside the transaction. */
   let current: ReturnType<typeof stored>[];
 
@@ -94,9 +94,8 @@ describe('DocumentAccessService (#109, #110)', () => {
         { ...base, targetType: 'group', targetId: 'group-science', groupId: 'group-science' },
         { ...base, targetType: 'user', targetId: 'user-parent', userId: 'user-parent' },
       ]);
-      // Created one millisecond apart, so they are listed in the order of the request.
-      const times = rows().map((r: { createdAt: Date }) => r.createdAt.getTime());
-      expect(times).toEqual(times.map((_, i) => times[0] + i));
+      // No made-up creation times: rules added together share the database's time (listed by created_at, then id).
+      expect(rows().some((r: Record<string, unknown>) => 'createdAt' in r)).toBe(false);
     });
 
     it('only looks up groups of the document school that are not deleted, and users with a role there', async () => {
@@ -143,11 +142,18 @@ describe('DocumentAccessService (#109, #110)', () => {
       ]);
       expect(created()).toEqual([expect.objectContaining({ targetType: 'role', targetId: 'role-staff' })]);
       expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toBe(prisma); // inside the transaction
       expect(audit.record.mock.calls[0][0]).toMatchObject({
         action: 'document_published',
         entity: { type: 'document', id: 'doc-1' },
         details: { schoolId: 'school-a', spaceId: 'space-1', rules: [{ type: 'role', targetId: 'role-staff' }] },
       });
+    });
+
+    it('fails, and so rolls the new rules back, when the audit event cannot be stored', async () => {
+      audit.record.mockRejectedValue(new Error('audit down'));
+      await expect(add([{ type: 'school', id: 'school-a' }])).rejects.toThrow('audit down');
+      expect(prisma.documentAccess.createMany).toHaveBeenCalledTimes(1);
     });
 
     it('writes and records nothing when every target was already there', async () => {
