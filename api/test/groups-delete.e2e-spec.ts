@@ -105,9 +105,10 @@ describe('Group deletion (e2e)', () => {
       await prisma.groupMember.create({ data: { groupId: id, userId: ids.StudentA } });
       await prisma.groupMember.create({ data: { groupId: otherId, userId: ids.StudentA } });
       await prisma.userAssignment.updateMany({ where: { userId: ids.StudentA }, data: { groupId: id } });
-      await prisma.documentAccess.create({ data: { documentId, groupId: id } });
-      await prisma.documentAccess.create({ data: { documentId, groupId: otherId } });
-      await prisma.documentAccess.create({ data: { documentId, schoolId: schools.A } });
+      const rule = (targetType: string, targetId: string) => ({ documentId, schoolId: schools.A, targetType, targetId });
+      await prisma.documentAccess.create({ data: { ...rule('class', id), groupId: id } });
+      await prisma.documentAccess.create({ data: { ...rule('class', otherId), groupId: otherId } });
+      await prisma.documentAccess.create({ data: rule('school', schools.A) });
 
       check(await remove(ids.AdminA, id), 204);
     });
@@ -127,7 +128,7 @@ describe('Group deletion (e2e)', () => {
 
     it('removes the document access it granted, and only that', async () => {
       const rows = await prisma.documentAccess.findMany({ where: { documentId } });
-      expect(rows.map((r) => r.groupId ?? r.schoolId).sort((a, b) => a.localeCompare(b))).toEqual(
+      expect(rows.map((r) => r.targetId).sort((a, b) => a.localeCompare(b))).toEqual(
         [otherId, schools.A].sort((a, b) => a.localeCompare(b)),
       );
     });

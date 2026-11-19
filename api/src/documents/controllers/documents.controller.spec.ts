@@ -3,12 +3,14 @@ import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { DocumentsController } from './documents.controller.js';
 import { ValidatedFileEntity } from '../entities/validated-file.entity.js';
 import type { UploadedFile } from '../interfaces/index.js';
+import type { DocumentAccessService } from '../services/document-access.service.js';
 import type { DocumentsService } from '../services/documents.service.js';
 import { RangeNotSatisfiableException } from '../utils/http-range.util.js';
 
 describe('DocumentsController', () => {
   let controller: DocumentsController;
   let mockDocumentsService: any;
+  let mockDocumentAccessService: any;
 
   const mockActor: AuthenticatedUser = {
     id: 'user-1',
@@ -50,7 +52,12 @@ describe('DocumentsController', () => {
       deleteDocument: vi.fn(),
     };
 
-    controller = new DocumentsController(mockDocumentsService as unknown as DocumentsService);
+    mockDocumentAccessService = { listRules: vi.fn(), addRules: vi.fn() };
+
+    controller = new DocumentsController(
+      mockDocumentsService as unknown as DocumentsService,
+      mockDocumentAccessService as unknown as DocumentAccessService,
+    );
   });
 
   describe('validateFile', () => {
@@ -182,6 +189,29 @@ describe('DocumentsController', () => {
         }),
       );
       expect(res).toBe(expectedDoc);
+    });
+  });
+
+  describe('document access (#109)', () => {
+    it('lists the rules through DocumentAccessService', async () => {
+      mockDocumentAccessService.listRules.mockResolvedValueOnce([]);
+      expect(await controller.listDocumentAccess('doc-1', mockActor)).toEqual([]);
+      expect(mockDocumentAccessService.listRules).toHaveBeenCalledWith('doc-1', mockActor);
+    });
+
+    it('adds rules with the audit context of the request', async () => {
+      const rules = [{ id: 'r1' }];
+      mockDocumentAccessService.addRules.mockResolvedValueOnce(rules);
+      const dto = { rules: [{ type: 'school' as const, id: 'school-1' }] };
+      const req = { ip: '127.0.0.1', header: vi.fn().mockReturnValue(undefined) } as any;
+
+      expect(await controller.addDocumentAccess('doc-1', dto, req, mockActor)).toBe(rules);
+      expect(mockDocumentAccessService.addRules).toHaveBeenCalledWith(
+        'doc-1',
+        dto,
+        mockActor,
+        expect.objectContaining({ ip: '127.0.0.1' }),
+      );
     });
   });
 

@@ -142,6 +142,7 @@ describe('DocumentsService', () => {
       },
       document: {
         findUnique: vi.fn(),
+        findFirst: vi.fn(),
         findMany: vi.fn(),
         create: vi.fn().mockImplementation(async ({ data }: any) => ({
           ...data,
@@ -332,6 +333,44 @@ describe('DocumentsService', () => {
       const doc = await service.findDocumentById('doc-1', schoolAdmin);
       expect(doc.id).toBe('doc-1');
       expect(doc.title).toBe('Notes');
+      expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
+    });
+
+    describe('for a reader who does not manage documents (#109)', () => {
+      const reader = {
+        ...studentUser,
+        assignments: [{ ...studentUser.assignments[0], permissions: ['documents:read'] }],
+      };
+      const notes = {
+        id: 'doc-1',
+        title: 'Notes',
+        author: 'Prof',
+        tags: 'math',
+        deletedAt: null,
+        space: { schoolId: 'school-1' },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      it('returns a document published to them', async () => {
+        mockPrisma.document.findUnique.mockResolvedValueOnce(notes);
+        mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-1' });
+        expect((await service.findDocumentById('doc-1', reader)).id).toBe('doc-1');
+      });
+
+      it('answers 403 for a document not published to them', async () => {
+        mockPrisma.document.findUnique.mockResolvedValueOnce(notes);
+        mockPrisma.document.findFirst.mockResolvedValueOnce(null);
+        await expect(service.findDocumentById('doc-1', reader)).rejects.toThrow(
+          /This document is not published to your school, role, class, group or account/,
+        );
+      });
+
+      it('answers 403 for a document of another school, before checking the rules', async () => {
+        mockPrisma.document.findUnique.mockResolvedValueOnce({ ...notes, space: { schoolId: 'school-2' } });
+        await expect(service.findDocumentById('doc-1', reader)).rejects.toThrow(ForbiddenException);
+        expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -1303,91 +1342,63 @@ describe('DocumentsService', () => {
       ).rejects.toThrow(/You do not have access to documents in this school/);
     });
 
-    it('student can download current version when document has no restrictive rules in their school', async () => {
+    /** The student asks for the current version (v2), not cited in their answers. */
+    const currentVersionNotCited = () => {
       mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
-      // Resolving latest version:
-      mockPrisma.documentVersion.findFirst
-        .mockResolvedValueOnce(mockVersion2) // target version resolution
-        .mockResolvedValueOnce(mockVersion2); // latestVersion comparison check
-
-      mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
-
-      const result = await service.getDocumentVersionStream({
-        documentId: 'doc-123',
-        actor: studentUser,
-      });
-
-      expect(result.statusCode).toBe(200);
-      expect(result.headers['Content-Disposition']).toContain('attachment');
-    });
-
-    it('student can download current version when document is published to their group', async () => {
-      const groupPublishedDoc = {
-        ...mockDocument,
-        access: [
-          { schoolId: 'school-1', roleId: null, groupId: 'group-class-a' },
-        ],
-      };
-
-      mockPrisma.document.findUnique.mockResolvedValueOnce(groupPublishedDoc);
       mockPrisma.documentVersion.findFirst
         .mockResolvedValueOnce(mockVersion2) // target version
         .mockResolvedValueOnce(mockVersion2); // latest version
-
       mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
+    };
 
-      const result = await service.getDocumentVersionStream({
-        documentId: 'doc-123',
-        actor: studentUser,
-      });
-
-      expect(result.statusCode).toBe(200);
-    });
-
-    it('staff without document management rights can download current version when published to staff role', async () => {
-      const staffDoc = {
-        ...mockDocument,
-        access: [
-          { schoolId: 'school-1', roleId: 'staff', groupId: null },
-        ],
-      };
-
-      mockPrisma.document.findUnique.mockResolvedValueOnce(staffDoc);
-      mockPrisma.documentVersion.findFirst
-        .mockResolvedValueOnce(mockVersion2)
-        .mockResolvedValueOnce(mockVersion2);
-
-      mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
-
-      const result = await service.getDocumentVersionStream({
-        documentId: 'doc-123',
-        actor: staffUser,
-      });
-
-      expect(result.statusCode).toBe(200);
-    });
-
-    it('throws ForbiddenException if document has access rules that do not match student group or role', async () => {
-      const restrictedDoc = {
-        ...mockDocument,
-        access: [
-          { schoolId: 'school-1', roleId: null, groupId: 'group-different-class' },
-        ],
-      };
-
-      mockPrisma.document.findUnique.mockResolvedValueOnce(restrictedDoc);
-      mockPrisma.documentVersion.findFirst
-        .mockResolvedValueOnce(mockVersion2)
-        .mockResolvedValueOnce(mockVersion2);
-
-      mockPrisma.messageReference.findFirst.mockResolvedValueOnce(null);
+    it('student cannot download a document without publication rules (a draft, #109)', async () => {
+      currentVersionNotCited();
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
 
       await expect(
-        service.getDocumentVersionStream({
-          documentId: 'doc-123',
-          actor: studentUser,
-        }),
-      ).rejects.toThrow(/This document is not published to your school, role, or group/);
+        service.getDocumentVersionStream({ documentId: 'doc-123', actor: studentUser }),
+      ).rejects.toThrow(/This document is not published to your school, role, class, group or account/);
+    });
+
+    it('student can download the current version of a document published to them (#109)', async () => {
+      currentVersionNotCited();
+      mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-123' });
+
+      const result = await service.getDocumentVersionStream({ documentId: 'doc-123', actor: studentUser });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['Content-Disposition']).toContain('attachment');
+      // The rules are checked in the database, on this document only, and never for a deleted one.
+      const where = mockPrisma.document.findFirst.mock.calls[0][0].where;
+      expect(where.AND[0]).toEqual({ id: 'doc-123', deletedAt: null });
+      expect(where.AND[1].OR).toContainEqual(expect.objectContaining({ access: expect.anything() }));
+    });
+
+    it('document managers of the school skip the publication rules', async () => {
+      const manager = {
+        ...staffUser,
+        assignments: [{ ...staffUser.assignments[0], permissions: ['documents:manage'] }],
+      };
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
+
+      const result = await service.getDocumentVersionStream({ documentId: 'doc-123', versionRef: '1', actor: manager });
+
+      expect(result.statusCode).toBe(200);
+      expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('a reader with documents:read but not documents:manage is not a manager', async () => {
+      const reader = {
+        ...staffUser,
+        assignments: [{ ...staffUser.assignments[0], permissions: ['documents:read'] }],
+      };
+      currentVersionNotCited();
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
+
+      await expect(service.getDocumentVersionStream({ documentId: 'doc-123', actor: reader })).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('throws ForbiddenException if non-manager tries to download historical version not cited in their answers', async () => {

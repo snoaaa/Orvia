@@ -34,6 +34,7 @@ model User {
   answerReports     AnswerReport[]
   syncChanges       SyncChange[]
   passwordSetupTokens PasswordSetupToken[]
+  documentAccess    DocumentAccess[]
 
   /// Supports the paginated user list: ORDER BY created_at DESC, id DESC (see findAllUsers).
   @@index([createdAt, id])
@@ -275,12 +276,20 @@ model DocumentVersion {
   @@map("document_versions")
 }
 
+/// A publication rule (#109): the document is visible to one target of its own school.
+/// `targetType` is school, role, class, group or user; `targetId` is the id of that target, and the matching
+/// foreign key column (school_id, role_id, group_id or user_id) holds the same id so the rule disappears with it.
+/// `schoolId` is always the document's school, also for role, class, group and user rules, so retrieval can
+/// filter by school without joining spaces. Visibility is computed in src/documents/utils/document-visibility.util.ts.
 model DocumentAccess {
   id         String   @id @default(uuid())
   documentId String   @map("document_id")
+  targetType String   @map("target_type") @db.VarChar(16)
+  targetId   String   @map("target_id")
   schoolId   String?  @map("school_id")
   roleId     String?  @map("role_id")
   groupId    String?  @map("group_id")
+  userId     String?  @map("user_id")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -288,11 +297,14 @@ model DocumentAccess {
   school     School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   role       Role?    @relation(fields: [roleId], references: [id], onDelete: Cascade)
   group      Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([documentId, targetType, targetId])
   @@index([documentId])
   @@index([schoolId])
   @@index([roleId])
   @@index([groupId])
+  @@index([userId])
   @@map("document_access")
 }
 

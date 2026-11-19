@@ -535,6 +535,39 @@ The roles the current admin may assign, as `{ id, name, scope, level }`, highest
 gets school and group roles, a platform admin every role. With `?schoolId=`, only the admin's roles in that school
 (and platform roles) count; a school outside their scope → 403.
 
+## Documents
+
+### Publish a document: `POST /documents/{id}/access` (#109, `documents:manage`)
+
+`src/documents/services/document-access.service.ts`, under the **Documents** tag in Swagger.
+A document is visible to the targets it is published to, always inside its own school:
+
+| `type` | `id` | Who sees the document |
+|---|---|---|
+| `school` | the document's school | everyone with a role in the school |
+| `role` | a school role (STAFF, STUDENT...) | everyone holding that role **in this school**; platform roles are refused |
+| `class` | a group of type `class` | its members (`group_members`) and users assigned to it (`user_assignments.group_id`) |
+| `group` | any other group (department, team) | its members; a class sent as `group` is stored as `class` |
+| `user` | a user with a role in the school | that person only, e.g. a parent or guest shared explicitly |
+
+Body: `{ "rules": [{ "type": "class", "id": "<groupId>" }] }` (1 to 50 rules). A target outside the document's
+school, a deleted group or an unknown id → 400 and nothing is written. Targets the document already has are
+skipped, so the call can be repeated. The answer (201) and `GET /documents/{id}/access` list every rule with
+`type`, `targetId` and a readable `targetName`. Platform admins publish any document; school admins and
+content managers only documents of their schools (403 otherwise). Each call that adds a target records
+`document_published`.
+
+**A document without any rule is a draft:** only the platform admins and the document managers of its school
+(`documents:manage`) open it. Everyone else gets 403 on `GET /documents/{id}`, `/download` and `/stream` until it
+is published to them. Someone whose assignment in the school is removed loses access, even through a `user` rule.
+
+**For retrieval and lists:** `visibleDocumentsWhere(actor)` in `src/documents/utils/document-visibility.util.ts`
+is the one Prisma filter for "documents this user may see" (`undefined` = everything). The document lists (#111)
+and the chat retrieval step must apply it, combined under `AND`, before using a document; there are no chunks
+yet, so each rule also stores the document's `school_id` to make that filter cheap.
+`GET /documents` does not filter by rules yet (#111). After pulling, run `npx prisma generate` and
+`npm run db:migrate` (migration `10_document_access_targets`).
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of
@@ -585,6 +618,7 @@ gets school and group roles, a platform admin every role. With `?schoolId=`, onl
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
+| `documents` | `document_published` | A document is published to new targets (`POST /documents/{id}/access`); not recorded when every target was already there | the admin or content manager | `document` | `spaceId`, `schoolId`, `rules` (the `type` and `targetId` of each target added) |
 | `security` | `access_denied` | Any HTTP 403 | the user if authenticated | `route` (`METHOD /path`) | `reason`, `requiredPermission` |
 | `security` | `account_locked` | An account is locked (e.g. too many failed logins) | anonymous | `user` | `email`, `reason`, `failedAttempts`, `lockedUntil` |
 
