@@ -291,7 +291,7 @@ model DocumentAccess {
   documentId String   @map("document_id")
   targetType String   @map("target_type") @db.VarChar(16)
   targetId   String   @map("target_id")
-  schoolId   String?  @map("school_id")
+  schoolId   String   @map("school_id")
   roleId     String?  @map("role_id")
   groupId    String?  @map("group_id")
   userId     String?  @map("user_id")
@@ -299,7 +299,7 @@ model DocumentAccess {
   updatedAt  DateTime @updatedAt @map("updated_at")
 
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  school     School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school     School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   role       Role?    @relation(fields: [roleId], references: [id], onDelete: Cascade)
   group      Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
   user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)

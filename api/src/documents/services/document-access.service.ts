@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
+import type { RecordAuditEventInput } from '../../audit/dto/record-audit-event.input.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { type AuditRequestContext, SYSTEM_AUDIT_CONTEXT } from '../../audit/utils/audit-request-context.util.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
@@ -30,6 +31,12 @@ interface StoredRule extends ResolvedTarget {
 interface RulesChange {
   add: ResolvedTarget[];
   remove: StoredRule[];
+}
+
+/** What a change did: the rules added and removed. */
+interface AppliedChange {
+  added: ResolvedTarget[];
+  removed: StoredRule[];
 }
 
 /** Sync change types written for the mobile app (#110). */
@@ -75,7 +82,7 @@ export class DocumentAccessService {
   /**
    * Publishes a document to more targets (#109). Every target must belong to the document's school (400
    * otherwise); targets the document already has are skipped. Records `document_published` with the targets
-   * added. Answers with all the rules of the document.
+   * added, in the same transaction as the new rules. Answers with all the rules of the document.
    */
   async addRules(
     documentId: string,
@@ -85,13 +92,14 @@ export class DocumentAccessService {
   ): Promise<DocumentAccessRuleEntity[]> {
     const doc = await this.findManagedDocument(documentId, actor);
     const targets = await this.resolveTargets(doc.space.schoolId, dto.rules);
-    const { added } = await this.changeRules(doc.id, doc.space.schoolId, (current) => {
-      const existing = new Set(current.map(key));
-      return { add: targets.filter((t) => !existing.has(key(t))), remove: [] };
-    });
-
-    if (added.length > 0) {
-      await this.audit.record(
+    await this.changeRules(
+      doc.id,
+      doc.space.schoolId,
+      (current) => {
+        const existing = new Set(current.map(key));
+        return { add: targets.filter((t) => !existing.has(key(t))), remove: [] };
+      },
+      ({ added }) =>
         AuditEvents.documentPublished(
           {
             documentId: doc.id,
@@ -102,8 +110,7 @@ export class DocumentAccessService {
           },
           auditContext ?? SYSTEM_AUDIT_CONTEXT,
         ),
-      );
-    }
+    );
     return this.loadRules(doc.id);
   }
 
@@ -121,14 +128,18 @@ export class DocumentAccessService {
     const doc = await this.findManagedDocument(documentId, actor);
     const targets = await this.resolveTargets(doc.space.schoolId, dto.rules);
     const wanted = new Set(targets.map(key));
-    const change = await this.changeRules(doc.id, doc.space.schoolId, (current) => {
-      const existing = new Set(current.map(key));
-      return {
-        add: targets.filter((t) => !existing.has(key(t))),
-        remove: current.filter((rule) => !wanted.has(key(rule))),
-      };
-    });
-    await this.recordAccessChanged(doc, change, actor, auditContext);
+    await this.changeRules(
+      doc.id,
+      doc.space.schoolId,
+      (current) => {
+        const existing = new Set(current.map(key));
+        return {
+          add: targets.filter((t) => !existing.has(key(t))),
+          remove: current.filter((rule) => !wanted.has(key(rule))),
+        };
+      },
+      (change) => accessChangedEvent(doc, change, actor, auditContext),
+    );
     return this.loadRules(doc.id);
   }
 
@@ -140,12 +151,16 @@ export class DocumentAccessService {
     auditContext?: AuditRequestContext,
   ): Promise<void> {
     const doc = await this.findManagedDocument(documentId, actor);
-    const change = await this.changeRules(doc.id, doc.space.schoolId, (current) => {
-      const rule = current.find((r) => r.id === ruleId);
-      if (!rule) throw new NotFoundException(`Access rule ${ruleId} not found on document ${documentId}`);
-      return { add: [], remove: [rule] };
-    });
-    await this.recordAccessChanged(doc, change, actor, auditContext);
+    await this.changeRules(
+      doc.id,
+      doc.space.schoolId,
+      (current) => {
+        const rule = current.find((r) => r.id === ruleId);
+        if (!rule) throw new NotFoundException(`Access rule ${ruleId} not found on document ${documentId}`);
+        return { add: [], remove: [rule] };
+      },
+      (change) => accessChangedEvent(doc, change, actor, auditContext),
+    );
   }
 
   /**
@@ -153,12 +168,15 @@ export class DocumentAccessService {
    * locked, so the audience before and after the change is exact even when two admins save together.
    * Readers who lose the document get a `delete` sync change and lose it from their offline selections;
    * readers who gain it get an `insert` sync change. Managers are never affected.
+   * The audit event of the change (`auditOf`) is written in the same transaction; nothing is recorded
+   * when nothing changed.
    */
   private async changeRules(
     documentId: string,
     schoolId: string,
     decide: (current: StoredRule[]) => RulesChange,
-  ): Promise<{ added: ResolvedTarget[]; removed: StoredRule[] }> {
+    auditOf: (change: AppliedChange) => RecordAuditEventInput,
+  ): Promise<AppliedChange> {
     return this.prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<{ id: string }[]>`
         SELECT id FROM documents WHERE id = ${documentId} AND deleted_at IS NULL FOR UPDATE`;
@@ -177,11 +195,8 @@ export class DocumentAccessService {
 
       if (remove.length > 0) await tx.documentAccess.deleteMany({ where: { id: { in: [...removedIds] } } });
       if (add.length > 0) {
-        // One millisecond apart, so the rules keep the order of the request when listed oldest first.
-        const now = Date.now();
-        await tx.documentAccess.createMany({
-          data: add.map((t, i) => ({ documentId, schoolId, ...t, createdAt: new Date(now + i) })),
-        });
+        // Rules added together share one creation time; lists sort them by (created_at, id).
+        await tx.documentAccess.createMany({ data: add.map((t) => ({ documentId, schoolId, ...t })) });
       }
 
       const sync = (userIds: string[], operation: string) =>
@@ -191,31 +206,10 @@ export class DocumentAccessService {
       if (lost.length > 0) {
         await tx.offlineSelection.deleteMany({ where: { documentId, device: { userId: { in: lost } } } });
       }
-      return { added: add, removed: remove };
+      const applied = { added: add, removed: remove };
+      await this.audit.record(auditOf(applied), tx);
+      return applied;
     });
-  }
-
-  private async recordAccessChanged(
-    doc: { id: string; spaceId: string; space: { schoolId: string } },
-    change: { added: ResolvedTarget[]; removed: StoredRule[] },
-    actor: AuthenticatedUser,
-    auditContext?: AuditRequestContext,
-  ): Promise<void> {
-    if (change.added.length === 0 && change.removed.length === 0) return;
-    const describe = (rules: ResolvedTarget[]) => rules.map(({ targetType, targetId }) => ({ type: targetType, targetId }));
-    await this.audit.record(
-      AuditEvents.documentAccessChanged(
-        {
-          documentId: doc.id,
-          spaceId: doc.spaceId,
-          schoolId: doc.space.schoolId,
-          added: describe(change.added),
-          removed: describe(change.removed),
-          actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
-        },
-        auditContext ?? SYSTEM_AUDIT_CONTEXT,
-      ),
-    );
   }
 
   /** Loads a live document; 404 if missing or deleted, 403 unless `actor` manages documents in its school. */
@@ -328,10 +322,31 @@ export class DocumentAccessService {
   }
 }
 
+/** The `document_access_changed` event of a change made by `actor`. */
+function accessChangedEvent(
+  doc: { id: string; spaceId: string; space: { schoolId: string } },
+  change: AppliedChange,
+  actor: AuthenticatedUser,
+  auditContext?: AuditRequestContext,
+): RecordAuditEventInput {
+  const describe = (rules: ResolvedTarget[]) => rules.map(({ targetType, targetId }) => ({ type: targetType, targetId }));
+  return AuditEvents.documentAccessChanged(
+    {
+      documentId: doc.id,
+      spaceId: doc.spaceId,
+      schoolId: doc.space.schoolId,
+      added: describe(change.added),
+      removed: describe(change.removed),
+      actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+    },
+    auditContext ?? SYSTEM_AUDIT_CONTEXT,
+  );
+}
+
 function ruleTargetName(row: Prisma.DocumentAccessGetPayload<{ include: typeof RULE_INCLUDE }>): string | null {
   switch (row.targetType) {
     case 'school':
-      return row.school?.name ?? null;
+      return row.school.name;
     case 'role':
       return row.role?.name ?? null;
     case 'class':

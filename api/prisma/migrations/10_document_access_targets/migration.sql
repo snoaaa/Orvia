@@ -28,10 +28,12 @@ UPDATE `document_access` da
     JOIN `documents` d ON d.`id` = da.`document_id`
     JOIN `spaces` s ON s.`id` = d.`space_id`
 SET da.`school_id` = s.`school_id`;
+DELETE FROM `document_access` WHERE `school_id` IS NULL;
 
 ALTER TABLE `document_access`
     MODIFY `target_type` VARCHAR(16) NOT NULL,
-    MODIFY `target_id` VARCHAR(191) NOT NULL;
+    MODIFY `target_id` VARCHAR(191) NOT NULL,
+    MODIFY `school_id` VARCHAR(191) NOT NULL;
 
 -- CreateIndex
 CREATE UNIQUE INDEX `document_access_document_id_target_type_target_id_key` ON `document_access`(`document_id`, `target_type`, `target_id`);
