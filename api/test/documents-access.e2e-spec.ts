@@ -63,9 +63,11 @@ describe('Document publication (e2e)', () => {
     const storageKey = `e2e-109/${stamp}/${doc.id}.txt`;
     await storage.save(storageKey, `content of ${title}`);
     storageKeys.push(storageKey);
-    await prisma.documentVersion.create({
-      data: { documentId: doc.id, storageKey, mimeType: 'text/plain', checksum: `sha-${doc.id}` },
+    // A processed version: readers only see available documents (#111).
+    const version = await prisma.documentVersion.create({
+      data: { documentId: doc.id, storageKey, mimeType: 'text/plain', checksum: `sha-${doc.id}`, status: 'available' },
     });
+    await prisma.document.update({ where: { id: doc.id }, data: { currentVersionId: version.id } });
     return doc.id;
   }
 

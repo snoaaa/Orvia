@@ -19,7 +19,7 @@ export class DocumentVersionEntity {
   @ApiProperty({ example: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', description: 'SHA-256 checksum' })
   checksum: string;
 
-  @ApiProperty({ example: 'indexed', description: 'Processing status (uploaded, processing, indexed, error)' })
+  @ApiProperty({ example: 'available', description: 'Processing status: pending, ocr, segmentation, indexing, available or error (spec §3.1)' })
   status: string;
 
   @ApiProperty({ example: 42, description: 'Page count' })

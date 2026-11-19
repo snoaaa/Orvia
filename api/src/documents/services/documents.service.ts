@@ -22,7 +22,8 @@ import {
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
-import { isDocumentVisibleTo } from '../utils/document-visibility.util.js';
+import { normalizeTags, tagWhere, typeWhere } from '../utils/document-filters.util.js';
+import { isDocumentVisibleTo, visibleDocumentsWhere } from '../utils/document-visibility.util.js';
 import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditAction } from '../../audit/constants/audit-events.constants.js';
@@ -47,9 +48,12 @@ export class DocumentsService {
   ) {}
 
   /**
-   * Platform-wide readers see every document; others only the documents of spaces in their schools.
-   * Paginated with the shared `page`/`limit` contract (`limit` capped at 100) and ordered
-   * `created_at DESC, id DESC`, so pages stay stable when two documents share a timestamp.
+   * The documents the caller may see (#111): platform admins every document; document managers every
+   * document of their schools, any status; other readers only documents published to them with an
+   * available version (see visibleDocumentsWhere). Deleted documents are never listed.
+   * Optional filters combine with AND: space, title search, whole tags, status and file type of the
+   * current version. Paginated with the shared `page`/`limit` contract (`limit` capped at 100) and
+   * ordered `created_at DESC, id DESC`, so pages stay stable when two documents share a timestamp.
    */
   async findAllDocuments(
     actor: AuthenticatedUser,
@@ -60,15 +64,27 @@ export class DocumentsService {
     const skip = (page - 1) * limit;
 
     const schoolId = schoolIdFilter(actor, 'documents:read');
-    const where: Prisma.DocumentWhereInput = {
-      deletedAt: null,
-      ...(schoolId ? { space: { schoolId } } : {}),
+    const visible = visibleDocumentsWhere(actor);
+    const currentVersion: Prisma.DocumentVersionWhereInput = {
+      ...(query?.status ? { status: query.status } : {}),
+      ...(query?.type ? typeWhere(query.type) : {}),
     };
+    const conditions: Prisma.DocumentWhereInput[] = [
+      { deletedAt: null },
+      ...(schoolId ? [{ space: { schoolId } }] : []),
+      ...(visible ? [visible] : []),
+      ...(query?.spaceId ? [{ spaceId: query.spaceId }] : []),
+      ...(query?.q ? [{ title: { contains: query.q } }] : []),
+      ...(query?.tags ?? []).map(tagWhere),
+      ...(Object.keys(currentVersion).length > 0 ? [{ currentVersion }] : []),
+    ];
+    const where: Prisma.DocumentWhereInput = { AND: conditions };
 
     const [total, docs] = await Promise.all([
       this.prisma.document.count({ where }),
       this.prisma.document.findMany({
         where,
+        include: { currentVersion: true },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
@@ -78,7 +94,7 @@ export class DocumentsService {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return new PaginatedDocumentsEntity({
-      data: docs.map((d) => DocumentMapper.toEntity(d)),
+      data: docs.map((d) => DocumentMapper.toEntity(d, d.currentVersion)),
       total,
       page,
       limit,
@@ -151,7 +167,7 @@ export class DocumentsService {
 
     const trimmedTitle = dto.title !== undefined ? dto.title.trim() : undefined;
     const trimmedAuthor = dto.author !== undefined ? dto.author.trim() : undefined;
-    const trimmedTags = dto.tags !== undefined ? dto.tags.trim() : undefined;
+    const trimmedTags = dto.tags !== undefined ? normalizeTags(dto.tags) : undefined;
 
     // Detect actual changes for the audit trail
     const changes: Record<string, { from: unknown; to: unknown }> = {};
@@ -356,6 +372,7 @@ export class DocumentsService {
           where: { id: documentId },
           data: {
             updatedAt: new Date(),
+            currentVersionId: versionId, // #111: the new version becomes the current one
           },
         });
 
@@ -583,7 +600,7 @@ export class DocumentsService {
         : 'Untitled Document';
       const title = dto?.title?.trim() || defaultTitle || 'Untitled Document';
       const author = dto?.author?.trim() || actor.fullName || '';
-      const tags = dto?.tags?.trim() || '';
+      const tags = normalizeTags(dto?.tags);
 
       const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
         const doc = await tx.document.create({
@@ -622,7 +639,10 @@ export class DocumentsService {
           },
         });
 
-        return { createdDoc: doc, createdVersion: ver };
+        // #111: the first version is the current one.
+        await tx.document.update({ where: { id: documentId }, data: { currentVersionId: versionId } });
+
+        return { createdDoc: { ...doc, currentVersionId: versionId }, createdVersion: ver };
       });
 
       // 4. Dispatch background processing job
@@ -733,7 +753,7 @@ export class DocumentsService {
         : 'Untitled Image';
       const title = dto?.title?.trim() || defaultTitle || 'Untitled Image';
       const author = dto?.author?.trim() || actor.fullName || '';
-      const tags = dto?.tags?.trim() || '';
+      const tags = normalizeTags(dto?.tags);
 
       const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
         const doc = await tx.document.create({
@@ -772,7 +792,10 @@ export class DocumentsService {
           },
         });
 
-        return { createdDoc: doc, createdVersion: ver };
+        // #111: the first version is the current one.
+        await tx.document.update({ where: { id: documentId }, data: { currentVersionId: versionId } });
+
+        return { createdDoc: { ...doc, currentVersionId: versionId }, createdVersion: ver };
       });
 
       // 3. Dispatch background processing job targeting OCR

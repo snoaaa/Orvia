@@ -60,11 +60,16 @@ export class DocumentsController {
   @Get()
   @RequirePermission('documents:read')
   @ApiOperation({
-    summary: 'List documents of your schools, paginated, newest first',
+    summary: 'List the documents you may see, with filters (#111)',
     description:
-      'Same page/limit contract as the other lists: page defaults to 1, limit to 10 and is capped at 100. ' +
-      'Returns { data, total, page, limit, totalPages }.',
+      'Platform admins get every document; document managers every document of their schools, any status; ' +
+      'other readers (staff, students, parents) only documents published to them that have an available version, ' +
+      'so they never see a document still in processing. Deleted documents are never listed. ' +
+      'Filters combine with AND: spaceId, q (title), tags (whole tags, all required), status and type of the ' +
+      'current version. Same page/limit contract as the other lists: page defaults to 1, limit to 10 and is ' +
+      'capped at 100, newest first. Returns { data, total, page, limit, totalPages }; each item has its currentVersion.',
   })
+  @ApiResponse({ status: 400, description: 'Invalid filter value' })
   @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
   @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
   @ApiResponse({ status: 200, description: 'Paginated list of documents', type: PaginatedDocumentsEntity })

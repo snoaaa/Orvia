@@ -1,6 +1,7 @@
 import type { Document, DocumentVersion } from '@prisma/client';
 import type { CreateDocumentDto } from '../dto/create-document.dto.js';
 import { DocumentEntity } from '../entities/document.entity.js';
+import { normalizeTags } from '../utils/document-filters.util.js';
 import { DocumentVersionMapper } from './document-version.mapper.js';
 
 export class DocumentMapper {
@@ -29,7 +30,7 @@ export class DocumentMapper {
       id,
       title: dto.title,
       author: dto.author || '',
-      tags: dto.tags || '',
+      tags: normalizeTags(dto.tags),
       spaceId: dto.spaceId,
     };
   }

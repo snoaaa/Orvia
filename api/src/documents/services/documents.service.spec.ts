@@ -878,6 +878,12 @@ describe('DocumentsService', () => {
       expect(result.currentVersion?.versionNo).toBe(1);
       expect(result.currentVersion?.status).toBe('pending');
       expect(result.currentVersion?.checksum).toBe('sha256-checksum-hex');
+
+      // #111: the new document points at its first version
+      expect(mockPrisma.document.update).toHaveBeenCalledWith({
+        where: { id: result.id },
+        data: { currentVersionId: result.currentVersion?.id },
+      });
       expect(result.currentVersion?.mimeType).toBe('application/pdf');
 
       // Verify file was saved via StorageService
@@ -1654,6 +1660,10 @@ describe('DocumentsService', () => {
         }),
       );
 
+      // #111: the new version becomes the current one
+      const docUpdate = mockPrisma.document.update.mock.calls.find(([args]: any) => args.data.currentVersionId);
+      expect(docUpdate?.[0].data.currentVersionId).toBe(mockPrisma.documentVersion.create.mock.calls[0][0].data.id);
+
       // Verify audit event
       expect(mockAudit.record).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1962,6 +1972,82 @@ describe('DocumentsService', () => {
     });
   });
 
+  describe('findAllDocuments (#111)', () => {
+    const where = () => mockPrisma.document.findMany.mock.calls[0][0].where;
+    const reader = {
+      ...studentUser,
+      assignments: [{ ...studentUser.assignments[0], permissions: ['documents:read'] }],
+      permissions: ['documents:read'],
+    };
+
+    beforeEach(() => {
+      mockPrisma.document.count.mockResolvedValue(0);
+      mockPrisma.document.findMany.mockResolvedValue([]);
+    });
+
+    it('a platform admin gets every live document, with its current version', async () => {
+      await service.findAllDocuments(platformAdmin);
+      expect(where()).toEqual({ AND: [{ deletedAt: null }] });
+      expect(mockPrisma.document.findMany.mock.calls[0][0]).toMatchObject({
+        include: { currentVersion: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+    });
+
+    it('a reader gets only documents published to them with an available version', async () => {
+      await service.findAllDocuments(reader);
+      const visible = where().AND.find((c: any) => c.OR);
+      expect(visible.OR).toEqual([
+        expect.objectContaining({ access: expect.anything(), versions: { some: { status: 'available' } } }),
+      ]);
+      expect(where().AND).toContainEqual({ space: { schoolId: { in: ['school-1'] } } });
+    });
+
+    it('a document manager also gets every document of their school, any status', async () => {
+      await service.findAllDocuments(schoolAdmin);
+      const visible = where().AND.find((c: any) => c.OR);
+      expect(visible.OR[0]).toEqual({ space: { schoolId: { in: ['school-1'] } } });
+    });
+
+    it('combines every filter with AND', async () => {
+      await service.findAllDocuments(platformAdmin, {
+        spaceId: 'space-9',
+        q: 'algebra',
+        tags: ['math', 'exam'],
+        status: 'available',
+        type: 'pdf',
+      });
+      expect(where().AND).toEqual([
+        { deletedAt: null },
+        { spaceId: 'space-9' },
+        { title: { contains: 'algebra' } },
+        expect.objectContaining({ OR: expect.arrayContaining([{ tags: 'math' }]) }),
+        expect.objectContaining({ OR: expect.arrayContaining([{ tags: 'exam' }]) }),
+        { currentVersion: { status: 'available', mimeType: { in: ['application/pdf'] } } },
+      ]);
+    });
+
+    it('returns the current version of each document', async () => {
+      const now = new Date();
+      mockPrisma.document.count.mockResolvedValue(1);
+      mockPrisma.document.findMany.mockResolvedValue([
+        {
+          id: 'doc-1',
+          spaceId: 'space-1',
+          title: 'Notes',
+          author: '',
+          tags: '',
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+          currentVersion: { id: 'v1', documentId: 'doc-1', versionNo: 3, storageKey: 'k', mimeType: 'application/pdf', checksum: 'c', status: 'available', pageCount: 2, createdAt: now, updatedAt: now },
+        },
+      ]);
+      const res = await service.findAllDocuments(platformAdmin);
+      expect(res.data[0].currentVersion).toMatchObject({ versionNo: 3, status: 'available', mimeType: 'application/pdf' });
+    });
+  });
+
   describe('deleteDocument (#108)', () => {
     const existingDoc = {
       id: 'doc-1',
@@ -2069,13 +2155,7 @@ describe('DocumentsService', () => {
 
       await service.findAllDocuments(schoolAdmin);
 
-      expect(mockPrisma.document.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            deletedAt: null,
-          }),
-        }),
-      );
+      expect(mockPrisma.document.findMany.mock.calls[0][0].where.AND).toContainEqual({ deletedAt: null });
     });
   });
 

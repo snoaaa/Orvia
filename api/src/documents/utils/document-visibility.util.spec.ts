@@ -43,6 +43,8 @@ describe('document visibility (#109)', () => {
     const where = visibleDocumentsWhere(user([{ role: 'STUDENT', schoolId: 's1', permissions: ['documents:read'] }]));
     expect(where?.OR).toHaveLength(1);
     expect(where?.OR?.[0]).toHaveProperty('access.some');
+    // #111: and only once a version is processed
+    expect(where?.OR?.[0]).toHaveProperty('versions', { some: { status: 'available' } });
   });
 
   it('a document manager also sees every document of the schools they manage', () => {

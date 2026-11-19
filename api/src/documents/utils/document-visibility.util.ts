@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
+import { AVAILABLE_STATUS } from './document-filters.util.js';
 
 /** The kinds of target a document can be published to (#109). */
 export const DOCUMENT_ACCESS_TARGET_TYPES = ['school', 'role', 'class', 'group', 'user'] as const;
@@ -51,8 +52,9 @@ export function matchingAccessRulesWhere(actor: AuthenticatedUser): Prisma.Docum
 /**
  * Prisma filter for the documents `actor` may see (#109), or `undefined` when they see every document
  * (platform admins). Document managers (`documents:manage`) see every document of their schools, published
- * or not; everyone else only the documents published to them. A document without any rule is a draft:
- * only its managers see it.
+ * or not, in any status; everyone else only the documents published to them that have a processed version
+ * (status 'available', #111), so readers never see a document still in processing. A document without any
+ * rule is a draft: only its managers see it.
  *
  * Meant to be shared by every reader: the document details and downloads now, the document lists (#111)
  * and the retrieval step of the chat, which must apply it before generating an answer.
@@ -64,7 +66,7 @@ export function visibleDocumentsWhere(actor: AuthenticatedUser): Prisma.Document
   return {
     OR: [
       ...(managed.length > 0 ? [{ space: { schoolId: { in: managed } } }] : []),
-      { access: { some: matchingAccessRulesWhere(actor) } },
+      { access: { some: matchingAccessRulesWhere(actor) }, versions: { some: { status: AVAILABLE_STATUS } } },
     ],
   };
 }
