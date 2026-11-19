@@ -47,7 +47,7 @@ export class DocumentVersionItemEntity {
   @ApiProperty({ example: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', description: 'SHA-256 checksum' })
   checksum: string;
 
-  @ApiProperty({ example: 'indexed', description: 'Processing status (pending, processing, indexed, error)' })
+  @ApiProperty({ example: 'available', description: 'Processing status: pending, ocr, segmentation, indexing, available or error' })
   status: string;
 
   @ApiProperty({ example: 'application/pdf', description: 'MIME type' })

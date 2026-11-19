@@ -591,14 +591,49 @@ Filters combine with AND and with the caller's scope; an invalid value → 400.
 
 - **Processing:** readers never see a document still in processing. They see it once **any** version is `available`, so
   replacing a file does not hide the document while the new version is processed. The same rule applies to
-  `GET /documents/{id}`, `/download` and `/stream`. Uploads create versions as `pending` and nothing sets
-  `available` yet (the processing pipeline will), so readers see an empty list until then.
+  `GET /documents/{id}`, `/download` and `/stream`. Uploads create versions as `pending`; the processing pipeline
+  (or the dev route of #112) moves them to `available`.
 - **Current version:** `documents.current_version_id` (migration `11_documents_current_version`) points to the latest
   version; upload and replace set it. Status and type filters read it.
 - **Tags** are stored cleaned: trimmed, no empty tags, each once (`"Math , physics,,"` → `"Math,physics"`), on create,
   update and upload. The migration cleans existing rows.
 
 After pulling, run `npx prisma generate` and `npm run db:migrate`.
+
+### Processing status (#112)
+
+Each version has a `status` (database enum since migration `12_document_version_status`), a `status_error`
+(why it failed) and a `status_changed_at`. Uploads start at `pending`.
+
+```
+pending ──► ocr ──► segmentation ──► indexing ──► available
+   └────────────────►┘                               (final: a new file is a new version)
+any step before available ──► error (reason required) ──► pending (process again)
+```
+
+- **One entry point:** the pipeline changes a status only through `DocumentProcessingStatusService.setStatus(versionId,
+  status, reason?)` (exported by `DocumentsModule`). Another order → 409, `error` without a reason → 400, the same
+  status again → nothing changes.
+- **Processing jobs:** each change is mirrored on the version's latest processing job: `step`, then `in_progress`,
+  `completed` or `failed`, with the `error` and `duration_ms`.
+- **First available version:** the document's readers get an `insert` sync change, since that's when they can see it.
+  Rule changes (#109, #110) on a document with no available version write no sync changes.
+- **`GET /documents/{id}/status`** (`documents:manage`): the current version's `status`, `statusError` and
+  `statusChangedAt`, plus its processing jobs (`steps`). Poll it to follow processing. The `currentVersion` of
+  `GET /documents` carries the same fields for managers.
+- **Readers** (staff, students and parents who do not manage documents) never see processing states:
+  - Their `currentVersion` and "latest" download or stream are the **newest available** version, never a version
+    still in processing.
+  - They never get `statusError`.
+  - Before any version is available, the document is invisible to them (403).
+- **The worker is still a stub:** it queues the job and leaves the version `pending`. Until the real OCR,
+  segmentation and indexing steps exist, simulate them with the dev-only route
+  `POST /documents/dev/versions/{versionId}/status` `{ "status": "segmentation" }` (or `{ "status": "error",
+  "reason": "..." }`). It needs `documents:manage` in the version's school and, like `/auth/dev`, is hidden
+  (404) unless `AUTH_DEV_TOOLS=true` and not in production. It applies exactly the same rules.
+
+After pulling, run `npx prisma generate` and `npm run db:migrate`. Any old status outside the list (such as
+`uploaded`) becomes `pending`.
 
 ### Change or remove access rules (#110, `documents:manage`)
 

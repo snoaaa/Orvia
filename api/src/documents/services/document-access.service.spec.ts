@@ -34,6 +34,7 @@ describe('DocumentAccessService (#109, #110)', () => {
   const prisma = {
     document: { findUnique: vi.fn() },
     documentAccess: { findMany: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn() },
+    documentVersion: { count: vi.fn() },
     syncChange: { createMany: vi.fn() },
     offlineSelection: { deleteMany: vi.fn() },
     role: { findMany: vi.fn() },
@@ -75,6 +76,7 @@ describe('DocumentAccessService (#109, #110)', () => {
     ]);
     prisma.user.findMany.mockResolvedValue([{ id: 'user-parent' }]);
     vi.mocked(audienceChange).mockResolvedValue({ lost: [], gained: [] });
+    prisma.documentVersion.count.mockResolvedValue(1); // the document has an available version
   });
 
   describe('adding (#109)', () => {
@@ -170,6 +172,16 @@ describe('DocumentAccessService (#109, #110)', () => {
       });
       expect(prisma.offlineSelection.deleteMany).not.toHaveBeenCalled();
     });
+  });
+
+  it('does not notify phones about a document that is still processing (#112)', async () => {
+    prisma.documentVersion.count.mockResolvedValue(0);
+    vi.mocked(audienceChange).mockResolvedValue({ lost: ['u1'], gained: ['u2'] });
+    await add([{ type: 'role', id: 'role-staff' }]);
+    expect(prisma.documentVersion.count).toHaveBeenCalledWith({ where: { documentId: 'doc-1', status: 'available' } });
+    expect(audienceChange).not.toHaveBeenCalled();
+    expect(prisma.syncChange.createMany).not.toHaveBeenCalled();
+    expect(created()).toHaveLength(1);
   });
 
   describe('replacing (#110)', () => {

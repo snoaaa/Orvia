@@ -1373,6 +1373,9 @@ describe('DocumentsService', () => {
       const result = await service.getDocumentVersionStream({ documentId: 'doc-123', actor: studentUser });
 
       expect(result.statusCode).toBe(200);
+      // #112: for a reader, "latest" and "current" mean the newest available version
+      expect(mockPrisma.documentVersion.findFirst.mock.calls[0][0].where).toEqual({ documentId: 'doc-123', status: 'available' });
+      expect(mockPrisma.documentVersion.findFirst.mock.calls[1][0].where).toEqual({ documentId: 'doc-123', status: 'available' });
       expect(result.headers['Content-Disposition']).toContain('attachment');
       // The rules are checked in the database, on this document only, and never for a deleted one.
       const where = mockPrisma.document.findFirst.mock.calls[0][0].where;
@@ -1392,6 +1395,13 @@ describe('DocumentsService', () => {
 
       expect(result.statusCode).toBe(200);
       expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('a manager downloading "latest" gets the newest version, whatever its status (#112)', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion2);
+      await service.getDocumentVersionStream({ documentId: 'doc-123', actor: schoolAdmin });
+      expect(mockPrisma.documentVersion.findFirst.mock.calls[0][0].where).toEqual({ documentId: 'doc-123' });
     });
 
     it('a reader with documents:read but not documents:manage is not a manager', async () => {
@@ -2040,11 +2050,78 @@ describe('DocumentsService', () => {
           createdAt: now,
           updatedAt: now,
           deletedAt: null,
+          space: { schoolId: 'school-1' },
           currentVersion: { id: 'v1', documentId: 'doc-1', versionNo: 3, storageKey: 'k', mimeType: 'application/pdf', checksum: 'c', status: 'available', pageCount: 2, createdAt: now, updatedAt: now },
         },
       ]);
       const res = await service.findAllDocuments(platformAdmin);
       expect(res.data[0].currentVersion).toMatchObject({ versionNo: 3, status: 'available', mimeType: 'application/pdf' });
+    });
+
+    describe('processing states (#112)', () => {
+      const now = new Date();
+      const version = (id: string, versionNo: number, status: string, statusError: string | null = null) => ({
+        id, documentId: 'doc-1', versionNo, storageKey: 'k', mimeType: 'application/pdf', checksum: 'c',
+        status, statusError, statusChangedAt: now, pageCount: 1, createdAt: now, updatedAt: now,
+      });
+      const doc = { id: 'doc-1', spaceId: 'space-1', title: 'T', author: '', tags: '', createdAt: now, updatedAt: now, deletedAt: null, currentVersionId: 'v3', space: { schoolId: 'school-1' } };
+
+      beforeEach(() => {
+        mockPrisma.document.count.mockResolvedValue(1);
+        mockPrisma.document.findMany.mockResolvedValue([{ ...doc, currentVersion: version('v3', 3, 'error', 'OCR failed') }]);
+      });
+
+      it('a manager sees the current version, its status and failure reason', async () => {
+        const res = await service.findAllDocuments(schoolAdmin);
+        expect(res.data[0].currentVersion).toMatchObject({ id: 'v3', status: 'error', statusError: 'OCR failed' });
+        expect(mockPrisma.documentVersion.findMany).not.toHaveBeenCalled();
+      });
+
+      it('a reader sees the latest available version instead, without any failure reason', async () => {
+        mockPrisma.documentVersion.findMany.mockResolvedValueOnce([version('v2', 2, 'available'), version('v1', 1, 'available')]);
+        const res = await service.findAllDocuments(reader);
+        expect(mockPrisma.documentVersion.findMany).toHaveBeenCalledWith({
+          where: { documentId: { in: ['doc-1'] }, status: 'available' },
+          orderBy: { versionNo: 'desc' },
+        });
+        expect(res.data[0].currentVersion).toMatchObject({ id: 'v2', status: 'available' });
+        // As sent over HTTP: no failure reason, no internal space field.
+        const sent = JSON.parse(JSON.stringify(res.data[0]));
+        expect(sent.currentVersion).not.toHaveProperty('statusError');
+        expect(sent).not.toHaveProperty('space');
+      });
+    });
+  });
+
+  describe('getProcessingStatus (#112)', () => {
+    const now = new Date();
+
+    it('returns the current version status, its reason and its processing jobs, for managers', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: 'v2', space: { schoolId: 'school-1' } });
+      mockPrisma.documentVersion.findUnique = vi.fn().mockResolvedValueOnce({
+        id: 'v2', versionNo: 2, status: 'error', statusError: 'Indexing timed out', statusChangedAt: now,
+      });
+      mockPrisma.processingJob.findMany = vi.fn().mockResolvedValueOnce([
+        { id: 'j1', versionId: 'v2', step: 'indexing', status: 'failed', error: 'Indexing timed out', durationMs: 900, ocrConfidence: 1, pageCount: 3, chunkCount: 0, createdAt: now, updatedAt: now },
+      ]);
+
+      const res = await service.getProcessingStatus('doc-1', schoolAdmin);
+      expect(res).toMatchObject({
+        documentId: 'doc-1',
+        currentVersion: { id: 'v2', versionNo: 2, status: 'error', statusError: 'Indexing timed out', statusChangedAt: now },
+        steps: [expect.objectContaining({ step: 'indexing', status: 'failed', error: 'Indexing timed out' })],
+      });
+      expect(mockPrisma.processingJob.findMany).toHaveBeenCalledWith({ where: { versionId: 'v2' }, orderBy: { createdAt: 'asc' } });
+    });
+
+    it('answers null for a document registered without a file', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: null, space: { schoolId: 'school-1' } });
+      expect(await service.getProcessingStatus('doc-1', platformAdmin)).toMatchObject({ currentVersion: null, steps: [] });
+    });
+
+    it('is refused to readers who do not manage documents', async () => {
+      mockPrisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: 'v1', space: { schoolId: 'school-1' } });
+      await expect(service.getProcessingStatus('doc-1', studentUser)).rejects.toThrow(ForbiddenException);
     });
   });
 

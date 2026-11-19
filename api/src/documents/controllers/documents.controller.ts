@@ -33,6 +33,7 @@ import {
 } from '../dto/index.js';
 import {
   DocumentAccessRuleEntity,
+  DocumentProcessingStatusEntity,
   DocumentEntity,
   DocumentVersionItemEntity,
   PaginatedDocumentsEntity,
@@ -134,6 +135,26 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document not found' })
   async getDocumentById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<DocumentEntity> {
     return this.documentsService.findDocumentById(id, actor);
+  }
+
+  @Get(':id/status')
+  @RequirePermission('documents:manage')
+  @ApiOperation({
+    summary: 'Processing status of a document (#112)',
+    description:
+      "The current version's status (pending, ocr, segmentation, indexing, available, error), the failure reason " +
+      'and when the status changed, plus the processing jobs of that version. Document managers only: readers never ' +
+      'see processing states. Poll it to follow processing.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiResponse({ status: 200, description: 'Processing status', type: DocumentProcessingStatusEntity })
+  @ApiResponse({ status: 400, description: 'Invalid document id' })
+  @ApiResponse({ status: 404, description: 'Document not found or deleted' })
+  async getDocumentStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentProcessingStatusEntity> {
+    return this.documentsService.getProcessingStatus(id, actor);
   }
 
   @Get(':id/access')

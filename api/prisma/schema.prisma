@@ -260,6 +260,17 @@ model Document {
   @@map("documents")
 }
 
+/// Processing status of a document version (spec §3.1 step 2, #112).
+/// pending → ocr (images and scanned files only) → segmentation → indexing → available; error from any step.
+enum DocumentVersionStatus {
+  pending
+  ocr
+  segmentation
+  indexing
+  available
+  error
+}
+
 model DocumentVersion {
   id         String   @id @default(uuid())
   documentId String   @map("document_id")
@@ -267,7 +278,11 @@ model DocumentVersion {
   storageKey String   @map("storage_key")
   mimeType   String   @map("mime_type")
   checksum   String
-  status     String   @default("uploaded")
+  /// Pipeline status (#112), changed only through DocumentProcessingStatusService, in pipeline order.
+  status          DocumentVersionStatus @default(pending)
+  /// Why processing failed; set only while status is 'error'. Shown to document managers only.
+  statusError     String?  @map("status_error") @db.Text
+  statusChangedAt DateTime @default(now()) @map("status_changed_at") @db.DateTime(3)
   pageCount  Int      @default(0) @map("page_count")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")

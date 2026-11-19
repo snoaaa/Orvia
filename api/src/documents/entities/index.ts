@@ -7,3 +7,4 @@ export * from './paginated-spaces.entity.js';
 export * from './validated-file.entity.js';
 export * from './document-version-item.entity.js';
 export * from './document-access-rule.entity.js';
+export * from './document-processing-status.entity.js';

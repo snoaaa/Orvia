@@ -50,6 +50,7 @@ describe('DocumentsController', () => {
       replaceDocumentVersion: vi.fn(),
       listDocumentVersions: vi.fn(),
       deleteDocument: vi.fn(),
+      getProcessingStatus: vi.fn(),
     };
 
     mockDocumentAccessService = { listRules: vi.fn(), addRules: vi.fn(), replaceRules: vi.fn(), removeRule: vi.fn() };
@@ -189,6 +190,15 @@ describe('DocumentsController', () => {
         }),
       );
       expect(res).toBe(expectedDoc);
+    });
+  });
+
+  describe('getDocumentStatus (#112)', () => {
+    it('delegates to getProcessingStatus', async () => {
+      const status = { documentId: 'doc-1', currentVersion: null, steps: [] };
+      mockDocumentsService.getProcessingStatus.mockResolvedValueOnce(status);
+      expect(await controller.getDocumentStatus('doc-1', mockActor)).toBe(status);
+      expect(mockDocumentsService.getProcessingStatus).toHaveBeenCalledWith('doc-1', mockActor);
     });
   });
 

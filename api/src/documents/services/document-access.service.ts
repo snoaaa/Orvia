@@ -173,7 +173,12 @@ export class DocumentAccessService {
 
       const removedIds = new Set(remove.map((r) => r.id));
       const after = [...current.filter((r) => !removedIds.has(r.id)), ...add];
-      const { lost, gained } = await audienceChange(tx, schoolId, current, after);
+      // Readers only see a document with an available version (#111). Until then nobody gains or loses it;
+      // its first available version announces it (DocumentProcessingStatusService, #112).
+      const readable = (await tx.documentVersion.count({ where: { documentId, status: 'available' } })) > 0;
+      const { lost, gained } = readable
+        ? await audienceChange(tx, schoolId, current, after)
+        : { lost: [] as string[], gained: [] as string[] };
 
       if (remove.length > 0) await tx.documentAccess.deleteMany({ where: { id: { in: [...removedIds] } } });
       if (add.length > 0) {

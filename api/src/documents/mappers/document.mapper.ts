@@ -5,7 +5,11 @@ import { normalizeTags } from '../utils/document-filters.util.js';
 import { DocumentVersionMapper } from './document-version.mapper.js';
 
 export class DocumentMapper {
-  static toEntity(raw: Document, currentVersion?: DocumentVersion | null): DocumentEntity {
+  static toEntity(
+    raw: Document,
+    currentVersion?: DocumentVersion | null,
+    options: { forReader?: boolean } = {},
+  ): DocumentEntity {
     return new DocumentEntity({
       id: raw.id,
       spaceId: raw.spaceId,
@@ -15,7 +19,7 @@ export class DocumentMapper {
       createdAt: raw.createdAt,
       updatedAt: raw.updatedAt,
       deletedAt: raw.deletedAt ?? null,
-      currentVersion: currentVersion ? DocumentVersionMapper.toEntity(currentVersion) : null,
+      currentVersion: currentVersion ? DocumentVersionMapper.toEntity(currentVersion, options) : null,
     });
   }
 

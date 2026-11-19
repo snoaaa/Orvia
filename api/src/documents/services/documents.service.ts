@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
-import type { Prisma } from '@prisma/client';
+import type { DocumentVersion, Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, canInSchool, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -12,6 +12,8 @@ import { buildDocumentStorageKey } from '../../storage/utils/storage-key.util.js
 import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
 import {
   DocumentEntity,
+  DocumentProcessingStatusEntity,
+  ProcessingJobEntity,
   DocumentVersionItemEntity,
   DocumentVersionUploaderEntity,
   PaginatedDocumentsEntity,
@@ -84,21 +86,79 @@ export class DocumentsService {
       this.prisma.document.count({ where }),
       this.prisma.document.findMany({
         where,
-        include: { currentVersion: true },
+        include: { currentVersion: true, space: { select: { schoolId: true } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
       }),
     ]);
 
+    // #112: readers never see processing states. For a document they do not manage, their current version
+    // is the latest available one (a replacement still in processing stays invisible to them).
+    const readerDocIds = docs.filter((d) => !canInSchool(actor, 'documents:manage', d.space.schoolId)).map((d) => d.id);
+    const latestAvailable = new Map<string, DocumentVersion>();
+    if (readerDocIds.length > 0) {
+      const available = await this.prisma.documentVersion.findMany({
+        where: { documentId: { in: readerDocIds }, status: 'available' },
+        orderBy: { versionNo: 'desc' },
+      });
+      for (const v of available) if (!latestAvailable.has(v.documentId)) latestAvailable.set(v.documentId, v);
+    }
+
     const totalPages = Math.ceil(total / limit) || 1;
 
     return new PaginatedDocumentsEntity({
-      data: docs.map((d) => DocumentMapper.toEntity(d, d.currentVersion)),
+      data: docs.map(({ space: _space, currentVersion, ...d }) =>
+        readerDocIds.includes(d.id)
+          ? DocumentMapper.toEntity(d, latestAvailable.get(d.id) ?? null, { forReader: true })
+          : DocumentMapper.toEntity(d, currentVersion),
+      ),
       total,
       page,
       limit,
       totalPages,
+    });
+  }
+
+  /**
+   * Processing status of a document (#112, document managers only): the current version's status, its failure
+   * reason and when it changed, and the history of its processing jobs, oldest first.
+   */
+  async getProcessingStatus(id: string, actor: AuthenticatedUser): Promise<DocumentProcessingStatusEntity> {
+    const doc = await this.findDocumentInScope(id, actor, 'documents:manage');
+    const current = doc.currentVersionId
+      ? await this.prisma.documentVersion.findUnique({ where: { id: doc.currentVersionId } })
+      : null;
+    const jobs = current
+      ? await this.prisma.processingJob.findMany({ where: { versionId: current.id }, orderBy: { createdAt: 'asc' } })
+      : [];
+    return new DocumentProcessingStatusEntity({
+      documentId: doc.id,
+      currentVersion: current
+        ? {
+            id: current.id,
+            versionNo: current.versionNo,
+            status: current.status,
+            statusError: current.statusError,
+            statusChangedAt: current.statusChangedAt,
+          }
+        : null,
+      steps: jobs.map(
+        (j) =>
+          new ProcessingJobEntity({
+            id: j.id,
+            versionId: j.versionId,
+            step: j.step,
+            status: j.status,
+            error: j.error,
+            durationMs: j.durationMs,
+            ocrConfidence: j.ocrConfidence,
+            pageCount: j.pageCount,
+            chunkCount: j.chunkCount,
+            createdAt: j.createdAt,
+            updatedAt: j.updatedAt,
+          }),
+      ),
     });
   }
 
@@ -892,9 +952,10 @@ export class DocumentsService {
       return;
     }
 
-    // 5. If not cited in user's own answers, only the CURRENT version can be downloaded
+    // 5. If not cited in user's own answers, only the CURRENT version can be downloaded: for a reader, the
+    //    latest available one (#112), never a version still in processing.
     const latestVersion = await this.prisma.documentVersion.findFirst({
-      where: { documentId: document.id },
+      where: { documentId: document.id, status: 'available' },
       orderBy: { versionNo: 'desc' },
       select: { id: true },
     });
@@ -949,10 +1010,14 @@ export class DocumentsService {
     // Resolve target version
     let version;
     if (!versionRef || versionRef === 'latest') {
+      // Managers get the newest version; readers the newest available one (#112).
+      const reader = !canInSchool(actor, 'documents:manage', document.space.schoolId);
       version = await this.prisma.documentVersion.findFirst({
-        where: { documentId },
+        where: { documentId, ...(reader ? { status: 'available' as const } : {}) },
         orderBy: { versionNo: 'desc' },
       });
+      // Nothing processed yet: for a reader the document is not there yet, like in the list (403, as details).
+      if (!version && reader) throw new ForbiddenException(NOT_PUBLISHED_TO_YOU);
     } else if (/^\d+$/.test(versionRef.trim())) {
       const versionNo = parseInt(versionRef.trim(), 10);
       version = await this.prisma.documentVersion.findFirst({

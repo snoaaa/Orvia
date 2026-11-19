@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import type { DocumentVersionStatus } from '@prisma/client';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
@@ -48,7 +49,7 @@ describe('Document list (e2e)', () => {
   async function document(
     key: string,
     space: keyof typeof spaces,
-    o: { status?: string; mimeType?: string; tags?: string; rules?: { targetType: string; targetId: string; roleId?: string; groupId?: string; userId?: string }[]; previous?: string } = {},
+    o: { status?: DocumentVersionStatus; mimeType?: string; tags?: string; rules?: { targetType: string; targetId: string; roleId?: string; groupId?: string; userId?: string }[]; previous?: DocumentVersionStatus } = {},
   ) {
     const school = space === 'B' ? schools.B : schools.A;
     const doc = await prisma.document.create({
