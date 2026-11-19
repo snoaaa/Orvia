@@ -23,6 +23,12 @@ const DOC_COVERED_PERMISSIONS = new Set([
   'documents.manage',
 ]);
 
+/**
+ * Permission codes that make a role a document manager in its school (any of them grants documents:manage,
+ * see schoolsWithPermission), plus the '*' wildcard. Used to find managers in the database (#110).
+ */
+export const DOCUMENT_MANAGER_PERMISSION_CODES: readonly string[] = ['*', ...DOC_COVERED_PERMISSIONS];
+
 /** Schools where `user` may use `permission`, or 'all' for platform-wide roles. */
 export function schoolsWithPermission(user: AuthenticatedUser, permission: string): 'all' | string[] {
   if (user.isPlatformAdmin || user.assignments.some((a) => a.scope === 'platform')) {

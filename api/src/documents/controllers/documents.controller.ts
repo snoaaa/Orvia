@@ -3,11 +3,13 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -25,6 +27,7 @@ import {
   CreateSpaceDto,
   ListDocumentsQueryDto,
   ListSpacesQueryDto,
+  ReplaceDocumentAccessDto,
   UpdateDocumentDto,
   UploadDocumentDto,
 } from '../dto/index.js';
@@ -169,6 +172,54 @@ export class DocumentsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DocumentAccessRuleEntity[]> {
     return this.documentAccessService.addRules(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Put(':id/access')
+  @RequirePermission('documents:manage')
+  @ApiOperation({
+    summary: "Replace a document's access rules (#110)",
+    description:
+      'Sets the complete list of publication rules: targets not in the list are removed, new ones added, the others ' +
+      'kept. An empty list turns the document back into a draft. Same target checks as POST. Applies at once: ' +
+      'readers who lose the document get 403 on their next request, and the next mobile sync removes it from their ' +
+      'offline data (a sync_changes row, and their offline selections of it are deleted). Records ' +
+      'document_access_changed unless nothing changed. Answers with the new rules.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiBody({ type: ReplaceDocumentAccessDto })
+  @ApiResponse({ status: 200, description: 'The new publication rules', type: [DocumentAccessRuleEntity] })
+  @ApiResponse({ status: 400, description: "Invalid body, or a target outside the document's school" })
+  @ApiResponse({ status: 404, description: 'Document not found or deleted' })
+  async replaceDocumentAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReplaceDocumentAccessDto,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentAccessRuleEntity[]> {
+    return this.documentAccessService.replaceRules(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Delete(':id/access/:ruleId')
+  @RequirePermission('documents:manage')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Remove one access rule of a document (#110)',
+    description:
+      'Readers reached only through this rule lose the document at once, and the next mobile sync removes it from ' +
+      'their offline data. Removing the last rule makes the document a draft. Records document_access_changed.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiParam({ name: 'ruleId', description: 'Access rule UUID (from GET /documents/{id}/access)' })
+  @ApiResponse({ status: 204, description: 'Rule removed' })
+  @ApiResponse({ status: 400, description: 'Invalid id' })
+  @ApiResponse({ status: 404, description: 'Document not found, or not a rule of this document' })
+  async removeDocumentAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('ruleId', ParseUUIDPipe) ruleId: string,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.documentAccessService.removeRule(id, ruleId, actor, auditContextFromRequest(req));
   }
 
   @Post()

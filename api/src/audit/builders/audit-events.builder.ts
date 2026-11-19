@@ -483,4 +483,34 @@ export const AuditEvents = {
       context,
     };
   },
+  /** The rules of a document were replaced or one was removed (#110): the targets added and removed. */
+  documentAccessChanged(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      added: { type: string; targetId: string }[];
+      removed: { type: string; targetId: string }[];
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_ACCESS_CHANGED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        added: p.added,
+        removed: p.removed,
+      },
+      context,
+    };
+  },
 };
