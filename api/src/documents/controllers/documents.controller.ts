@@ -127,7 +127,7 @@ export class DocumentsController {
   @ApiResponse({ status: 200, description: 'Document retrieved', type: DocumentEntity })
   @ApiResponse({ status: 403, description: 'Another school, or the document is not published to you' })
   @ApiResponse({ status: 404, description: 'Document not found' })
-  async getDocumentById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<DocumentEntity> {
+  async getDocumentById(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() actor: AuthenticatedUser): Promise<DocumentEntity> {
     return this.documentsService.findDocumentById(id, actor);
   }
 
@@ -244,7 +244,7 @@ export class DocumentsController {
   @ApiResponse({ status: 403, description: 'Forbidden: caller lacks documents:update in this school' })
   @ApiResponse({ status: 404, description: 'Document not found' })
   async updateDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDocumentDto,
     @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
@@ -268,7 +268,7 @@ export class DocumentsController {
   @ApiResponse({ status: 403, description: 'Forbidden: caller lacks documents:delete in this school' })
   @ApiResponse({ status: 404, description: 'Document not found or already deleted' })
   async deleteDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<{ success: boolean; id: string; message: string }> {
@@ -306,7 +306,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document not found' })
   @ApiResponse({ status: 413, description: 'File exceeds maximum size' })
   async replaceDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: IUploadedFile,
     @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
@@ -339,7 +339,7 @@ export class DocumentsController {
   })
   @ApiResponse({ status: 201, description: 'New version created', type: DocumentEntity })
   async createDocumentVersion(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: IUploadedFile,
     @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
@@ -510,7 +510,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document not found' })
   @ApiResponse({ status: 416, description: 'Range not satisfiable' })
   async downloadCurrentDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('disposition') disposition: 'attachment' | 'inline' | undefined,
     @Req() req: Request,
     @Res() res: Response,
@@ -540,7 +540,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document not found' })
   @ApiResponse({ status: 416, description: 'Range not satisfiable' })
   async streamCurrentDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Req() req: Request,
     @Res() res: Response,
     @CurrentUser() actor: AuthenticatedUser,
@@ -577,7 +577,7 @@ export class DocumentsController {
   })
   @ApiResponse({ status: 404, description: 'Document not found' })
   async listDocumentVersions(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DocumentVersionItemEntity[]> {
     return this.documentsService.listDocumentVersions(id, actor);
@@ -599,7 +599,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document or version not found' })
   @ApiResponse({ status: 416, description: 'Range not satisfiable' })
   async downloadDocumentVersion(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Param('version') version: string,
     @Query('disposition') disposition: 'attachment' | 'inline' | undefined,
     @Req() req: Request,
@@ -630,7 +630,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document or version not found' })
   @ApiResponse({ status: 416, description: 'Range not satisfiable' })
   async streamDocumentVersion(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Param('version') version: string,
     @Req() req: Request,
     @Res() res: Response,

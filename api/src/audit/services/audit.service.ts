@@ -30,45 +30,49 @@ export class AuditService {
    * duration of the append, so writers queue up instead of racing for the same predecessor.
    * The lock is held by MySQL, so this also holds with several API instances.
    * Throws if the event cannot be stored; callers decide whether that blocks the action.
+   *
+   * With `transaction`, the event is written inside the caller's transaction: it is stored only if the
+   * caller's changes are, and the caller's changes are rolled back if it cannot be stored.
    */
-  async record(input: RecordAuditEventInput): Promise<AuditEventEntity> {
+  async record(input: RecordAuditEventInput, transaction?: Prisma.TransactionClient): Promise<AuditEventEntity> {
     const details = redactSecrets({
       ...input.details,
       ...(input.context.userAgent ? { userAgent: input.context.userAgent } : {}),
     });
 
+    const append = async (tx: Prisma.TransactionClient) => {
+      const head = await lockChainHead(tx);
+      const event: HashableAuditEvent = {
+        id: randomUUID(),
+        category: input.category,
+        action: input.action,
+        actorId: clip(input.actor.userId),
+        actorRole: clip(input.actor.role),
+        schoolId: clip(input.actor.schoolId),
+        entityType: clip(input.entity?.type),
+        entityId: clip(input.entity?.id),
+        ip: clip(input.context.ip, 45),
+        deviceId: clip(input.context.deviceId),
+        details,
+        // MySQL DATETIME(3) keeps milliseconds, so the stored value hashes identically.
+        createdAt: new Date(),
+        prevHash: head,
+      };
+      const hash = computeAuditHash(event);
+      const created = await tx.auditEvent.create({
+        data: { ...event, details: details as Prisma.InputJsonValue, hash },
+      });
+      await tx.auditChainHead.update({
+        where: { id: AUDIT_CHAIN_HEAD_ID },
+        data: { hash, eventSeq: created.seq },
+      });
+      return created;
+    };
+
     try {
-      const row = await this.prisma.$transaction(
-        async (tx) => {
-          const head = await lockChainHead(tx);
-          const event: HashableAuditEvent = {
-            id: randomUUID(),
-            category: input.category,
-            action: input.action,
-            actorId: clip(input.actor.userId),
-            actorRole: clip(input.actor.role),
-            schoolId: clip(input.actor.schoolId),
-            entityType: clip(input.entity?.type),
-            entityId: clip(input.entity?.id),
-            ip: clip(input.context.ip, 45),
-            deviceId: clip(input.context.deviceId),
-            details,
-            // MySQL DATETIME(3) keeps milliseconds, so the stored value hashes identically.
-            createdAt: new Date(),
-            prevHash: head,
-          };
-          const hash = computeAuditHash(event);
-          const created = await tx.auditEvent.create({
-            data: { ...event, details: details as Prisma.InputJsonValue, hash },
-          });
-          await tx.auditChainHead.update({
-            where: { id: AUDIT_CHAIN_HEAD_ID },
-            data: { hash, eventSeq: created.seq },
-          });
-          return created;
-        },
-        { maxWait: 10_000, timeout: 15_000 },
-      );
+      const row = transaction
+        ? await append(transaction)
+        : await this.prisma.$transaction(append, { maxWait: 10_000, timeout: 15_000 });
       if (input.context.request) markRequestAudited(input.context.request);
       return AuditEventMapper.toEntity(row);
     } catch (error) {
