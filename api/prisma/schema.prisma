@@ -244,9 +244,13 @@ model Document {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
+  /// The latest version (#111), set by upload and replace. Its status and MIME type are what the document
+  /// list shows and filters on; readers only see a document once one of its versions is 'available'.
+  currentVersionId String? @unique @map("current_version_id")
 
   space             Space              @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  versions          DocumentVersion[]
+  versions          DocumentVersion[]  @relation("DocumentVersions")
+  currentVersion    DocumentVersion?   @relation("DocumentCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
   access            DocumentAccess[]
   offlineSelections OfflineSelection[]
 
@@ -268,7 +272,8 @@ model DocumentVersion {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  document          Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document          Document           @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
+  currentOf         Document?          @relation("DocumentCurrentVersion")
   processingJobs    ProcessingJob[]
   messageReferences MessageReference[]
 

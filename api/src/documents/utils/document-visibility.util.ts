@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
+import { AVAILABLE_STATUS, type DocumentStatus, type DocumentType, typeWhere } from './document-filters.util.js';
 
 /** The kinds of target a document can be published to (#109). */
 export const DOCUMENT_ACCESS_TARGET_TYPES = ['school', 'role', 'class', 'group', 'user'] as const;
@@ -51,20 +52,54 @@ export function matchingAccessRulesWhere(actor: AuthenticatedUser): Prisma.Docum
 /**
  * Prisma filter for the documents `actor` may see (#109), or `undefined` when they see every document
  * (platform admins). Document managers (`documents:manage`) see every document of their schools, published
- * or not; everyone else only the documents published to them. A document without any rule is a draft:
- * only its managers see it.
+ * or not, in any status; everyone else only the documents published to them that have a processed version
+ * (status 'available', #111), so readers never see a document still in processing. A document without any
+ * rule is a draft: only its managers see it.
  *
  * Meant to be shared by every reader: the document details and downloads now, the document lists (#111)
  * and the retrieval step of the chat, which must apply it before generating an answer.
  * Combine it with the caller's own conditions under `AND`, never by spreading it (both may use `OR`).
  */
+/**
+ * The `status` and `type` filters of the document list (#111), applied to the versions each caller may see:
+ * - in the schools where the caller manages documents (or everywhere for platform admins), to the current version;
+ * - elsewhere the caller only ever sees available versions, so `status` other than `available` matches nothing
+ *   there, and `type` matches when one of the document's available versions has that type.
+ * Undefined when neither filter is given.
+ */
+export function versionFiltersWhere(
+  actor: AuthenticatedUser,
+  status?: DocumentStatus,
+  type?: DocumentType,
+): Prisma.DocumentWhereInput | undefined {
+  if (!status && !type) return undefined;
+  const currentVersion: Prisma.DocumentVersionWhereInput = { ...(status ? { status } : {}), ...(type ? typeWhere(type) : {}) };
+  const managed = schoolsWithPermission(actor, 'documents:manage');
+  if (managed === 'all') return { currentVersion };
+
+  const asManager: Prisma.DocumentWhereInput[] =
+    managed.length > 0 ? [{ space: { schoolId: { in: managed } }, currentVersion }] : [];
+  const asReader: Prisma.DocumentWhereInput[] =
+    !status || status === AVAILABLE_STATUS
+      ? [
+          {
+            ...(managed.length > 0 ? { space: { schoolId: { notIn: managed } } } : {}),
+            versions: { some: { status: AVAILABLE_STATUS, ...(type ? typeWhere(type) : {}) } },
+          },
+        ]
+      : [];
+  const parts = [...asManager, ...asReader];
+  // A reader asking for a processing status: nothing can match.
+  return parts.length > 0 ? { OR: parts } : { id: { in: [] } };
+}
+
 export function visibleDocumentsWhere(actor: AuthenticatedUser): Prisma.DocumentWhereInput | undefined {
   const managed = schoolsWithPermission(actor, 'documents:manage');
   if (managed === 'all') return undefined;
   return {
     OR: [
       ...(managed.length > 0 ? [{ space: { schoolId: { in: managed } } }] : []),
-      { access: { some: matchingAccessRulesWhere(actor) } },
+      { access: { some: matchingAccessRulesWhere(actor) }, versions: { some: { status: AVAILABLE_STATUS } } },
     ],
   };
 }

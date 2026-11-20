@@ -565,8 +565,45 @@ is published to them. Someone whose assignment in the school is removed loses ac
 is the one Prisma filter for "documents this user may see" (`undefined` = everything). The document lists (#111)
 and the chat retrieval step must apply it, combined under `AND`, before using a document; there are no chunks
 yet, so each rule also stores the document's `school_id` to make that filter cheap.
-`GET /documents` does not filter by rules yet (#111). After pulling, run `npx prisma generate` and
+`GET /documents` applies it too (#111, below). After pulling, run `npx prisma generate` and
 `npm run db:migrate` (migration `10_document_access_targets`).
+
+### List the documents you may see: `GET /documents` (#111, `documents:read`)
+
+| Caller | Gets |
+|---|---|
+| Platform admin | every document, any status |
+| School admin, content manager, staff with `documents:manage` | every document of their schools, any status (drafts included) |
+| Staff, students, parents | documents published to them (school, role, class, group or user rule) that have an `available` version |
+
+Deleted documents are never listed. Each item carries its `currentVersion` (`versionNo`, `status`, `mimeType`...), and so
+does `GET /documents/{id}`.
+
+| Query | Effect |
+|---|---|
+| `spaceId` | one space |
+| `q` | title contains the text, ignoring case (1-200 characters) |
+| `tags=math,exam` | carries **all** these tags, as whole tags (`math` does not match `mathematics`), up to 10; `tags` may be repeated (`tags=math&tags=exam`) |
+| `status` | status of the current version: `pending`, `ocr`, `segmentation`, `indexing`, `available`, `error` (spec §3.1) |
+| `type` | file type of the current version: `pdf`, `image`, `word`, `presentation`, `spreadsheet`, `text` |
+| `page`, `limit` | the shared pagination contract (`limit` 1-100), newest first |
+
+Filters combine with AND and with the caller's scope; an invalid value → 400.
+
+`status` and `type` look at the current version only where the caller manages documents. Elsewhere the caller only
+sees available versions, so `status` other than `available` matches nothing there, and `type` matches a document
+when one of its available versions has that type (a replacement still in processing does not count).
+
+- **Processing:** readers never see a document still in processing. They see it once **any** version is `available`, so
+  replacing a file does not hide the document while the new version is processed. The same rule applies to
+  `GET /documents/{id}`, `/download` and `/stream`. Uploads create versions as `pending` and nothing sets
+  `available` yet (the processing pipeline will), so readers see an empty list until then.
+- **Current version:** `documents.current_version_id` (migration `11_documents_current_version`) points to the latest
+  version; upload and replace set it. Status and type filters read it.
+- **Tags** are stored cleaned: trimmed, no empty tags, each once (`"Math , physics,,"` → `"Math,physics"`), on create,
+  update and upload. The migration cleans existing rows.
+
+After pulling, run `npx prisma generate` and `npm run db:migrate`.
 
 ### Change or remove access rules (#110, `documents:manage`)
 
