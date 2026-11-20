@@ -242,6 +242,22 @@ describe('Delete a space (e2e)', () => {
       expect((await stored(dead.id)).deletedAt).toBeInstanceOf(Date);
     });
 
+    it('PATCH on a deleted space returns 404 and leaves its "[deleted ...]" name unchanged (#98)', async () => {
+      const before = await stored(dead.id);
+      expect(before.name).toContain('[deleted');
+      for (const as of [ids.AdminA, platformAdminId]) {
+        const res = await http()
+          .patch(`/documents/spaces/${dead.id}`)
+          .set('Authorization', await bearer(as))
+          .send({ name: dead.name, privacy: 'private' });
+        check(res, 404);
+      }
+      const after = await stored(dead.id);
+      expect(after.name).toBe(before.name);
+      expect(after.privacy).toBe(before.privacy);
+      expect(after.deletedAt).toEqual(before.deletedAt);
+    });
+
     it('its documents leave the document list, while the documents of other spaces stay', async () => {
       const res = check(await get(ids.AdminA, '/documents?limit=100'), 200);
       const listed = (res.body.data as { id: string }[]).map((d) => d.id);
