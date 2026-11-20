@@ -177,6 +177,13 @@ describe('Document list (e2e)', () => {
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].currentVersion).toMatchObject({ versionNo: 2, status: 'indexing', mimeType: 'application/pdf' });
     });
+
+    it('GET /documents/:id returns the current version too', async () => {
+      const res = check(await http().get(`/documents/${docs.Replaced}`).set('Authorization', await bearer(ids.AdminA)), 200);
+      expect(res.body.currentVersion).toMatchObject({ versionNo: 2, status: 'indexing', mimeType: 'application/pdf' });
+      const draft = check(await http().get(`/documents/${docs.Draft}`).set('Authorization', await bearer(ids.AdminA)), 200);
+      expect(draft.body.currentVersion).toMatchObject({ versionNo: 1 });
+    });
   });
 
   describe('filters', () => {
@@ -202,6 +209,32 @@ describe('Document list (e2e)', () => {
     it('by file type', async () => {
       expect(await seen(ids.AdminA, { type: 'image' })).toEqual(['StaffOnly']);
       expect(await seen(ids.AdminA, { type: 'text' })).toEqual(['ParentShared']);
+    });
+
+    it('for readers, status and type apply to the versions they may see, not to one still in processing', async () => {
+      // Replaced: v1 available, v2 (current) still indexing.
+      expect(await seen(ids.StudentA, { status: 'available' })).toEqual(['ClassOnly', 'Replaced', 'SchoolWide']);
+      expect(await seen(ids.StudentA, { status: 'indexing' })).toEqual([]);
+      expect(await seen(ids.AdminA, { status: 'available' })).not.toContain('Replaced');
+
+      // Rescanned: v1 available PDF, v2 (current) an image still in OCR.
+      await document('Rescanned', 'A1', { rules: [{ targetType: 'school', targetId: schools.A }], status: 'ocr', mimeType: 'image/png', previous: 'available' });
+      try {
+        expect(await seen(ids.StudentA, { type: 'pdf' })).toContain('Rescanned');
+        expect(await seen(ids.StudentA, { type: 'image' })).not.toContain('Rescanned');
+        expect(await seen(ids.AdminA, { type: 'image' })).toContain('Rescanned');
+        expect(await seen(ids.AdminA, { type: 'pdf' })).not.toContain('Rescanned');
+      } finally {
+        await prisma.document.update({ where: { id: docs.Rescanned }, data: { deletedAt: new Date() } });
+      }
+    });
+
+    it('repeated tags parameters add up', async () => {
+      const res = check(
+        await http().get('/documents').query(`q=${tag}&tags=math&tags=exam,math`).set('Authorization', await bearer(ids.AdminA)),
+        200,
+      );
+      expect(keysOf(res.body)).toEqual(['SchoolWide']);
     });
 
     it('filters combine with the role scope', async () => {

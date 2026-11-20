@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { isDocumentVisibleTo, matchingAccessRulesWhere, visibleDocumentsWhere } from './document-visibility.util.js';
+import { isDocumentVisibleTo, matchingAccessRulesWhere, versionFiltersWhere, visibleDocumentsWhere } from './document-visibility.util.js';
 
 const user = (assignments: { role: string; scope?: string; schoolId: string; permissions: string[] }[]) =>
   ({
@@ -73,6 +73,46 @@ describe('document visibility (#109)', () => {
     expect(prisma.document.findFirst).toHaveBeenLastCalledWith({
       where: { AND: [{ id: 'd1', deletedAt: null }] },
       select: { id: true },
+    });
+  });
+});
+
+describe('versionFiltersWhere (#111)', () => {
+  const pdf = { mimeType: { in: ['application/pdf'] } };
+  const admin = user([{ role: 'PLATFORM_ADMIN', scope: 'platform', schoolId: '', permissions: ['*'] }]);
+  const reader = user([{ role: 'STUDENT', schoolId: 's1', permissions: ['documents:read'] }]);
+  const mixed = user([
+    { role: 'CONTENT_MANAGER', schoolId: 's1', permissions: ['documents:manage'] },
+    { role: 'PARENT_GUEST', schoolId: 's2', permissions: ['documents:read'] },
+  ]);
+
+  it('is undefined without status or type', () => {
+    expect(versionFiltersWhere(reader)).toBeUndefined();
+  });
+
+  it('applies to the current version for platform admins', () => {
+    expect(versionFiltersWhere(admin, 'ocr', 'pdf')).toEqual({ currentVersion: { status: 'ocr', ...pdf } });
+  });
+
+  it('applies to the available versions for readers, and matches nothing for a processing status', () => {
+    expect(versionFiltersWhere(reader, 'available', 'pdf')).toEqual({
+      OR: [{ versions: { some: { status: 'available', ...pdf } } }],
+    });
+    expect(versionFiltersWhere(reader, undefined, 'pdf')).toEqual({
+      OR: [{ versions: { some: { status: 'available', ...pdf } } }],
+    });
+    expect(versionFiltersWhere(reader, 'ocr')).toEqual({ id: { in: [] } });
+  });
+
+  it('splits by school for someone who manages one school and reads in another', () => {
+    expect(versionFiltersWhere(mixed, 'available')).toEqual({
+      OR: [
+        { space: { schoolId: { in: ['s1'] } }, currentVersion: { status: 'available' } },
+        { space: { schoolId: { notIn: ['s1'] } }, versions: { some: { status: 'available' } } },
+      ],
+    });
+    expect(versionFiltersWhere(mixed, 'error')).toEqual({
+      OR: [{ space: { schoolId: { in: ['s1'] } }, currentVersion: { status: 'error' } }],
     });
   });
 });
