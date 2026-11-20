@@ -1,8 +1,22 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { RequirePermission } from '../../auth/decorators/auth.decorators.js';
-import { CreateConversationDto, CreateMessageDto, ReportAnswerDto, SaveAnswerDto } from '../dto/index.js';
-import { AnswerReportEntity, ConversationEntity, MessageEntity, SavedAnswerEntity } from '../entities/index.js';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
+import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
+import {
+  CreateConversationDto,
+  CreateMessageDto,
+  ListConversationsQueryDto,
+  ReportAnswerDto,
+  SaveAnswerDto,
+} from '../dto/index.js';
+import {
+  AnswerReportEntity,
+  ConversationDetailEntity,
+  ConversationEntity,
+  MessageEntity,
+  PaginatedConversationsEntity,
+  SavedAnswerEntity,
+} from '../entities/index.js';
 import { ConversationsService } from '../services/conversations.service.js';
 
 @ApiTags('Conversations')
@@ -15,10 +29,23 @@ export class ConversationsController {
 
   @Get()
   @RequirePermission('conversations:read')
-  @ApiOperation({ summary: 'List user conversations' })
-  @ApiResponse({ status: 200, description: 'List of conversations', type: [ConversationEntity] })
-  async getConversations(): Promise<ConversationEntity[]> {
-    return this.conversationsService.findAll();
+  @ApiOperation({
+    summary: 'List your conversations, newest first and paginated (#123)',
+    description:
+      'Returns only conversations owned by the authenticated user (even for admins; monitoring uses dedicated routes). ' +
+      'Ordered newest first (updatedAt DESC, createdAt DESC, id DESC). Supports optional spaceId and title search (q).',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiQuery({ name: 'spaceId', required: false, description: 'Filter by space UUID' })
+  @ApiQuery({ name: 'q', required: false, description: 'Search in conversation title' })
+  @ApiResponse({ status: 200, description: 'Paginated list of user conversations', type: PaginatedConversationsEntity })
+  @ApiResponse({ status: 400, description: 'Invalid query parameters' })
+  async getConversations(
+    @Query() query: ListConversationsQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedConversationsEntity> {
+    return this.conversationsService.findAll(actor, query);
   }
 
   @Post()
@@ -31,20 +58,38 @@ export class ConversationsController {
 
   @Get(':id')
   @RequirePermission('conversations:read')
-  @ApiOperation({ summary: 'Get conversation details by ID' })
+  @ApiOperation({
+    summary: 'Get conversation details with chronological messages and citations (#123)',
+    description:
+      'Returns the conversation only if owned by the authenticated user. Returns 404 for unknown, deleted, or another user’s conversation.',
+  })
   @ApiParam({ name: 'id', description: 'Conversation UUID' })
-  @ApiResponse({ status: 200, description: 'Conversation details', type: ConversationEntity })
-  async getConversationById(@Param('id') id: string): Promise<ConversationEntity> {
-    return this.conversationsService.findById(id);
+  @ApiResponse({ status: 200, description: 'Conversation details with messages and citations', type: ConversationDetailEntity })
+  @ApiResponse({ status: 400, description: 'Invalid conversation UUID' })
+  @ApiResponse({ status: 404, description: 'Conversation not found' })
+  async getConversationById(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<ConversationDetailEntity> {
+    return this.conversationsService.findById(id, actor);
   }
 
   @Get(':id/messages')
   @RequirePermission('conversations:read')
-  @ApiOperation({ summary: 'Get messages for a conversation' })
+  @ApiOperation({
+    summary: 'Get messages and citations for a conversation (#123)',
+    description:
+      'Returns the chronological messages and citations only if the conversation is owned by the authenticated user.',
+  })
   @ApiParam({ name: 'id', description: 'Conversation UUID' })
   @ApiResponse({ status: 200, description: 'Messages list', type: [MessageEntity] })
-  async getMessages(@Param('id') id: string): Promise<MessageEntity[]> {
-    return this.conversationsService.findMessages(id);
+  @ApiResponse({ status: 400, description: 'Invalid conversation UUID' })
+  @ApiResponse({ status: 404, description: 'Conversation not found' })
+  async getMessages(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<MessageEntity[]> {
+    return this.conversationsService.findMessages(id, actor);
   }
 
   @Post(':id/messages')
@@ -52,7 +97,10 @@ export class ConversationsController {
   @ApiOperation({ summary: 'Post a new message or query to conversation' })
   @ApiParam({ name: 'id', description: 'Conversation UUID' })
   @ApiResponse({ status: 201, description: 'Message created', type: MessageEntity })
-  async addMessage(@Param('id') id: string, @Body() dto: CreateMessageDto): Promise<MessageEntity> {
+  async addMessage(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreateMessageDto,
+  ): Promise<MessageEntity> {
     return this.conversationsService.addMessage(id, dto);
   }
 
