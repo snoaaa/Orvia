@@ -65,10 +65,15 @@ export class UserManagementService {
   }
 
   /**
-   * Updates user profile fields (e.g. fullName, email, status).
+   * Updates user profile fields (`fullName`, `email`) via `PATCH /users/:id`.
+   * Account status cannot be changed through this endpoint (#95).
    */
   updateUser(id: string, payload: UpdateUserPayload): Observable<UserEntity> {
-    return this.http.patch<UserEntity>(`${this.apiUrl}/identity/users/${id}`, payload).pipe(
+    const cleanPayload: UpdateUserPayload = {
+      ...(payload.fullName !== undefined ? { fullName: payload.fullName } : {}),
+      ...(payload.email !== undefined ? { email: payload.email } : {})
+    };
+    return this.http.patch<UserEntity>(`${this.apiUrl}/users/${id}`, cleanPayload).pipe(
       catchError((error) => {
         return throwError(() => error);
       })
@@ -76,17 +81,27 @@ export class UserManagementService {
   }
 
   /**
-   * Suspends a user account and immediately revokes all their active sessions.
+   * Suspends a user account and immediately revokes all their active sessions
+   * via the dedicated `PATCH /users/:id/suspend` endpoint (#95).
    */
   suspendUser(id: string): Observable<UserEntity> {
-    return this.updateUser(id, { status: 'SUSPENDED' });
+    return this.http.patch<UserEntity>(`${this.apiUrl}/users/${id}/suspend`, {}).pipe(
+      catchError((error) => {
+        return throwError(() => error);
+      })
+    );
   }
 
   /**
-   * Reactivates a suspended user account.
+   * Reactivates a suspended user account via the dedicated
+   * `PATCH /users/:id/reactivate` endpoint (#95).
    */
   reactivateUser(id: string): Observable<UserEntity> {
-    return this.updateUser(id, { status: 'ACTIVE' });
+    return this.http.patch<UserEntity>(`${this.apiUrl}/users/${id}/reactivate`, {}).pipe(
+      catchError((error) => {
+        return throwError(() => error);
+      })
+    );
   }
 
   /**
