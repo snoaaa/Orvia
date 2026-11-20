@@ -155,5 +155,29 @@ describe('UserManagementService', () => {
     expect(req.request.method).toBe('DELETE');
     req.flush({ revoked: 3 });
   });
+
+  it('should fetch assignable roles and toggle document-management rights (#94)', () => {
+    service.getAssignableRoles('school-a').subscribe((roles) => {
+      expect(roles.length).toBe(1);
+      expect(roles[0].name).toBe('STAFF');
+    });
+
+    const rolesReq = httpMock.expectOne(
+      (r) => r.url === `${environment.apiUrl}/assignments/assignable-roles`
+    );
+    expect(rolesReq.request.params.get('schoolId')).toBe('school-a');
+    rolesReq.flush([{ id: 'r1', name: 'STAFF', scope: 'school', level: 2 }]);
+
+    service.setDocumentManagement('user-uuid-1', 'school-a', true).subscribe((res) => {
+      expect(res.id).toBe('user-uuid-1');
+    });
+
+    const docReq = httpMock.expectOne(
+      `${environment.apiUrl}/users/user-uuid-1/document-management`
+    );
+    expect(docReq.request.method).toBe('POST');
+    expect(docReq.request.body).toEqual({ schoolId: 'school-a', granted: true });
+    docReq.flush(mockUser);
+  });
 });
 

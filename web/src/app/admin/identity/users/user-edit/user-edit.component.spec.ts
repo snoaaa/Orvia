@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { of, throwError } from 'rxjs';
+import { PortalSessionService } from '../../services/portal-session.service';
 import { ActiveSession, UserEntity } from '../models/user.model';
 import { UserManagementService } from '../services/user-management.service';
 import { UserEditComponent } from './user-edit.component';
@@ -9,6 +10,7 @@ describe('UserEditComponent', () => {
   let component: UserEditComponent;
   let fixture: ComponentFixture<UserEditComponent>;
   let mockUserService: any;
+  let session: PortalSessionService;
 
   const mockUser: UserEntity = {
     id: 'user-123',
@@ -42,12 +44,26 @@ describe('UserEditComponent', () => {
       reactivateUser: vi.fn().mockReturnValue(of({ ...mockUser, status: 'ACTIVE' })),
       revokeSession: vi.fn().mockReturnValue(of(undefined)),
       revokeAllSessions: vi.fn().mockReturnValue(of({ revoked: 1 })),
+      getAssignableRoles: vi.fn().mockReturnValue(
+        of([
+          { id: 'r-pa', name: 'PLATFORM_ADMIN', scope: 'platform', level: 3 },
+          { id: 'r-sa', name: 'SCHOOL_ADMIN', scope: 'school', level: 2 },
+          { id: 'r-staff', name: 'STAFF', scope: 'school', level: 2 },
+          { id: 'r-stu', name: 'STUDENT', scope: 'group', level: 1 }
+        ])
+      ),
+      getSchools: vi.fn().mockReturnValue(of([{ id: 'school-a', name: 'Demo School A' }])),
+      assignRole: vi.fn().mockReturnValue(of(mockUser)),
+      setDocumentManagement: vi.fn().mockReturnValue(of(mockUser)),
       extractErrorMessage: vi.fn().mockImplementation((_err, fallback) => fallback || 'Error')
     };
+
+    localStorage.clear();
 
     await TestBed.configureTestingModule({
       imports: [UserEditComponent],
       providers: [
+        PortalSessionService,
         { provide: UserManagementService, useValue: mockUserService },
         {
           provide: ActivatedRoute,
@@ -60,6 +76,7 @@ describe('UserEditComponent', () => {
       ]
     }).compileComponents();
 
+    session = TestBed.inject(PortalSessionService);
     fixture = TestBed.createComponent(UserEditComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
@@ -169,5 +186,47 @@ describe('UserEditComponent', () => {
 
     expect(mockUserService.revokeAllSessions).toHaveBeenCalledWith('user-123');
     expect(component.modalType()).toBeNull();
+  });
+
+  it('toggles document-management rights on a staff assignment and hides school selector & platform roles for a school admin (#94)', () => {
+    session.setUser({
+      id: 'sa-1',
+      email: 'school.admin@demo.test',
+      fullName: 'School A Admin',
+      status: 'ACTIVE',
+      role: 'SCHOOL_ADMIN',
+      permissions: ['users:read', 'users:update', 'users:suspend', 'users:assign_role'],
+      schoolIds: ['school-a'],
+      schools: [{ id: 'school-a', name: 'Demo School A' }],
+      isPlatformAdmin: false,
+      assignments: []
+    });
+
+    const staffAssignment = {
+      schoolId: 'school-a',
+      schoolName: 'Demo School A',
+      role: 'STAFF',
+      groupId: null,
+      groupName: null
+    };
+    component.user.set({
+      ...mockUser,
+      assignments: [staffAssignment]
+    });
+    fixture.detectChanges();
+
+    // School selector is hidden for school admin; role list excludes PLATFORM_ADMIN
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('#assign-school-select')).toBeNull();
+    expect(component.assignableRoles().map((r) => r.name)).not.toContain('PLATFORM_ADMIN');
+
+    // Document management toggle is rendered on staff assignment and grants CONTENT_MANAGER
+    const toggle = el.querySelector('.doc-management-toggle') as HTMLInputElement | null;
+    expect(toggle).not.toBeNull();
+    expect(component.hasDocumentManagement(staffAssignment)).toBe(false);
+
+    component.toggleDocumentManagement(staffAssignment, true);
+    expect(mockUserService.setDocumentManagement).toHaveBeenCalledWith('user-123', 'school-a', true);
+    expect(component.user()?.assignments?.[0]?.role).toBe('CONTENT_MANAGER');
   });
 });

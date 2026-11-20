@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
+import { PortalSessionService } from '../../services/portal-session.service';
 import { PaginatedUsers, UserEntity } from '../models/user.model';
 import { UserManagementService } from '../services/user-management.service';
 import { UserListComponent } from './user-list.component';
@@ -9,6 +10,7 @@ describe('UserListComponent', () => {
   let component: UserListComponent;
   let fixture: ComponentFixture<UserListComponent>;
   let mockUserService: any;
+  let session: PortalSessionService;
 
   const mockUsers: UserEntity[] = [
     {
@@ -55,17 +57,30 @@ describe('UserListComponent', () => {
       }),
       suspendUser: vi.fn().mockReturnValue(of({ ...mockUsers[0], status: 'SUSPENDED' })),
       reactivateUser: vi.fn().mockReturnValue(of({ ...mockUsers[1], status: 'ACTIVE' })),
+      getAssignableRoles: vi.fn().mockReturnValue(
+        of([
+          { id: 'r-pa', name: 'PLATFORM_ADMIN', scope: 'platform', level: 3 },
+          { id: 'r-sa', name: 'SCHOOL_ADMIN', scope: 'school', level: 2 },
+          { id: 'r-staff', name: 'STAFF', scope: 'school', level: 2 },
+          { id: 'r-stu', name: 'STUDENT', scope: 'group', level: 1 }
+        ])
+      ),
+      getSchools: vi.fn().mockReturnValue(of([{ id: 'school-a', name: 'Demo School A' }])),
       extractErrorMessage: vi.fn().mockImplementation((_err, fallback) => fallback || 'Error')
     };
+
+    localStorage.clear();
 
     await TestBed.configureTestingModule({
       imports: [UserListComponent],
       providers: [
         provideRouter([]),
+        PortalSessionService,
         { provide: UserManagementService, useValue: mockUserService }
       ]
     }).compileComponents();
 
+    session = TestBed.inject(PortalSessionService);
     fixture = TestBed.createComponent(UserListComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
@@ -141,5 +156,40 @@ describe('UserListComponent', () => {
     const updatedUser = component.users().find((u) => u.id === 'user-2');
     expect(updatedUser?.status).toBe('ACTIVE');
     expect(component.modalAction()).toBeNull();
+  });
+
+  it('scopes user management to the school admin school, removes school selector, excludes platform roles, and hides actions on platform admins (#94)', () => {
+    session.setUser({
+      id: 'sa-1',
+      email: 'school.admin@demo.test',
+      fullName: 'School A Admin',
+      status: 'ACTIVE',
+      role: 'SCHOOL_ADMIN',
+      permissions: ['users:read', 'users:update', 'users:suspend', 'users:assign_role'],
+      schoolIds: ['school-a'],
+      schools: [{ id: 'school-a', name: 'Demo School A' }],
+      isPlatformAdmin: false,
+      assignments: []
+    });
+    fixture.detectChanges();
+
+    // School selector is hidden for school admin
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('#school-filter-select')).toBeNull();
+    expect(el.querySelector('#user-list-fixed-school')?.textContent).toContain('Demo School A');
+
+    // Role list excludes platform-level roles
+    const roleNames = component.assignableRoles().map((r) => r.name);
+    expect(roleNames).not.toContain('PLATFORM_ADMIN');
+    expect(roleNames).toContain('STAFF');
+
+    // School admin cannot touch a platform admin or suspend their own account
+    const platformUser: UserEntity = {
+      ...mockUsers[0],
+      id: 'pa-99',
+      assignments: [{ schoolId: 'sys', role: 'PLATFORM_ADMIN', roleScope: 'platform' }]
+    };
+    expect(component.canTouchUser(platformUser)).toBe(false);
+    expect(component.canChangeUserStatus({ ...mockUsers[0], id: 'sa-1' })).toBe(false);
   });
 });

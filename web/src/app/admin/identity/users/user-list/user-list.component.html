@@ -97,8 +97,47 @@
 <div class="row">
   <div class="col-12">
     <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-      <h5 class="mb-0">All Users</h5>
+      <div class="d-flex align-items-center gap-2">
+        <h5 class="mb-0">All Users</h5>
+        @if (!session.isPlatformAdmin() && session.activeSchoolName()) {
+          <span class="badge bg-light-primary border border-primary" id="user-list-fixed-school">
+            {{ session.activeSchoolName() }}
+          </span>
+        }
+      </div>
       <div class="d-flex align-items-center gap-2 flex-wrap">
+        @if (session.isPlatformAdmin()) {
+          <div class="form-group mb-0">
+            <select
+              id="school-filter-select"
+              class="form-select form-select-sm"
+              aria-label="Filter by school"
+              [ngModel]="selectedSchoolId()"
+              (ngModelChange)="onSchoolFilterChange($event)"
+            >
+              <option value="">All Schools</option>
+              @for (s of schools(); track s.id) {
+                <option [value]="s.id">{{ s.name }}</option>
+              }
+            </select>
+          </div>
+        }
+        @if (assignableRoles().length > 0) {
+          <div class="form-group mb-0">
+            <select
+              id="role-filter-select"
+              class="form-select form-select-sm"
+              aria-label="Filter by role"
+              [ngModel]="selectedRole()"
+              (ngModelChange)="onRoleFilterChange($event)"
+            >
+              <option value="ALL">All Roles</option>
+              @for (r of assignableRoles(); track r.name) {
+                <option [value]="r.name">{{ r.name }}</option>
+              }
+            </select>
+          </div>
+        }
         <div class="form-group mb-0">
           <input
             type="text"
@@ -220,7 +259,7 @@
                   </td>
                   @if (session.showSchoolColumn()) {
                     <td class="text-nowrap school-column">
-                      {{ u.assignments?.[0]?.school?.name || '—' }}
+                      {{ (u.assignments && u.assignments[0] && getAssignmentSchoolName(u.assignments[0])) || '—' }}
                     </td>
                   }
                   <td class="text-nowrap">
@@ -232,53 +271,55 @@
                   <td class="text-nowrap">{{ u.authProvider | uppercase }}</td>
                   <td class="text-nowrap">{{ u.createdAt | date:'mediumDate' }}</td>
                   <td class="text-end text-nowrap pe-4">
-                    <div class="d-inline-block" ngbDropdown container="body" placement="bottom-end">
-                      <button
-                        type="button"
-                        class="btn btn-icon btn-link-secondary dropdown-toggle arrow-none"
-                        ngbDropdownToggle
-                        title="Actions"
-                        aria-label="User actions"
-                      >
-                        <i class="ti ti-dots-vertical f-18"></i>
-                      </button>
-                      <div class="dropdown-menu dropdown-menu-end shadow" ngbDropdownMenu>
-                        @if (session.hasPermission('users:update')) {
-                          <a
-                            [routerLink]="['/admin/users', u.id]"
-                            class="dropdown-item"
-                            ngbDropdownItem
-                          >
-                            <i class="ti ti-edit text-primary me-2 f-15"></i>
-                            <span>Edit Details</span>
-                          </a>
-                        }
-                        @if (session.hasPermission('users:suspend')) {
-                          <div class="dropdown-divider my-1"></div>
-                          @if (u.status === 'ACTIVE' || u.status === 'INVITED') {
-                            <button
-                              type="button"
-                              class="dropdown-item text-danger"
-                              (click)="openSuspendModal(u, $event)"
+                    @if (canTouchUser(u)) {
+                      <div class="d-inline-block" ngbDropdown container="body" placement="bottom-end">
+                        <button
+                          type="button"
+                          class="btn btn-icon btn-link-secondary dropdown-toggle arrow-none"
+                          ngbDropdownToggle
+                          title="Actions"
+                          aria-label="User actions"
+                        >
+                          <i class="ti ti-dots-vertical f-18"></i>
+                        </button>
+                        <div class="dropdown-menu dropdown-menu-end shadow" ngbDropdownMenu>
+                          @if (session.hasPermission('users:update')) {
+                            <a
+                              [routerLink]="['/admin/users', u.id]"
+                              class="dropdown-item"
                               ngbDropdownItem
                             >
-                              <i class="ti ti-ban text-danger me-2 f-15"></i>
-                              <span>Suspend User</span>
-                            </button>
-                          } @else if (u.status === 'SUSPENDED') {
-                            <button
-                              type="button"
-                              class="dropdown-item text-success"
-                              (click)="openReactivateModal(u, $event)"
-                              ngbDropdownItem
-                            >
-                              <i class="ti ti-check text-success me-2 f-15"></i>
-                              <span>Reactivate User</span>
-                            </button>
+                              <i class="ti ti-edit text-primary me-2 f-15"></i>
+                              <span>Edit Details</span>
+                            </a>
                           }
-                        }
+                          @if (canChangeUserStatus(u)) {
+                            <div class="dropdown-divider my-1"></div>
+                            @if (u.status === 'ACTIVE' || u.status === 'INVITED') {
+                              <button
+                                type="button"
+                                class="dropdown-item text-danger"
+                                (click)="openSuspendModal(u, $event)"
+                                ngbDropdownItem
+                              >
+                                <i class="ti ti-ban text-danger me-2 f-15"></i>
+                                <span>Suspend User</span>
+                              </button>
+                            } @else if (u.status === 'SUSPENDED') {
+                              <button
+                                type="button"
+                                class="dropdown-item text-success"
+                                (click)="openReactivateModal(u, $event)"
+                                ngbDropdownItem
+                              >
+                                <i class="ti ti-check text-success me-2 f-15"></i>
+                                <span>Reactivate User</span>
+                              </button>
+                            }
+                          }
+                        </div>
                       </div>
-                    </div>
+                    }
                   </td>
                 </tr>
               }
