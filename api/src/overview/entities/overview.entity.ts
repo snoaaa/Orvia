@@ -1,4 +1,4 @@
-﻿import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class OverviewUsersEntity {
   @ApiProperty({ example: 248 }) total: number;
@@ -26,6 +26,8 @@ export class OverviewSessionsEntity {
 export class OverviewDocumentsEntity {
   @ApiProperty({ example: 1842 }) total: number;
   @ApiProperty({ example: 7 }) spaces: number;
+  @ApiPropertyOptional({ example: 2, description: 'Documents or jobs currently in error/failed state' })
+  processingErrors?: number;
   @ApiProperty({
     type: 'object',
     additionalProperties: { type: 'number' },
@@ -63,8 +65,19 @@ export class OverviewRecentEventEntity {
   @ApiProperty({ example: 'SCHOOL_ADMIN', nullable: true }) actorRole: string | null;
   @ApiProperty({ example: 'user', nullable: true }) entityType: string | null;
   @ApiProperty({ example: null, nullable: true }) schoolId: string | null;
+  @ApiPropertyOptional({ example: 'Demo School A', nullable: true }) schoolName?: string | null;
   @ApiProperty({ example: '2026-11-02T20:41:00.000Z' }) at: Date;
   constructor(partial: OverviewRecentEventEntity) {
+    Object.assign(this, partial);
+  }
+}
+export class OverviewAlertEntity {
+  @ApiProperty({ example: 'failed_logins' }) code: string;
+  @ApiProperty({ example: 'Failed logins' }) title: string;
+  @ApiProperty({ example: 5 }) count: number;
+  @ApiProperty({ example: 'danger', enum: ['danger', 'warning', 'primary'] }) severity: 'danger' | 'warning' | 'primary';
+  @ApiProperty({ example: 'Last 24 hours' }) subtitle: string;
+  constructor(partial: OverviewAlertEntity) {
     Object.assign(this, partial);
   }
 }
@@ -87,6 +100,7 @@ export class OverviewEntity {
   @ApiPropertyOptional({ type: [OverviewSeriesPointEntity] }) series?: OverviewSeriesPointEntity[];
   @ApiPropertyOptional({ type: [OverviewSpaceEntity] }) spaces?: OverviewSpaceEntity[];
   @ApiPropertyOptional({ type: [OverviewRecentEventEntity] }) recent?: OverviewRecentEventEntity[];
+  @ApiPropertyOptional({ type: [OverviewAlertEntity] }) alerts?: OverviewAlertEntity[];
 
   constructor(partial: OverviewEntity) {
     Object.assign(this, partial);

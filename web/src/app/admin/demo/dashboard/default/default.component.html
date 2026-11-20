@@ -1,6 +1,19 @@
 <div class="row">
-  @for (stat of dashboardStats; track stat) {
-    <div class="col-md-6 col-xl-3">
+  <div class="col-12 mb-3">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+      <div>
+        <h5 class="mb-0" id="dashboard-scope-heading">
+          {{ showSchoolBreakdown() ? 'Platform Overview — All Schools' : ('School Overview — ' + (session.activeSchoolName() || 'Your School')) }}
+        </h5>
+      </div>
+      <span class="badge bg-light-primary border border-primary" id="dashboard-scope-badge">
+        {{ showSchoolBreakdown() ? 'Global Scope' : (session.activeSchoolName() || 'School Scope') }}
+      </span>
+    </div>
+  </div>
+
+  @for (stat of dashboardStats(); track stat.id) {
+    <div class="col-md-6 col-xl-3" [attr.data-stat-id]="stat.id">
       <app-card [showHeader]="false" blockClass="dashboard-card">
         <h6 class="mb-2 f-w-400 text-muted">{{ stat.title }}</h6>
         <h4 class="mb-3">
@@ -29,32 +42,44 @@
     <h5 class="mb-3">Recent activity</h5>
     <div class="card tbl-card">
       <div class="table-responsive">
-        <table class="table table-hover mb-0">
+        <table class="table table-hover mb-0" id="dashboard-recent-activity-table">
           <thead>
             <tr>
               <th>TIME</th>
               <th>EVENT</th>
               <th>OUTCOME</th>
               <th class="text-end">ACTOR ROLE</th>
-              <th class="text-end">SCHOOL</th>
+              @if (showSchoolBreakdown()) {
+                <th class="text-end school-breakdown-col">SCHOOL</th>
+              }
             </tr>
           </thead>
           <tbody>
-            @for (activity of recentActivity; track activity) {
+            @if (recentActivity().length === 0) {
               <tr>
-                <td>
-                  <a [routerLink]="[]" class="text-muted">{{ activity.time }}</a>
+                <td [attr.colspan]="showSchoolBreakdown() ? 5 : 4" class="text-center py-4 text-muted">
+                  No recent activity recorded in this scope.
                 </td>
-                <td>{{ activity.event }}</td>
-                <td>
-                  <span class="d-block">
-                    <i class="badge-circle {{ activity.outcomeType }} f-10 m-r-5"></i>
-                    {{ activity.outcome }}
-                  </span>
-                </td>
-                <td class="text-end">{{ activity.actorRole }}</td>
-                <td class="text-end">{{ activity.school }}</td>
               </tr>
+            } @else {
+              @for (activity of recentActivity(); track $index) {
+                <tr>
+                  <td>
+                    <a [routerLink]="[]" class="text-muted">{{ activity.time }}</a>
+                  </td>
+                  <td>{{ activity.event }}</td>
+                  <td>
+                    <span class="d-block">
+                      <i class="badge-circle {{ activity.outcomeType }} f-10 m-r-5"></i>
+                      {{ activity.outcome }}
+                    </span>
+                  </td>
+                  <td class="text-end">{{ activity.actorRole }}</td>
+                  @if (showSchoolBreakdown()) {
+                    <td class="text-end school-breakdown-col">{{ activity.school }}</td>
+                  }
+                </tr>
+              }
             }
           </tbody>
         </table>
@@ -69,10 +94,10 @@
     <app-sales-report-chart />
   </div>
   <div class="col-md-12 col-xl-4">
-    <h5 class="mb-3">Security events</h5>
-    <div class="card">
+    <h5 class="mb-3">Alerts &amp; security events</h5>
+    <div class="card" id="dashboard-alerts-card">
       <div class="list-group list-group-flush">
-        @for (event of securityEvents; track event) {
+        @for (event of securityEvents(); track event.title) {
           <a [routerLink]="[]" class="list-group-item list-group-item-action px-3">
             <div class="d-flex">
               <div class="flex-shrink-0">
@@ -94,5 +119,4 @@
       </div>
     </div>
   </div>
-  <!-- [ sample-page ] end -->
 </div>

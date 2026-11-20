@@ -1,4 +1,4 @@
-﻿import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import argon2 from 'argon2';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminLoginService } from './admin-login.service.js';
@@ -595,6 +595,22 @@ describe('AdminLoginService (Unit Tests)', () => {
       await expect(
         service.setupPassword(validRawToken, 'short', fakeContext),
       ).rejects.toThrow('Password must be at least 8 characters long');
+    });
+
+    it('rejects weak password missing uppercase, lowercase, or number/symbol with 400 BadRequestException', async () => {
+      mockPrisma.passwordSetupToken.findUnique.mockResolvedValue(mockTokenRecord);
+
+      await expect(
+        service.setupPassword(validRawToken, 'alllowercase123', fakeContext),
+      ).rejects.toThrow(
+        'Password must contain uppercase and lowercase letters, and at least one number or special character',
+      );
+
+      await expect(
+        service.setupPassword(validRawToken, 'OnlyLettersHere', fakeContext),
+      ).rejects.toThrow(
+        'Password must contain uppercase and lowercase letters, and at least one number or special character',
+      );
     });
 
     it('rejects setup when user account is suspended with 403 ForbiddenException', async () => {

@@ -39,9 +39,10 @@ export class FileValidationService {
   ) {}
 
   /**
-   * Validates an uploaded file buffer for ingestion:
+   * Validates an uploaded file buffer for ingestion (§4.1, §5.2, #100, #150):
    * 1. Checks file size against configured limit.
-   * 2. Inspects magic bytes to detect real MIME type (PDF, JPEG, PNG, HEIC).
+   * 2. Inspects magic bytes and internal structure to detect real MIME type
+   *    (PDF, Office DOCX/DOC/PPTX/PPT/XLSX/XLS, OpenDocument ODT/ODS/ODP, Text TXT/MD/CSV, Images JPEG/PNG/HEIC).
    * 3. Scans for malware / viruses (EICAR signature and ClamAV).
    * 4. Computes SHA-256 content checksum.
    * 5. When `spaceId` is provided, ensures space exists and checks for duplicate checksums in that space.

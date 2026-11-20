@@ -137,6 +137,60 @@ describe('FileValidationService', () => {
     expect(result.extension).toBe('txt');
   });
 
+  it('validates OpenDocument (.odt, .ods, .odp), legacy Office (.doc, .xls, .ppt), and tabular/markdown (.csv, .md) formats (#150)', async () => {
+    const odtBuffer = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.from('mimetypeapplication/vnd.oasis.opendocument.text...content.xml'),
+    ]);
+    const odt = await service.validateFile({ buffer: odtBuffer, originalName: 'syllabus.odt' });
+    expect(odt.mimeType).toBe('application/vnd.oasis.opendocument.text');
+    expect(odt.extension).toBe('odt');
+
+    const odsBuffer = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.from('mimetypeapplication/vnd.oasis.opendocument.spreadsheet...content.xml'),
+    ]);
+    const ods = await service.validateFile({ buffer: odsBuffer, originalName: 'grades.ods' });
+    expect(ods.mimeType).toBe('application/vnd.oasis.opendocument.spreadsheet');
+    expect(ods.extension).toBe('ods');
+
+    const odpBuffer = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.from('mimetypeapplication/vnd.oasis.opendocument.presentation...content.xml'),
+    ]);
+    const odp = await service.validateFile({ buffer: odpBuffer, originalName: 'lecture.odp' });
+    expect(odp.mimeType).toBe('application/vnd.oasis.opendocument.presentation');
+    expect(odp.extension).toBe('odp');
+
+    const csv = await service.validateFile({
+      buffer: Buffer.from('student_id,grade\n101,A\n102,B'),
+      originalName: 'scores.csv',
+    });
+    expect(csv.mimeType).toBe('text/csv');
+    expect(csv.extension).toBe('csv');
+
+    const md = await service.validateFile({
+      buffer: Buffer.from('# Chapter 1\n\nCourse notes'),
+      originalName: 'chapter1.md',
+    });
+    expect(md.mimeType).toBe('text/markdown');
+    expect(md.extension).toBe('md');
+  });
+
+  it('rejects a spoofed ZIP archive masquerading as a .docx without word/document.xml (#150)', async () => {
+    const spoofedZip = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.from('word/payload.exe'),
+    ]);
+    await expect(
+      service.validateFile({
+        buffer: spoofedZip,
+        originalName: 'trojan.docx',
+        declaredMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
   it('refuses spoofed files pretending to be PDF by file extension', async () => {
     const spoofedBuffer = Buffer.from('Fake PDF content that has no magic bytes');
     await expect(

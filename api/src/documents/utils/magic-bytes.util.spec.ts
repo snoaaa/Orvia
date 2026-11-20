@@ -115,6 +115,30 @@ describe('magic-bytes.util', () => {
       });
     });
 
+    it('detects OpenDocument Spreadsheet (ODS)', () => {
+      const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+      const odsBody = Buffer.from('mimetypeapplication/vnd.oasis.opendocument.spreadsheet...content.xml');
+      const odsBuffer = Buffer.concat([zipHeader, odsBody]);
+
+      const result = detectMimeTypeFromBuffer(odsBuffer, 'grades.ods');
+      expect(result).toEqual({
+        mimeType: 'application/vnd.oasis.opendocument.spreadsheet',
+        extension: 'ods',
+      });
+    });
+
+    it('detects OpenDocument Presentation (ODP)', () => {
+      const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+      const odpBody = Buffer.from('mimetypeapplication/vnd.oasis.opendocument.presentation...content.xml');
+      const odpBuffer = Buffer.concat([zipHeader, odpBody]);
+
+      const result = detectMimeTypeFromBuffer(odpBuffer, 'slides.odp');
+      expect(result).toEqual({
+        mimeType: 'application/vnd.oasis.opendocument.presentation',
+        extension: 'odp',
+      });
+    });
+
     it('refuses generic or malicious ZIP archives lacking valid Office structures', () => {
       const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
       const genericZipBody = Buffer.from('payload.exe...script.sh...something-else');
@@ -123,6 +147,19 @@ describe('magic-bytes.util', () => {
       // Even if attacker names it .docx, deep inspection rejects it!
       const result = detectMimeTypeFromBuffer(fakeDocx, 'malicious.docx');
       expect(result).toBeNull();
+    });
+
+    it('refuses spoofed ZIP archives containing word/, ppt/, or xl/ directory names without required OpenXML root XML files', () => {
+      const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+
+      const spoofedWordZip = Buffer.concat([zipHeader, Buffer.from('word/exploit.exe')]);
+      expect(detectMimeTypeFromBuffer(spoofedWordZip, 'spoofed.docx')).toBeNull();
+
+      const spoofedPptZip = Buffer.concat([zipHeader, Buffer.from('ppt/exploit.exe')]);
+      expect(detectMimeTypeFromBuffer(spoofedPptZip, 'spoofed.pptx')).toBeNull();
+
+      const spoofedXlZip = Buffer.concat([zipHeader, Buffer.from('xl/exploit.exe')]);
+      expect(detectMimeTypeFromBuffer(spoofedXlZip, 'spoofed.xlsx')).toBeNull();
     });
 
     it('detects Legacy Microsoft Word (DOC) via OLE2 signature', () => {
@@ -161,6 +198,15 @@ describe('magic-bytes.util', () => {
       });
     });
 
+    it('rejects non-Office OLE2 Compound File binaries (e.g. .msi Windows Installer)', () => {
+      const ole2Header = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+      const msiBody = Buffer.from('Windows Installer Package Stream SummaryInformation');
+      const msiBuffer = Buffer.concat([ole2Header, msiBody]);
+
+      expect(detectMimeTypeFromBuffer(msiBuffer, 'setup.msi')).toBeNull();
+      expect(detectMimeTypeFromBuffer(msiBuffer, 'spoofed.doc')).toBeNull();
+    });
+
     it('detects Plain Text (.txt) with valid UTF-8 and no null bytes', () => {
       const textBuffer = Buffer.from('This is a plain text document for lecture 1.');
       const result = detectMimeTypeFromBuffer(textBuffer, 'reading-list.txt');
@@ -191,11 +237,12 @@ describe('magic-bytes.util', () => {
       });
     });
 
-    it('rejects text containing binary null bytes', () => {
+    it('rejects text containing binary null bytes or non-UTF8 byte sequences', () => {
       const binaryInText = Buffer.from('Normal text header\x00corrupt binary bytes\x00');
-      const result = detectMimeTypeFromBuffer(binaryInText, 'fake.txt');
+      expect(detectMimeTypeFromBuffer(binaryInText, 'fake.txt')).toBeNull();
 
-      expect(result).toBeNull();
+      const invalidUtf8 = Buffer.from([0x48, 0x65, 0x6c, 0x6c, 0x6f, 0xff, 0xfe, 0xfd]);
+      expect(detectMimeTypeFromBuffer(invalidUtf8, 'invalid.txt')).toBeNull();
     });
 
     it('rejects scripts or executables (.sh, .bat, .exe) even if text-encoded', () => {
