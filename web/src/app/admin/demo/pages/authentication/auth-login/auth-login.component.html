@@ -12,40 +12,77 @@
           </div>
           <div class="form-group mb-3">
             <label class="form-label" for="email">Email Address</label>
-            <input type="email" class="form-control" id="email" #email placeholder="Email Address" (keyup.enter)="signIn(email.value, password.value)" />
+            <input
+              type="email"
+              class="form-control"
+              id="email"
+              #email
+              placeholder="Email Address"
+              (keyup.enter)="signIn(email.value, password.value)"
+            />
           </div>
           <div class="form-group mb-3">
             <label class="form-label" for="password">Password</label>
-            <input type="password" class="form-control" id="password" #password placeholder="Password" (keyup.enter)="signIn(email.value, password.value)" />
+            <div class="password-field">
+              <input
+                [type]="showPassword() ? 'text' : 'password'"
+                class="form-control"
+                id="password"
+                #password
+                placeholder="Password"
+                (keyup.enter)="signIn(email.value, password.value)"
+              />
+              <button
+                type="button"
+                class="password-toggle"
+                (click)="togglePasswordVisibility()"
+                [attr.aria-label]="showPassword() ? 'Hide password' : 'Show password'"
+                [attr.aria-pressed]="showPassword()"
+              >
+                <i class="ti" [class.ti-eye]="!showPassword()" [class.ti-eye-off]="showPassword()"></i>
+              </button>
+            </div>
           </div>
           <div class="d-flex mt-1 justify-content-between">
             <div class="form-check">
               <input class="form-check-input input-primary" type="checkbox" id="customCheckc1" checked="" />
               <label class="form-check-label text-muted" for="customCheckc1">Keep me sign in</label>
             </div>
-            <h5 class="text-secondary f-w-400"><button type="button" class="btn btn-link text-secondary p-0 text-decoration-none" style="font-size: inherit; font-weight: inherit; line-height: inherit; vertical-align: baseline;">Forgot Password?</button></h5>
+            <h5 class="text-secondary f-w-400">
+              <button
+                type="button"
+                class="btn btn-link text-secondary p-0 text-decoration-none"
+                style="font-size: inherit; font-weight: inherit; line-height: inherit; vertical-align: baseline;"
+              >
+                Forgot Password?
+              </button>
+            </h5>
           </div>
           <div class="d-grid mt-4">
-            <button type="button" class="btn btn-primary" [disabled]="loading()" (click)="signIn(email.value, password.value)">
+            <button
+              type="button"
+              class="btn btn-primary"
+              [disabled]="loading() || googleLoading()"
+              (click)="signIn(email.value, password.value)"
+            >
               {{ loading() ? 'Signing in…' : 'Login' }}
             </button>
           </div>
-          @if (error()) {
-            <div class="alert alert-danger mt-3 mb-0 py-2" role="alert">{{ error() }}</div>
-          }
           <div class="saprator mt-3">
             <span>Login with</span>
           </div>
-          <div class="row justify-content-center">
+          <div class="d-grid mt-2">
             @for (item of SignInOptions; track item) {
-              <div class="col-4">
-                <div class="d-grid">
-                  <button type="button" class="btn mt-2 btn-light-primary bg-light text-muted">
-                    <img src="{{ item.image }}" alt="google img" />
-                    <span class="d-none d-sm-inline-block">{{ item.name }}</span>
-                  </button>
-                </div>
-              </div>
+              <button
+                type="button"
+                id="google-signin-btn"
+                class="btn mt-2 btn-light-primary bg-light text-muted d-flex align-items-center justify-content-center"
+                [disabled]="loading() || googleLoading()"
+                (click)="signInWithGoogle()"
+              >
+                <img src="{{ item.image }}" alt="google img" />
+                <span>{{ googleLoading() ? 'Signing in with Google…' : item.name }}</span>
+              </button>
             }
           </div>
         </div>
