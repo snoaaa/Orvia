@@ -20,7 +20,11 @@ export class MessageEntity {
   @ApiProperty({ example: { temperature: 0.2, max_tokens: 500 }, nullable: true, description: 'Generation parameters' })
   parameters: Record<string, unknown> | null;
 
-  @ApiProperty({ example: 'completed', description: 'Message status (pending, generating, completed, failed)' })
+  @ApiProperty({
+    enum: ['pending', 'generating', 'done', 'failed', 'completed'],
+    example: 'done',
+    description: 'Message generation status (pending, generating, done, failed)',
+  })
   status: string;
 
   @ApiPropertyOptional({ type: [MessageCitationEntity], description: 'Source citations supporting this message' })

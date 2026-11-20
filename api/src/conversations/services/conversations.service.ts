@@ -9,6 +9,8 @@ import {
   ConversationDetailEntity,
   ConversationEntity,
   MessageEntity,
+  MessageGenerationStatusEntity,
+  normalizeGenerationStatus,
   PaginatedConversationsEntity,
   SavedAnswerEntity,
 } from '../entities/index.js';
@@ -184,6 +186,49 @@ export class ConversationsService {
     if (count === 0) {
       throw new NotFoundException(`Conversation with ID ${id} not found`);
     }
+  }
+
+  /**
+   * Returns the generation status of a message owned by `actor` (#122) for polling.
+   * Only returns the full answer with citations once status is `done`; returns 404 for unknown,
+   * soft-deleted, or another user's conversation/message.
+   */
+  async getMessageStatus(
+    conversationId: string,
+    messageId: string,
+    actor: AuthenticatedUser,
+  ): Promise<MessageGenerationStatusEntity> {
+    const message = await this.prisma.message.findFirst({
+      where: {
+        id: messageId,
+        conversationId,
+        deletedAt: null,
+        conversation: { deletedAt: null },
+      },
+      include: {
+        conversation: { select: { userId: true } },
+        ragMetric: { select: { errorCode: true } },
+        ...MESSAGE_INCLUDE,
+      },
+    });
+
+    if (!message || message.conversation.userId !== actor.id) {
+      throw new NotFoundException(`Message with ID ${messageId} not found`);
+    }
+
+    const status = normalizeGenerationStatus(message.status);
+    const ready = status === 'done';
+
+    return new MessageGenerationStatusEntity({
+      messageId: message.id,
+      conversationId: message.conversationId,
+      status,
+      ready,
+      modelUsed: message.modelUsed,
+      errorCode: status === 'failed' ? (message.ragMetric?.errorCode ?? null) : null,
+      updatedAt: message.updatedAt,
+      answer: ready ? MessageMapper.toEntity(message) : null,
+    });
   }
 
   async create(dto: CreateConversationDto): Promise<ConversationEntity> {
