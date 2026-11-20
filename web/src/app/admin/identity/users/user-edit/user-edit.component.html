@@ -29,24 +29,26 @@
               <i class="badge-circle {{ getStatusBadgeClass(user()?.status) }} me-2"></i>
               <span class="f-w-600 f-14">{{ user()?.status | titlecase }}</span>
             </span>
-            @if (user()?.status === 'ACTIVE' || user()?.status === 'INVITED') {
-              <button
-                type="button"
-                class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1"
-                (click)="openSuspendModal()"
-              >
-                <i class="ti ti-ban f-14"></i>
-                <span>Suspend</span>
-              </button>
-            } @else if (user()?.status === 'SUSPENDED') {
-              <button
-                type="button"
-                class="btn btn-sm btn-light-success d-inline-flex align-items-center gap-1"
-                (click)="openReactivateModal()"
-              >
-                <i class="ti ti-check f-14"></i>
-                <span>Reactivate</span>
-              </button>
+            @if (session.hasPermission('users:suspend')) {
+              @if (user()?.status === 'ACTIVE' || user()?.status === 'INVITED') {
+                <button
+                  type="button"
+                  class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1"
+                  (click)="openSuspendModal()"
+                >
+                  <i class="ti ti-ban f-14"></i>
+                  <span>Suspend</span>
+                </button>
+              } @else if (user()?.status === 'SUSPENDED') {
+                <button
+                  type="button"
+                  class="btn btn-sm btn-light-success d-inline-flex align-items-center gap-1"
+                  (click)="openReactivateModal()"
+                >
+                  <i class="ti ti-check f-14"></i>
+                  <span>Reactivate</span>
+                </button>
+              }
             }
           </div>
         </div>

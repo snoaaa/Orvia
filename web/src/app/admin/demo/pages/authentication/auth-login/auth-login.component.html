@@ -40,7 +40,13 @@
             @for (item of SignInOptions; track item) {
               <div class="col-4">
                 <div class="d-grid">
-                  <button type="button" class="btn mt-2 btn-light-primary bg-light text-muted">
+                  <button
+                    type="button"
+                    id="google-signin-btn"
+                    class="btn mt-2 btn-light-primary bg-light text-muted"
+                    [disabled]="loading()"
+                    (click)="signInWithGoogle()"
+                  >
                     <img src="{{ item.image }}" alt="google img" />
                     <span class="d-none d-sm-inline-block">{{ item.name }}</span>
                   </button>

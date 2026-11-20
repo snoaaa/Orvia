@@ -1,105 +1,51 @@
-<ul class="list-unstyled">
-  <li class="pc-h-item" ngbDropdown>
-    <a href="javascript:void(0)" class="pc-head-link dropdown-toggle arrow-none me-0 bg-gray-200" data-bs-toggle="dropdown" ngbDropdownToggle>
-      <i antIcon type="bell" theme="outline"></i>
-      <span class="badge bg-primary pc-h-badge">3</span>
-    </a>
-    <div class="dropdown-notification dropdown-menu-end pc-h-dropdown" ngbDropdownMenu>
-      <div class="dropdown-header d-flex align-items-center justify-content-between">
-        <h5 class="m-0">Notification</h5>
-        <a href="javascript:void(0)" class="bg-transparent"><i class="text-success d-flex f-20" antIcon theme="outline" type="check-circle"></i></a>
-      </div>
-      <div class="dropdown-divider mb-0"></div>
-      <ng-scrollbar style="min-height: 280px" visibility="hover">
-        <div class="dropdown-header p-0 text-wrap header-notification-scroll">
-          <div class="list-group list-group-flush w-100">
-            <a href="javascript:void(0)" class="list-group-item list-group-item-action">
-              <div class="d-flex">
-                <div class="flex-shrink-0">
-                  <div class="user-avatar bg-light-success"><i class="d-flex" antIcon theme="outline" type="gift"></i></div>
-                </div>
-                <div class="flex-grow-1 ms-3">
-                  <span class="float-end text-muted">3:00 AM</span>
-                  <p class="text-body mb-0">
-                    It's
-                    <b>Cristina danny's</b>
-                    birthday today.
-                  </p>
-                  <span class="text-muted">2 min ago</span>
-                </div>
-              </div>
-            </a>
-            <a href="javascript:void(0)" class="list-group-item list-group-item-action">
-              <div class="d-flex">
-                <div class="flex-shrink-0">
-                  <div class="user-avatar bg-light-primary"><i class="d-flex" antIcon theme="outline" type="message"></i></div>
-                </div>
-                <div class="flex-grow-1 ms-3">
-                  <span class="float-end text-muted">6:00 PM</span>
-                  <p class="text-body mb-1">
-                    <b>Aida Burg</b>
-                    commented your post.
-                  </p>
-                  <span class="text-muted">5 August</span>
-                </div>
-              </div>
-            </a>
-            <a href="javascript:void(0)" class="list-group-item list-group-item-action">
-              <div class="d-flex">
-                <div class="flex-shrink-0">
-                  <div class="user-avatar bg-light-danger"><i class="d-flex" antIcon theme="outline" type="setting"></i></div>
-                </div>
-                <div class="flex-grow-1 ms-3">
-                  <span class="float-end text-muted">2:45 PM</span>
-                  <p class="text-body mb-1">
-                    Your Profile is Complete &nbsp;
-                    <b>60%</b>
-                  </p>
-                  <span class="text-muted">7 hours ago</span>
-                </div>
-              </div>
-            </a>
-            <a href="javascript:void(0)" class="list-group-item list-group-item-action">
-              <div class="d-flex">
-                <div class="flex-shrink-0">
-                  <div class="user-avatar bg-light-primary"><i class="d-flex" antIcon theme="outline" type="phone"></i></div>
-                </div>
-                <div class="flex-grow-1 ms-3">
-                  <span class="float-end text-muted">9:10 PM</span>
-                  <p class="text-body mb-1">
-                    <b>Cristina Danny</b>
-                    invited to join
-                    <b>Meeting.</b>
-                  </p>
-                  <span class="text-muted">Daily scrum meeting time</span>
-                </div>
-              </div>
-            </a>
-          </div>
-        </div>
-      </ng-scrollbar>
-      <div class="dropdown-divider mt-0"></div>
-      <div class="text-center py-2">
-        <a href="javascript:void(0)" class="link-primary">View all</a>
-      </div>
-    </div>
-  </li>
+<ul class="list-unstyled d-flex align-items-center mb-0">
+  @if (session.showSchoolSelector()) {
+    <li class="pc-h-item d-flex align-items-center me-2">
+      <select
+        id="portal-school-selector"
+        class="form-select form-select-sm"
+        aria-label="Active school"
+        [value]="session.activeSchoolId() || ''"
+        (change)="onSchoolChange($any($event.target).value)"
+      >
+        @for (school of session.schools(); track school.id) {
+          <option [value]="school.id">{{ school.name }}</option>
+        }
+      </select>
+    </li>
+  } @else if (!session.isPlatformAdmin() && session.schools().length === 1) {
+    <li class="pc-h-item d-flex align-items-center me-2">
+      <span id="portal-fixed-school" class="badge bg-light-secondary text-dark border px-2 py-1">
+        {{ session.activeSchoolName() }}
+      </span>
+    </li>
+  }
+
   <li class="pc-h-item header-user-profile" ngbDropdown>
     <a href="javascript:void(0)" class="pc-head-link arrow-none me-0" ngbDropdownToggle>
       <img src="assets/images/user/avatar-2.jpg" alt="user-image" class="user-avatar me-2" />
-      <span class="f-w-600">John Doe</span>
+      <span class="f-w-600">{{ session.user()?.fullName || session.user()?.email || 'Portal User' }}</span>
     </a>
     <div class="dropdown-user-profile dropdown-menu-end pc-h-dropdown" ngbDropdownMenu>
       <div class="dropdown-header">
-        <div class="d-flex mb-1">
+        <div class="d-flex mb-1 align-items-center">
           <div class="flex-shrink-0">
             <img src="assets/images/user/avatar-2.jpg" alt="user-image" class="user-avatar wid-35" />
           </div>
           <div class="flex-grow-1 ms-3 text-start">
-            <h6 class="mb-0">JWT User</h6>
-            <span>UI/UX Designer</span>
+            <h6 class="mb-0">{{ session.user()?.fullName || 'Portal User' }}</h6>
+            <span class="text-muted text-sm">{{ session.user()?.email || session.activeSchoolName() || '' }}</span>
           </div>
-          <a href="javascript:void(0)" class="bg-transparent"><i class="d-flex f-20" antIcon theme="outline" type="logout"></i></a>
+          <button
+            type="button"
+            id="header-logout-btn"
+            class="btn btn-link p-0 bg-transparent text-dark"
+            title="Logout"
+            aria-label="Logout"
+            (click)="logout()"
+          >
+            <i class="d-flex f-20" antIcon theme="outline" type="logout"></i>
+          </button>
         </div>
       </div>
       <ul ngbNav #nav="ngbNav" class="drp-tabs nav-fill nav-tabs">
@@ -109,9 +55,13 @@
             Profile
           </a>
           <ng-template ngbNavContent>
-            @for (task of profile; track task) {
+            @for (task of profile; track task.title) {
               <div>
-                <a href="javascript:void(0)" class="dropdown-item">
+                <a
+                  href="javascript:void(0)"
+                  class="dropdown-item"
+                  (click)="onProfileTaskClick(task.action)"
+                >
                   <i class="text-muted" antIcon theme="outline" type="{{ task.icon }}"></i>
                   <span>{{ task.title }}</span>
                 </a>
@@ -125,7 +75,7 @@
             Setting
           </a>
           <ng-template ngbNavContent>
-            @for (task of setting; track task) {
+            @for (task of setting; track task.title) {
               <div>
                 <a href="javascript:void(0)" class="dropdown-item">
                   <i class="text-muted" antIcon theme="outline" type="{{ task.icon }}"></i>

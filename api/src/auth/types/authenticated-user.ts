@@ -6,9 +6,16 @@ export interface AuthRoleAssignment {
   /** 'platform' roles apply to every school; 'school' / 'group' roles only to `schoolId`. */
   scope: string;
   schoolId: string;
+  schoolName?: string | null;
   schoolStatus?: string | null;
   groupId: string | null;
   permissions: string[];
+}
+
+export interface AuthUserSchool {
+  id: string;
+  name: string;
+  status?: string | null;
 }
 
 /**
@@ -27,6 +34,8 @@ export interface AuthenticatedUser {
   permissions: string[];
   /** Schools the user has any role in. */
   schoolIds: string[];
+  /** School details (id, name, status) for the user's assigned schools (#92). */
+  schools?: AuthUserSchool[];
   /** Holds a platform-scoped role: acts on every school. */
   isPlatformAdmin: boolean;
   /** Primary role / school (first assignment), e.g. for audit records. */
