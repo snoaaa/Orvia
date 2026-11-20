@@ -55,6 +55,78 @@ describe('ProcessingQueueService', () => {
     });
   });
 
+  it.each([
+    {
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      targetStep: 'office_extraction' as const,
+      expectedQueuedStep: 'office_extraction_queued',
+    },
+    {
+      mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      targetStep: 'slide_extraction' as const,
+      expectedQueuedStep: 'slide_extraction_queued',
+    },
+    {
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      targetStep: 'tabular_extraction' as const,
+      expectedQueuedStep: 'tabular_extraction_queued',
+    },
+    {
+      mimeType: 'text/markdown',
+      targetStep: 'text_chunking' as const,
+      expectedQueuedStep: 'text_chunking_queued',
+    },
+    {
+      mimeType: 'image/jpeg',
+      targetStep: 'ocr' as const,
+      expectedQueuedStep: 'ocr_queued',
+    },
+  ])(
+    'transitions format-aware job ($targetStep) to $expectedQueuedStep (#150)',
+    async ({ mimeType, targetStep, expectedQueuedStep }) => {
+      service.enqueueJob({
+        jobId: `job-${targetStep}`,
+        versionId: 'ver-1',
+        documentId: 'doc-1',
+        spaceId: 'space-1',
+        storageKey: 'spaces/space-1/docs/doc-1/v1',
+        mimeType,
+        targetStep,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockPrisma.processingJob.update).toHaveBeenCalledWith({
+        where: { id: `job-${targetStep}` },
+        data: {
+          step: expectedQueuedStep,
+          updatedAt: expect.any(Date),
+        },
+      });
+    },
+  );
+
+  it('derives format-specific step from mimeType when targetStep is omitted (#150)', async () => {
+    service.enqueueJob({
+      jobId: 'job-derived-csv',
+      versionId: 'ver-csv',
+      documentId: 'doc-csv',
+      spaceId: 'space-1',
+      storageKey: 'spaces/space-1/docs/doc-csv/v1.csv',
+      mimeType: 'text/csv',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockPrisma.processingJob.update).toHaveBeenCalledWith({
+      where: { id: 'job-derived-csv' },
+      data: {
+        step: 'tabular_extraction_queued',
+        updatedAt: expect.any(Date),
+      },
+    });
+  });
+
   it('handles background processing errors without crashing', async () => {
     mockPrisma.processingJob.update.mockRejectedValueOnce(new Error('DB connection dropped'));
 
