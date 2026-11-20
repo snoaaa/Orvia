@@ -1,4 +1,16 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
@@ -6,6 +18,8 @@ import {
   CreateConversationDto,
   CreateMessageDto,
   ListConversationsQueryDto,
+  ListReportsQueryDto,
+  ListSavedAnswersQueryDto,
   ReportAnswerDto,
   SaveAnswerDto,
   UpdateConversationDto,
@@ -16,8 +30,12 @@ import {
   ConversationEntity,
   MessageEntity,
   MessageGenerationStatusEntity,
+  PaginatedAnswerReportsEntity,
   PaginatedConversationsEntity,
+  PaginatedSavedAnswersEntity,
   SavedAnswerEntity,
+  ShareAnswerResultEntity,
+  SharedAnswerViewEntity,
 } from '../entities/index.js';
 import { ConversationsService } from '../services/conversations.service.js';
 
@@ -56,6 +74,102 @@ export class ConversationsController {
   @ApiResponse({ status: 201, description: 'Conversation started', type: ConversationEntity })
   async createConversation(@Body() dto: CreateConversationDto): Promise<ConversationEntity> {
     return this.conversationsService.create(dto);
+  }
+
+  // Static prefix routes must precede `@Get(':id')` so NestJS doesn't route them into `ParseUUIDPipe`.
+
+  @Get('saved-answers')
+  @RequirePermission('conversations:read')
+  @ApiOperation({
+    summary: 'List your saved (bookmarked) answers (#125)',
+    description: 'Returns paginated bookmarked assistant answers owned by the caller, newest first.',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiResponse({ status: 200, description: 'Paginated saved answers', type: PaginatedSavedAnswersEntity })
+  async getSavedAnswers(
+    @Query() query: ListSavedAnswersQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedSavedAnswersEntity> {
+    return this.conversationsService.findSavedAnswers(actor, query);
+  }
+
+  @Post('saved-answers')
+  @RequirePermission('answers:save')
+  @ApiOperation({ summary: 'Bookmark or save an assistant answer (#125)' })
+  @ApiResponse({ status: 201, description: 'Answer saved', type: SavedAnswerEntity })
+  @ApiResponse({ status: 400, description: 'Invalid UUID or message is not a completed assistant answer' })
+  @ApiResponse({ status: 404, description: 'Message not found' })
+  async saveAnswer(
+    @Body() dto: SaveAnswerDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SavedAnswerEntity> {
+    return this.conversationsService.saveAnswer(dto, actor);
+  }
+
+  @Delete('saved-answers/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('answers:save')
+  @ApiOperation({ summary: 'Remove a saved answer bookmark (#125)' })
+  @ApiParam({ name: 'id', description: 'Saved answer UUID' })
+  @ApiResponse({ status: 204, description: 'Saved answer removed' })
+  @ApiResponse({ status: 400, description: 'Invalid UUID' })
+  @ApiResponse({ status: 404, description: 'Saved answer not found' })
+  async removeSavedAnswer(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    return this.conversationsService.removeSavedAnswer(id, actor);
+  }
+
+  @Get('shared/:token')
+  @RequirePermission('conversations:read')
+  @ApiOperation({
+    summary: 'View a shared answer with receiver-scoped citations (#125)',
+    description:
+      'Resolves a signed share link. Any citation whose source document the signed-in receiver cannot access ' +
+      'is stripped and counted in redactedCitationsCount.',
+  })
+  @ApiParam({ name: 'token', description: 'Signed share token' })
+  @ApiResponse({ status: 200, description: 'Shared answer view', type: SharedAnswerViewEntity })
+  @ApiResponse({ status: 404, description: 'Shared answer not found or expired' })
+  async getSharedAnswer(
+    @Param('token') token: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<SharedAnswerViewEntity> {
+    return this.conversationsService.getSharedAnswer(token, actor);
+  }
+
+  @Get('reports')
+  @RequirePermission('metrics:view')
+  @ApiOperation({
+    summary: 'List reported answers for admin monitoring (#125)',
+    description:
+      'Platform admins see reports from all schools; school admins see only reports from their assigned school(s).',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiQuery({ name: 'schoolId', required: false, description: 'Filter by school UUID' })
+  @ApiQuery({ name: 'reason', required: false, description: 'Filter by report reason' })
+  @ApiResponse({ status: 200, description: 'Paginated answer reports', type: PaginatedAnswerReportsEntity })
+  async getReports(
+    @Query() query: ListReportsQueryDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<PaginatedAnswerReportsEntity> {
+    return this.conversationsService.findReports(actor, query);
+  }
+
+  @Post('reports')
+  @RequirePermission('answers:report')
+  @ApiOperation({ summary: 'Report a hallucinated or incorrect answer (#125)' })
+  @ApiResponse({ status: 201, description: 'Report logged', type: AnswerReportEntity })
+  @ApiResponse({ status: 400, description: 'Invalid reason or non-assistant message' })
+  @ApiResponse({ status: 404, description: 'Message not found' })
+  async reportAnswer(
+    @Body() dto: ReportAnswerDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<AnswerReportEntity> {
+    return this.conversationsService.reportAnswer(dto, actor);
   }
 
   @Get(':id')
@@ -115,6 +229,39 @@ export class ConversationsController {
     return this.conversationsService.getMessageStatus(id, messageId, actor);
   }
 
+  @Post(':id/messages/:messageId/share')
+  @RequirePermission('conversations:read')
+  @ApiOperation({
+    summary: 'Create a shareable link and text for an assistant answer (#125)',
+    description:
+      'Generates a signed share token for a completed assistant answer owned by the caller. ' +
+      'When opened by a receiver via GET /conversations/shared/:token, citations are filtered to documents the receiver may see.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation UUID' })
+  @ApiParam({ name: 'messageId', description: 'Message UUID' })
+  @ApiResponse({ status: 201, description: 'Share link generated', type: ShareAnswerResultEntity })
+  @ApiResponse({ status: 400, description: 'Invalid UUID or message is not a completed assistant answer' })
+  @ApiResponse({ status: 404, description: 'Message not found' })
+  async shareAnswer(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('messageId', new ParseUUIDPipe()) messageId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<ShareAnswerResultEntity> {
+    return this.conversationsService.createShareLink(id, messageId, actor);
+  }
+
+  @Post(':id/messages')
+  @RequirePermission('messages:send')
+  @ApiOperation({ summary: 'Post a new message or query to conversation' })
+  @ApiParam({ name: 'id', description: 'Conversation UUID' })
+  @ApiResponse({ status: 201, description: 'Message created', type: MessageEntity })
+  async addMessage(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreateMessageDto,
+  ): Promise<MessageEntity> {
+    return this.conversationsService.addMessage(id, dto);
+  }
+
   @Patch(':id')
   @RequirePermission('conversations:update')
   @ApiOperation({
@@ -151,33 +298,5 @@ export class ConversationsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<void> {
     return this.conversationsService.remove(id, actor);
-  }
-
-  @Post(':id/messages')
-  @RequirePermission('messages:send')
-  @ApiOperation({ summary: 'Post a new message or query to conversation' })
-  @ApiParam({ name: 'id', description: 'Conversation UUID' })
-  @ApiResponse({ status: 201, description: 'Message created', type: MessageEntity })
-  async addMessage(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: CreateMessageDto,
-  ): Promise<MessageEntity> {
-    return this.conversationsService.addMessage(id, dto);
-  }
-
-  @Post('saved-answers')
-  @RequirePermission('answers:save')
-  @ApiOperation({ summary: 'Bookmark or save an assistant answer' })
-  @ApiResponse({ status: 201, description: 'Answer saved', type: SavedAnswerEntity })
-  async saveAnswer(@Body() dto: SaveAnswerDto): Promise<SavedAnswerEntity> {
-    return this.conversationsService.saveAnswer(dto);
-  }
-
-  @Post('reports')
-  @RequirePermission('answers:report')
-  @ApiOperation({ summary: 'Report a hallucinated or incorrect answer' })
-  @ApiResponse({ status: 201, description: 'Report logged', type: AnswerReportEntity })
-  async reportAnswer(@Body() dto: ReportAnswerDto): Promise<AnswerReportEntity> {
-    return this.conversationsService.reportAnswer(dto);
   }
 }

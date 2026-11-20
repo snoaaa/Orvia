@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import type { PrismaService } from '../../database/prisma.service.js';
@@ -15,6 +15,21 @@ describe('ConversationsService (#123)', () => {
     };
     message: {
       findMany: ReturnType<typeof vi.fn>;
+      findFirst: ReturnType<typeof vi.fn>;
+    };
+    savedAnswer: {
+      findFirst: ReturnType<typeof vi.fn>;
+      create: ReturnType<typeof vi.fn>;
+      count: ReturnType<typeof vi.fn>;
+      findMany: ReturnType<typeof vi.fn>;
+      deleteMany: ReturnType<typeof vi.fn>;
+    };
+    answerReport: {
+      create: ReturnType<typeof vi.fn>;
+      count: ReturnType<typeof vi.fn>;
+      findMany: ReturnType<typeof vi.fn>;
+    };
+    document: {
       findFirst: ReturnType<typeof vi.fn>;
     };
   };
@@ -54,6 +69,21 @@ describe('ConversationsService (#123)', () => {
       },
       message: {
         findMany: vi.fn(),
+        findFirst: vi.fn(),
+      },
+      savedAnswer: {
+        findFirst: vi.fn(),
+        create: vi.fn(),
+        count: vi.fn(),
+        findMany: vi.fn(),
+        deleteMany: vi.fn(),
+      },
+      answerReport: {
+        create: vi.fn(),
+        count: vi.fn(),
+        findMany: vi.fn(),
+      },
+      document: {
         findFirst: vi.fn(),
       },
     };
@@ -380,6 +410,131 @@ describe('ConversationsService (#123)', () => {
         references: [],
       });
       await expect(service.getMessageStatus('conv-1', 'msg-1', platformAdmin)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('save, share, and report (#125)', () => {
+    it('saves a completed assistant answer idempotently and rejects user/pending messages', async () => {
+      mockPrisma.message.findFirst.mockResolvedValueOnce({
+        id: 'msg-user',
+        role: 'user',
+        status: 'done',
+        conversation: { id: 'conv-1', userId: student.id, title: 'Chat' },
+        references: [],
+      });
+      await expect(service.saveAnswer({ messageId: 'msg-user' }, student)).rejects.toThrow(BadRequestException);
+
+      mockPrisma.message.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: 'Answer',
+        status: 'done',
+        conversation: { id: 'conv-1', userId: student.id, title: 'Chat' },
+        references: [],
+      });
+      mockPrisma.savedAnswer.findFirst.mockResolvedValueOnce({
+        id: 'save-1',
+        userId: student.id,
+        messageId: 'msg-1',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const saved = await service.saveAnswer({ messageId: 'msg-1' }, student);
+      expect(saved.id).toBe('save-1');
+      expect(mockPrisma.savedAnswer.create).not.toHaveBeenCalled();
+    });
+
+    it('creates a share link and strips citations invisible to the receiver', async () => {
+      mockPrisma.message.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: 'Shared answer text',
+        status: 'done',
+        conversation: { userId: student.id },
+      });
+      const shared = await service.createShareLink('conv-1', 'msg-1', student);
+      expect(shared.sharePath).toBe(`/conversations/shared/${shared.shareToken}`);
+
+      // Now resolve as receiver: doc-1 visible, doc-2 invisible
+      mockPrisma.message.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        conversationId: 'conv-1',
+        content: 'Shared answer text',
+        modelUsed: 'mock-rag',
+        createdAt: new Date(),
+        references: [
+          {
+            id: 'ref-1',
+            documentVersionId: 'ver-1',
+            pageOrImageId: 'page_1',
+            excerpt: 'Visible excerpt',
+            coordinates: null,
+            documentVersion: {
+              id: 'ver-1',
+              documentId: 'doc-1',
+              versionNo: 1,
+              status: 'available',
+              document: { title: 'Public Doc', deletedAt: null },
+            },
+          },
+          {
+            id: 'ref-2',
+            documentVersionId: 'ver-2',
+            pageOrImageId: 'page_2',
+            excerpt: 'Secret excerpt',
+            coordinates: null,
+            documentVersion: {
+              id: 'ver-2',
+              documentId: 'doc-2',
+              versionNo: 1,
+              status: 'available',
+              document: { title: 'Secret Doc', deletedAt: null },
+            },
+          },
+        ],
+      });
+      mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-1' }).mockResolvedValueOnce(null);
+
+      const view = await service.getSharedAnswer(shared.shareToken, student);
+      expect(view.citations).toHaveLength(1);
+      expect(view.citations[0].documentId).toBe('doc-1');
+      expect(view.redactedCitationsCount).toBe(1);
+    });
+
+    it('scopes findReports to school admin schools and allows platform admin to see all', async () => {
+      const schoolAdmin: AuthenticatedUser = {
+        ...student,
+        id: 'school-admin-1',
+        role: 'SCHOOL_ADMIN',
+        permissions: ['metrics:view'],
+        assignments: [
+          { role: 'SCHOOL_ADMIN', scope: 'school', schoolId: 'school-1', groupId: null, permissions: ['metrics:view'] },
+        ],
+      };
+
+      // Filtering by another school returns empty without querying DB
+      const crossSchool = await service.findReports(schoolAdmin, { schoolId: 'school-2' });
+      expect(crossSchool.data).toEqual([]);
+      expect(mockPrisma.answerReport.findMany).not.toHaveBeenCalled();
+
+      // Own school queries with schoolId in ['school-1']
+      mockPrisma.answerReport.count.mockResolvedValueOnce(0);
+      mockPrisma.answerReport.findMany.mockResolvedValueOnce([]);
+      await service.findReports(schoolAdmin, {});
+      expect(mockPrisma.answerReport.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            message: expect.objectContaining({
+              conversation: expect.objectContaining({
+                space: { schoolId: { in: ['school-1'] } },
+              }),
+            }),
+          }),
+        }),
+      );
     });
   });
 });
