@@ -15,6 +15,7 @@ import {
   ConversationDetailEntity,
   ConversationEntity,
   MessageEntity,
+  MessageGenerationStatusEntity,
   PaginatedConversationsEntity,
   SavedAnswerEntity,
 } from '../entities/index.js';
@@ -91,6 +92,27 @@ export class ConversationsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<MessageEntity[]> {
     return this.conversationsService.findMessages(id, actor);
+  }
+
+  @Get(':id/messages/:messageId/status')
+  @RequirePermission('conversations:read')
+  @ApiOperation({
+    summary: 'Poll the generation status of a message (#122)',
+    description:
+      'Returns pending, generating, done, or failed for a message in a conversation owned by the caller. ' +
+      'Includes the full answer and citations once status is done.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation UUID' })
+  @ApiParam({ name: 'messageId', description: 'Message UUID' })
+  @ApiResponse({ status: 200, description: 'Generation status', type: MessageGenerationStatusEntity })
+  @ApiResponse({ status: 400, description: 'Invalid conversation or message UUID' })
+  @ApiResponse({ status: 404, description: 'Conversation or message not found' })
+  async getMessageStatus(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('messageId', new ParseUUIDPipe()) messageId: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<MessageGenerationStatusEntity> {
+    return this.conversationsService.getMessageStatus(id, messageId, actor);
   }
 
   @Patch(':id')

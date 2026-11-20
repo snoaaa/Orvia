@@ -15,6 +15,7 @@ describe('ConversationsService (#123)', () => {
     };
     message: {
       findMany: ReturnType<typeof vi.fn>;
+      findFirst: ReturnType<typeof vi.fn>;
     };
   };
 
@@ -53,6 +54,7 @@ describe('ConversationsService (#123)', () => {
       },
       message: {
         findMany: vi.fn(),
+        findFirst: vi.fn(),
       },
     };
     service = new ConversationsService(mockPrisma as unknown as PrismaService);
@@ -327,6 +329,57 @@ describe('ConversationsService (#123)', () => {
       mockPrisma.conversation.findFirst.mockResolvedValueOnce({ id: 'conv-1', userId: student.id });
       mockPrisma.conversation.updateMany.mockResolvedValueOnce({ count: 0 });
       await expect(service.remove('conv-1', student)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('getMessageStatus (#122)', () => {
+    it.each([
+      ['pending', 'pending', false, false],
+      ['generating', 'generating', false, false],
+      ['streaming', 'generating', false, false],
+      ['done', 'done', true, true],
+      ['completed', 'done', true, true],
+      ['failed', 'failed', false, false],
+    ])('maps stored status %s -> %s (ready=%s, answer=%s)', async (stored, expectedStatus, expectedReady, hasAnswer) => {
+      mockPrisma.message.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: 'Answer text',
+        modelUsed: 'mock-rag-v1',
+        parameters: null,
+        status: stored,
+        references: [],
+        ragMetric: stored === 'failed' ? { errorCode: 'RAG_TIMEOUT' } : null,
+        conversation: { userId: student.id },
+        createdAt: new Date('2026-11-21T00:00:00Z'),
+        updatedAt: new Date('2026-11-21T00:00:05Z'),
+      });
+
+      const res = await service.getMessageStatus('conv-1', 'msg-1', student);
+
+      expect(res.status).toBe(expectedStatus);
+      expect(res.ready).toBe(expectedReady);
+      expect(res.errorCode).toBe(stored === 'failed' ? 'RAG_TIMEOUT' : null);
+      if (hasAnswer) {
+        expect(res.answer).toMatchObject({ id: 'msg-1', content: 'Answer text' });
+      } else {
+        expect(res.answer).toBeNull();
+      }
+    });
+
+    it('throws NotFoundException when polling missing message or another user’s message', async () => {
+      mockPrisma.message.findFirst.mockResolvedValueOnce(null);
+      await expect(service.getMessageStatus('conv-1', 'msg-missing', student)).rejects.toThrow(NotFoundException);
+
+      mockPrisma.message.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        conversationId: 'conv-1',
+        status: 'done',
+        conversation: { userId: student.id },
+        references: [],
+      });
+      await expect(service.getMessageStatus('conv-1', 'msg-1', platformAdmin)).rejects.toThrow(NotFoundException);
     });
   });
 });

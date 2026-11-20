@@ -11,6 +11,7 @@ describe('ConversationsController (#123)', () => {
     findAll: ReturnType<typeof vi.fn>;
     findById: ReturnType<typeof vi.fn>;
     findMessages: ReturnType<typeof vi.fn>;
+    getMessageStatus: ReturnType<typeof vi.fn>;
     rename: ReturnType<typeof vi.fn>;
     remove: ReturnType<typeof vi.fn>;
   };
@@ -34,6 +35,7 @@ describe('ConversationsController (#123)', () => {
       findAll: vi.fn(),
       findById: vi.fn(),
       findMessages: vi.fn(),
+      getMessageStatus: vi.fn(),
       rename: vi.fn(),
       remove: vi.fn(),
     };
@@ -81,5 +83,14 @@ describe('ConversationsController (#123)', () => {
     const res = await controller.deleteConversation('conv-1', actor);
     expect(mockService.remove).toHaveBeenCalledWith('conv-1', actor);
     expect(res).toBeUndefined();
+  });
+
+  it('delegates getMessageStatus to service.getMessageStatus (#122)', async () => {
+    const expected = { messageId: 'msg-1', status: 'pending', ready: false };
+    mockService.getMessageStatus.mockResolvedValueOnce(expected);
+
+    const res = await controller.getMessageStatus('conv-1', 'msg-1', actor);
+    expect(mockService.getMessageStatus).toHaveBeenCalledWith('conv-1', 'msg-1', actor);
+    expect(res).toBe(expected);
   });
 });
