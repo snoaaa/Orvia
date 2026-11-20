@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { CreateConversationDto, CreateMessageDto, ListConversationsQueryDto, ReportAnswerDto, SaveAnswerDto } from '../dto/index.js';
+import type { CreateConversationDto, CreateMessageDto, ListConversationsQueryDto, ReportAnswerDto, SaveAnswerDto, UpdateConversationDto } from '../dto/index.js';
 import {
   AnswerReportEntity,
   ConversationDetailEntity,
@@ -126,6 +126,64 @@ export class ConversationsService {
     });
 
     return messages.map((m) => MessageMapper.toEntity(m));
+  }
+
+  /**
+   * Renames a conversation owned by `actor` (#124).
+   * Uses a conditional `updateMany` so a concurrent soft delete wins instead of resurrecting or modifying a deleted row.
+   */
+  async rename(id: string, dto: UpdateConversationDto, actor: AuthenticatedUser): Promise<ConversationEntity> {
+    const existing = await this.prisma.conversation.findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true, userId: true },
+    });
+    if (!existing || existing.userId !== actor.id) {
+      throw new NotFoundException(`Conversation with ID ${id} not found`);
+    }
+
+    const { count } = await this.prisma.conversation.updateMany({
+      where: { id, userId: actor.id, deletedAt: null },
+      data: { title: dto.title },
+    });
+    if (count === 0) {
+      throw new NotFoundException(`Conversation with ID ${id} not found`);
+    }
+
+    const updated = await this.prisma.conversation.findFirst({
+      where: { id, userId: actor.id, deletedAt: null },
+      include: {
+        space: { select: { name: true } },
+        _count: { select: { messages: { where: { deletedAt: null } } } },
+      },
+    });
+    if (!updated) {
+      throw new NotFoundException(`Conversation with ID ${id} not found`);
+    }
+
+    return ConversationMapper.toEntity(updated);
+  }
+
+  /**
+   * Soft-deletes a conversation owned by `actor` (#124).
+   * Conditional on `deletedAt: null` so concurrent or repeated deletes return 404 cleanly.
+   */
+  async remove(id: string, actor: AuthenticatedUser): Promise<void> {
+    const existing = await this.prisma.conversation.findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true, userId: true },
+    });
+    if (!existing || existing.userId !== actor.id) {
+      throw new NotFoundException(`Conversation with ID ${id} not found`);
+    }
+
+    const deletedAt = new Date();
+    const { count } = await this.prisma.conversation.updateMany({
+      where: { id, userId: actor.id, deletedAt: null },
+      data: { deletedAt, updatedAt: deletedAt },
+    });
+    if (count === 0) {
+      throw new NotFoundException(`Conversation with ID ${id} not found`);
+    }
   }
 
   async create(dto: CreateConversationDto): Promise<ConversationEntity> {

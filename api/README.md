@@ -766,3 +766,5 @@ Requires `conversations:read`. Every user (including platform and school admins)
 - `GET /conversations`: paginated (`page`, `limit` capped at `100`), ordered newest first (`updatedAt DESC, createdAt DESC, id DESC`). Optional filters: `spaceId` (UUID) and `q` (title search, trimmed).
 - `GET /conversations/:id`: returns the conversation with chronological messages (`createdAt ASC`) and citations (`documentId`, `versionId`, `documentName`, `versionNumber`, `pageOrImageId`, `excerpt`, `coordinates`, `available`).
 - `GET /conversations/:id/messages`: returns the chronological messages and citations for the conversation.
+- `PATCH /conversations/:id` (`conversations:update`, #124): renames a conversation owned by the caller (`title` trimmed, 1–191 characters).
+- `DELETE /conversations/:id` (`conversations:delete`, #124): soft-deletes a conversation owned by the caller (`204 No Content`), hiding it from their history.
