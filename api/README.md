@@ -526,7 +526,7 @@ Other staff, students and guests get 403. The routes ask for `spaces:create` / `
 |---|---|
 | `name` | Required on create. Trimmed, 1 to 100 characters, unique within the school (409) |
 | `description` | Optional, trimmed, up to 2000 characters. On update, `null` or `""` clears it |
-| `language` | `en` (default) or `fr` |
+| `language` | `en` (default) or `fr`; trimmed and lower-cased first, so `EN` and ` Fr ` are accepted and stored as `en` / `fr` |
 | `privacy` | `public` (default), `restricted` or `private`. Stored and validated only; no read rule uses it yet |
 
 ### Create a space: `POST /documents/spaces` (#97, `spaces:create`)
