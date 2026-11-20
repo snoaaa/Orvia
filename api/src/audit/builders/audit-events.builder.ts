@@ -455,4 +455,32 @@ export const AuditEvents = {
       context,
     };
   },
+  /** A document was published to new targets (#109). `rules` lists only the targets this request added. */
+  documentPublished(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      rules: { type: string; targetId: string }[];
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_PUBLISHED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        rules: p.rules,
+      },
+      context,
+    };
+  },
 };

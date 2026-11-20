@@ -5,6 +5,7 @@ import {
   Get,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -18,8 +19,17 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
 import {
+  AddDocumentAccessDto,
+  CreateDocumentDto,
+  CreateSpaceDto,
+  ListDocumentsQueryDto,
+  ListSpacesQueryDto,
+  UpdateDocumentDto,
+  UploadDocumentDto,
+} from '../dto/index.js';
+import {
+  DocumentAccessRuleEntity,
   DocumentEntity,
   DocumentVersionItemEntity,
   PaginatedDocumentsEntity,
@@ -28,6 +38,7 @@ import {
   ValidatedFileEntity,
 } from '../entities/index.js';
 import type { UploadedFile as IUploadedFile } from '../interfaces/index.js';
+import { DocumentAccessService } from '../services/document-access.service.js';
 import { DocumentsService } from '../services/documents.service.js';
 import { RangeNotSatisfiableException } from '../utils/http-range.util.js';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
@@ -38,7 +49,10 @@ import { auditContextFromRequest } from '../../audit/utils/audit-request-context
 @ApiResponse({ status: 403, description: 'Missing permission, suspended account, or another school' })
 @Controller('documents')
 export class DocumentsController {
-  constructor(private readonly documentsService: DocumentsService) {}
+  constructor(
+    private readonly documentsService: DocumentsService,
+    private readonly documentAccessService: DocumentAccessService,
+  ) {}
 
   @Get()
   @RequirePermission('documents:read')
@@ -100,12 +114,61 @@ export class DocumentsController {
 
   @Get(':id')
   @RequirePermission('documents:read')
-  @ApiOperation({ summary: 'Get document details by ID' })
+  @ApiOperation({
+    summary: 'Get document details by ID',
+    description:
+      'Document managers of the school see any document. Other readers only see a document published to them ' +
+      '(#109, see POST /documents/{id}/access); a document without publication rules is a draft.',
+  })
   @ApiParam({ name: 'id', description: 'Document UUID' })
   @ApiResponse({ status: 200, description: 'Document retrieved', type: DocumentEntity })
+  @ApiResponse({ status: 403, description: 'Another school, or the document is not published to you' })
   @ApiResponse({ status: 404, description: 'Document not found' })
-  async getDocumentById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<DocumentEntity> {
+  async getDocumentById(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() actor: AuthenticatedUser): Promise<DocumentEntity> {
     return this.documentsService.findDocumentById(id, actor);
+  }
+
+  @Get(':id/access')
+  @RequirePermission('documents:manage')
+  @ApiOperation({
+    summary: 'List who a document is published to (#109)',
+    description: 'The publication rules of the document, oldest first, with the name of each target.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiResponse({ status: 200, description: 'Publication rules', type: [DocumentAccessRuleEntity] })
+  @ApiResponse({ status: 400, description: 'Invalid document id' })
+  @ApiResponse({ status: 404, description: 'Document not found or deleted' })
+  async listDocumentAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentAccessRuleEntity[]> {
+    return this.documentAccessService.listRules(id, actor);
+  }
+
+  @Post(':id/access')
+  @RequirePermission('documents:manage')
+  @ApiOperation({
+    summary: 'Publish a document to a school, role, class, group or user (#109)',
+    description:
+      "Adds publication rules. Every target must belong to the document's school: the school itself, a school role " +
+      '(not a platform role), a class or group of the school, or a user with a role in the school (e.g. a parent or ' +
+      'guest shared explicitly). Targets the document already has are skipped. A document without any rule is a ' +
+      'draft that only document managers see. Platform admins can publish any document; others only documents of ' +
+      'the schools where they hold documents:manage. Records a document_published audit event. ' +
+      'Answers with all the rules of the document.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiBody({ type: AddDocumentAccessDto })
+  @ApiResponse({ status: 201, description: 'All the publication rules of the document', type: [DocumentAccessRuleEntity] })
+  @ApiResponse({ status: 400, description: "Invalid body, or a target outside the document's school" })
+  @ApiResponse({ status: 404, description: 'Document not found or deleted' })
+  async addDocumentAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddDocumentAccessDto,
+    @Req() req: Request,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentAccessRuleEntity[]> {
+    return this.documentAccessService.addRules(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Post()
@@ -130,7 +193,7 @@ export class DocumentsController {
   @ApiResponse({ status: 403, description: 'Forbidden: caller lacks documents:update in this school' })
   @ApiResponse({ status: 404, description: 'Document not found' })
   async updateDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDocumentDto,
     @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
@@ -154,7 +217,7 @@ export class DocumentsController {
   @ApiResponse({ status: 403, description: 'Forbidden: caller lacks documents:delete in this school' })
   @ApiResponse({ status: 404, description: 'Document not found or already deleted' })
   async deleteDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<{ success: boolean; id: string; message: string }> {
@@ -192,7 +255,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document not found' })
   @ApiResponse({ status: 413, description: 'File exceeds maximum size' })
   async replaceDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: IUploadedFile,
     @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
@@ -225,7 +288,7 @@ export class DocumentsController {
   })
   @ApiResponse({ status: 201, description: 'New version created', type: DocumentEntity })
   async createDocumentVersion(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: IUploadedFile,
     @Req() req: Request,
     @CurrentUser() actor: AuthenticatedUser,
@@ -396,7 +459,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document not found' })
   @ApiResponse({ status: 416, description: 'Range not satisfiable' })
   async downloadCurrentDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('disposition') disposition: 'attachment' | 'inline' | undefined,
     @Req() req: Request,
     @Res() res: Response,
@@ -426,7 +489,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document not found' })
   @ApiResponse({ status: 416, description: 'Range not satisfiable' })
   async streamCurrentDocument(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Req() req: Request,
     @Res() res: Response,
     @CurrentUser() actor: AuthenticatedUser,
@@ -463,7 +526,7 @@ export class DocumentsController {
   })
   @ApiResponse({ status: 404, description: 'Document not found' })
   async listDocumentVersions(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DocumentVersionItemEntity[]> {
     return this.documentsService.listDocumentVersions(id, actor);
@@ -485,7 +548,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document or version not found' })
   @ApiResponse({ status: 416, description: 'Range not satisfiable' })
   async downloadDocumentVersion(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Param('version') version: string,
     @Query('disposition') disposition: 'attachment' | 'inline' | undefined,
     @Req() req: Request,
@@ -516,7 +579,7 @@ export class DocumentsController {
   @ApiResponse({ status: 404, description: 'Document or version not found' })
   @ApiResponse({ status: 416, description: 'Range not satisfiable' })
   async streamDocumentVersion(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Param('version') version: string,
     @Req() req: Request,
     @Res() res: Response,

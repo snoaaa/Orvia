@@ -22,6 +22,7 @@ import {
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
+import { isDocumentVisibleTo } from '../utils/document-visibility.util.js';
 import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditAction } from '../../audit/constants/audit-events.constants.js';
@@ -30,6 +31,9 @@ import { type AuditRequestContext, SYSTEM_AUDIT_CONTEXT } from '../../audit/util
 import { FileValidationService } from './file-validation.service.js';
 import { ImageConversionService } from './image-conversion.service.js';
 import { ProcessingQueueService } from './processing-queue.service.js';
+
+/** 403 message when a document of the reader's school is not published to them (#109). */
+const NOT_PUBLISHED_TO_YOU = 'This document is not published to your school, role, class, group or account';
 
 @Injectable()
 export class DocumentsService {
@@ -82,8 +86,16 @@ export class DocumentsService {
     });
   }
 
+  /**
+   * Document details. Document managers of its school see any document; other readers only a document
+   * published to them (#109), otherwise 403.
+   */
   async findDocumentById(id: string, actor: AuthenticatedUser): Promise<DocumentEntity> {
-    return DocumentMapper.toEntity(await this.findDocumentInScope(id, actor, 'documents:read'));
+    const doc = await this.findDocumentInScope(id, actor, 'documents:read');
+    if (!canInSchool(actor, 'documents:manage', doc.space.schoolId) && !(await isDocumentVisibleTo(this.prisma, actor, doc.id))) {
+      throw new ForbiddenException(NOT_PUBLISHED_TO_YOU);
+    }
+    return DocumentMapper.toEntity(doc);
   }
 
   /** Loads a document and throws 403 unless `actor` has `permission` in the school of its space. */
@@ -805,11 +817,11 @@ export class DocumentsService {
    * Authorization matrix:
    * 1. Platform admin (web): can download any version of any document across the platform.
    * 2. School admin / Document manager (web + mobile): can download any version of documents
-   *    in the school(s) where they hold `documents:read` rights.
+   *    in the school(s) where they hold `documents:manage` rights, published or not.
    * 3. Staff / Student / Parent / Guest:
    *    a) Can download ANY version cited in an answer generated for them (conversation references).
-   *    b) Can download the CURRENT version if the document is published to them (matches school,
-   *       role, or group publication rules, or open to school when no rules are configured).
+   *    b) Can download the CURRENT version if the document is published to them (#109: a school, role,
+   *       class, group or user rule matches them). A document without rules is visible to managers only.
    *    c) Cannot download un-cited past versions (returns 403).
    *    d) Cannot download documents out of their school/group scope (returns 403).
    */
@@ -819,7 +831,6 @@ export class DocumentsService {
       id: string;
       spaceId: string;
       space: { schoolId: string };
-      access: { schoolId: string | null; roleId: string | null; groupId: string | null }[];
     },
     version: {
       id: string;
@@ -831,8 +842,8 @@ export class DocumentsService {
       return;
     }
 
-    // 2. Document managers with `documents:read` permission in this school
-    if (canInSchool(actor, 'documents:read', document.space.schoolId)) {
+    // 2. Document managers of this school
+    if (canInSchool(actor, 'documents:manage', document.space.schoolId)) {
       return;
     }
 
@@ -871,35 +882,9 @@ export class DocumentsService {
       );
     }
 
-    // 6. Publication rules check: if specific access rules exist, user must match at least one
-    if (document.access && document.access.length > 0) {
-      const userAssignments = actor.assignments.filter(
-        (a) => a.schoolId === document.space.schoolId,
-      );
-      const userRoles = new Set(userAssignments.map((a) => a.role));
-      const userGroupIds = new Set(
-        userAssignments.map((a) => a.groupId).filter((g): g is string => !!g),
-      );
-
-      const matches = document.access.some((rule) => {
-        // School-level rule
-        if (rule.schoolId && rule.schoolId === document.space.schoolId && !rule.roleId && !rule.groupId) {
-          return true;
-        }
-        // Role-level rule
-        if (rule.roleId && userRoles.has(rule.roleId)) {
-          return true;
-        }
-        // Group-level rule
-        if (rule.groupId && userGroupIds.has(rule.groupId)) {
-          return true;
-        }
-        return false;
-      });
-
-      if (!matches) {
-        throw new ForbiddenException('This document is not published to your school, role, or group');
-      }
+    // 6. Publication rules (#109): one of the document's rules must match the user
+    if (!(await isDocumentVisibleTo(this.prisma, actor, document.id))) {
+      throw new ForbiddenException(NOT_PUBLISHED_TO_YOU);
     }
   }
 
@@ -931,7 +916,6 @@ export class DocumentsService {
       where: { id: documentId },
       include: {
         space: { select: { id: true, schoolId: true, privacy: true } },
-        access: { select: { schoolId: true, roleId: true, groupId: true } },
       },
     });
 
