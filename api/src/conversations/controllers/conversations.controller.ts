@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
@@ -8,6 +8,7 @@ import {
   ListConversationsQueryDto,
   ReportAnswerDto,
   SaveAnswerDto,
+  UpdateConversationDto,
 } from '../dto/index.js';
 import {
   AnswerReportEntity,
@@ -90,6 +91,44 @@ export class ConversationsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<MessageEntity[]> {
     return this.conversationsService.findMessages(id, actor);
+  }
+
+  @Patch(':id')
+  @RequirePermission('conversations:update')
+  @ApiOperation({
+    summary: 'Rename a conversation (#124)',
+    description:
+      'Updates the title of a conversation owned by the authenticated user. Returns 404 for unknown, deleted, or another user’s conversation.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation UUID' })
+  @ApiResponse({ status: 200, description: 'Conversation renamed', type: ConversationEntity })
+  @ApiResponse({ status: 400, description: 'Invalid UUID or title' })
+  @ApiResponse({ status: 404, description: 'Conversation not found' })
+  async renameConversation(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateConversationDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<ConversationEntity> {
+    return this.conversationsService.rename(id, dto, actor);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('conversations:delete')
+  @ApiOperation({
+    summary: 'Soft-delete a conversation (#124)',
+    description:
+      'Soft-deletes a conversation owned by the authenticated user so it disappears from their history. Returns 404 for unknown, already-deleted, or another user’s conversation.',
+  })
+  @ApiParam({ name: 'id', description: 'Conversation UUID' })
+  @ApiResponse({ status: 204, description: 'Conversation soft-deleted' })
+  @ApiResponse({ status: 400, description: 'Invalid conversation UUID' })
+  @ApiResponse({ status: 404, description: 'Conversation not found' })
+  async deleteConversation(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    return this.conversationsService.remove(id, actor);
   }
 
   @Post(':id/messages')

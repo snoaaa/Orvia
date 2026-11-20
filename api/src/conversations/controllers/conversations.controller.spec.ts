@@ -11,6 +11,8 @@ describe('ConversationsController (#123)', () => {
     findAll: ReturnType<typeof vi.fn>;
     findById: ReturnType<typeof vi.fn>;
     findMessages: ReturnType<typeof vi.fn>;
+    rename: ReturnType<typeof vi.fn>;
+    remove: ReturnType<typeof vi.fn>;
   };
 
   const actor: AuthenticatedUser = {
@@ -32,6 +34,8 @@ describe('ConversationsController (#123)', () => {
       findAll: vi.fn(),
       findById: vi.fn(),
       findMessages: vi.fn(),
+      rename: vi.fn(),
+      remove: vi.fn(),
     };
     controller = new ConversationsController(mockService as unknown as ConversationsService);
   });
@@ -60,5 +64,22 @@ describe('ConversationsController (#123)', () => {
     const res = await controller.getMessages('conv-1', actor);
     expect(mockService.findMessages).toHaveBeenCalledWith('conv-1', actor);
     expect(res).toEqual([]);
+  });
+
+  it('delegates renameConversation to service.rename (#124)', async () => {
+    const expected = new ConversationDetailEntity({ id: 'conv-1', title: 'Renamed' });
+    mockService.rename.mockResolvedValueOnce(expected);
+
+    const res = await controller.renameConversation('conv-1', { title: 'Renamed' }, actor);
+    expect(mockService.rename).toHaveBeenCalledWith('conv-1', { title: 'Renamed' }, actor);
+    expect(res).toBe(expected);
+  });
+
+  it('delegates deleteConversation to service.remove (#124)', async () => {
+    mockService.remove.mockResolvedValueOnce(undefined);
+
+    const res = await controller.deleteConversation('conv-1', actor);
+    expect(mockService.remove).toHaveBeenCalledWith('conv-1', actor);
+    expect(res).toBeUndefined();
   });
 });

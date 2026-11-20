@@ -11,6 +11,7 @@ describe('ConversationsService (#123)', () => {
       count: ReturnType<typeof vi.fn>;
       findMany: ReturnType<typeof vi.fn>;
       findFirst: ReturnType<typeof vi.fn>;
+      updateMany: ReturnType<typeof vi.fn>;
     };
     message: {
       findMany: ReturnType<typeof vi.fn>;
@@ -48,6 +49,7 @@ describe('ConversationsService (#123)', () => {
         count: vi.fn(),
         findMany: vi.fn(),
         findFirst: vi.fn(),
+        updateMany: vi.fn(),
       },
       message: {
         findMany: vi.fn(),
@@ -259,6 +261,72 @@ describe('ConversationsService (#123)', () => {
       const messages = await service.findMessages('conv-1', student);
       expect(messages).toHaveLength(1);
       expect(messages[0].id).toBe('msg-1');
+    });
+  });
+
+  describe('rename (#124)', () => {
+    it('renames an owned conversation using conditional updateMany', async () => {
+      mockPrisma.conversation.findFirst
+        .mockResolvedValueOnce({ id: 'conv-1', userId: student.id })
+        .mockResolvedValueOnce({
+          id: 'conv-1',
+          userId: student.id,
+          spaceId: 'space-1',
+          title: 'New Title',
+          createdAt: new Date('2026-11-20T09:00:00Z'),
+          updatedAt: new Date('2026-11-20T09:05:00Z'),
+          space: { name: 'Math' },
+          _count: { messages: 2 },
+        });
+      mockPrisma.conversation.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      const updated = await service.rename('conv-1', { title: 'New Title' }, student);
+
+      expect(mockPrisma.conversation.updateMany).toHaveBeenCalledWith({
+        where: { id: 'conv-1', userId: student.id, deletedAt: null },
+        data: { title: 'New Title' },
+      });
+      expect(updated.title).toBe('New Title');
+      expect(updated.messageCount).toBe(2);
+    });
+
+    it('throws NotFoundException when renaming another user’s conversation or missing conversation', async () => {
+      mockPrisma.conversation.findFirst.mockResolvedValueOnce({ id: 'conv-1', userId: student.id });
+      await expect(service.rename('conv-1', { title: 'Hack' }, platformAdmin)).rejects.toThrow(NotFoundException);
+      expect(mockPrisma.conversation.updateMany).not.toHaveBeenCalled();
+
+      mockPrisma.conversation.findFirst.mockResolvedValueOnce(null);
+      await expect(service.rename('conv-missing', { title: 'Nope' }, student)).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when deleted concurrently before updateMany (count === 0)', async () => {
+      mockPrisma.conversation.findFirst.mockResolvedValueOnce({ id: 'conv-1', userId: student.id });
+      mockPrisma.conversation.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.rename('conv-1', { title: 'Race' }, student)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('remove (#124)', () => {
+    it('soft-deletes an owned conversation conditionally', async () => {
+      mockPrisma.conversation.findFirst.mockResolvedValueOnce({ id: 'conv-1', userId: student.id });
+      mockPrisma.conversation.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await service.remove('conv-1', student);
+
+      expect(mockPrisma.conversation.updateMany).toHaveBeenCalledWith({
+        where: { id: 'conv-1', userId: student.id, deletedAt: null },
+        data: { deletedAt: expect.any(Date), updatedAt: expect.any(Date) },
+      });
+    });
+
+    it('throws NotFoundException when deleting another user’s, missing, or concurrently deleted conversation', async () => {
+      mockPrisma.conversation.findFirst.mockResolvedValueOnce({ id: 'conv-1', userId: student.id });
+      await expect(service.remove('conv-1', platformAdmin)).rejects.toThrow(NotFoundException);
+      expect(mockPrisma.conversation.updateMany).not.toHaveBeenCalled();
+
+      mockPrisma.conversation.findFirst.mockResolvedValueOnce({ id: 'conv-1', userId: student.id });
+      mockPrisma.conversation.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.remove('conv-1', student)).rejects.toThrow(NotFoundException);
     });
   });
 });
