@@ -36,3 +36,16 @@ export class AddDocumentAccessDto {
   @Type(() => DocumentAccessTargetDto)
   rules: DocumentAccessTargetDto[];
 }
+
+/** Body of PUT /documents/:id/access (#110): the complete new list; an empty list makes the document a draft. */
+export class ReplaceDocumentAccessDto {
+  @ApiProperty({
+    type: [DocumentAccessTargetDto],
+    description: 'All the targets the document must be published to (0-50). Targets not listed are removed.',
+  })
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => DocumentAccessTargetDto)
+  rules: DocumentAccessTargetDto[];
+}

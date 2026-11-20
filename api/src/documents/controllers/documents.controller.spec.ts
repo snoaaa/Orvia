@@ -52,7 +52,7 @@ describe('DocumentsController', () => {
       deleteDocument: vi.fn(),
     };
 
-    mockDocumentAccessService = { listRules: vi.fn(), addRules: vi.fn() };
+    mockDocumentAccessService = { listRules: vi.fn(), addRules: vi.fn(), replaceRules: vi.fn(), removeRule: vi.fn() };
 
     controller = new DocumentsController(
       mockDocumentsService as unknown as DocumentsService,
@@ -212,6 +212,22 @@ describe('DocumentsController', () => {
         mockActor,
         expect.objectContaining({ ip: '127.0.0.1' }),
       );
+    });
+  });
+
+  describe('changing document access (#110)', () => {
+    const req = { ip: '127.0.0.1', header: vi.fn().mockReturnValue(undefined) } as any;
+
+    it('replaces the rules with the audit context of the request', async () => {
+      mockDocumentAccessService.replaceRules.mockResolvedValueOnce([]);
+      const dto = { rules: [] };
+      expect(await controller.replaceDocumentAccess('doc-1', dto, req, mockActor)).toEqual([]);
+      expect(mockDocumentAccessService.replaceRules).toHaveBeenCalledWith('doc-1', dto, mockActor, expect.objectContaining({ ip: '127.0.0.1' }));
+    });
+
+    it('removes one rule and answers nothing', async () => {
+      expect(await controller.removeDocumentAccess('doc-1', 'rule-1', req, mockActor)).toBeUndefined();
+      expect(mockDocumentAccessService.removeRule).toHaveBeenCalledWith('doc-1', 'rule-1', mockActor, expect.objectContaining({ ip: '127.0.0.1' }));
     });
   });
 

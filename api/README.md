@@ -568,6 +568,35 @@ yet, so each rule also stores the document's `school_id` to make that filter che
 `GET /documents` does not filter by rules yet (#111). After pulling, run `npx prisma generate` and
 `npm run db:migrate` (migration `10_document_access_targets`).
 
+### Change or remove access rules (#110, `documents:manage`)
+
+| Endpoint | Answer |
+|---|---|
+| `PUT /documents/{id}/access` `{ "rules": [...] }` | 200 with the new rules. Targets not listed are removed, new ones added, the others kept; `[]` makes the document a draft again |
+| `DELETE /documents/{id}/access/{ruleId}` | 204. A rule of another document → 404 |
+
+Same permissions and target checks as `POST`. Both record `document_access_changed` (targets `added` and
+`removed`), unless nothing changed. Changes to one document's rules run one at a time (its row is locked), also
+`POST`.
+
+**How a change reaches the readers:**
+- **Server:** visibility is computed from the rules on every request, so a reader who lost the document gets 403
+  on their very next request. Retrieval will use the same filter, so it needs nothing more. There is no server cache.
+- **Downloads:** they are sent with `Cache-Control: private, no-cache` (was `max-age=3600`). A browser or the app
+  must ask again before reusing a file, and a reader who lost access gets 403 instead of an old copy.
+- **Mobile sync:** every change compares who could see the document before and after. Document managers are left
+  out, because they see it whatever the rules. One `sync_changes` row is written per reader:
+
+| `entity_type` | `entity_id` | `operation` | Meaning for the app at its next sync |
+|---|---|---|---|
+| `document` | the document | `delete` | the reader lost it: remove it and its files from the offline data |
+| `document` | the document | `insert` | the reader gained it: it may now be listed and downloaded |
+
+  The `offline_selections` rows of the lost document are deleted for the devices of those readers. The sync
+  endpoint itself (`POST /sync`) is still a stub; whoever builds it reads these rows.
+  A `school` rule reaches every user of the school, so publishing to or unpublishing from a whole school writes
+  one row per user.
+
 ## Audit trail
 
 `src/audit/` implements the non-repudiation requirement (spec section 4.5): an audit of
@@ -619,6 +648,7 @@ yet, so each rule also stores the document's `school_id` to make that filter che
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `documents` | `document_published` | A document is published to new targets (`POST /documents/{id}/access`); not recorded when every target was already there | the admin or content manager | `document` | `spaceId`, `schoolId`, `rules` (the `type` and `targetId` of each target added) |
+| `documents` | `document_access_changed` | The rules of a document are replaced (`PUT /documents/{id}/access`) or one is removed (`DELETE /documents/{id}/access/{ruleId}`); not recorded when nothing changed | the admin or content manager | `document` | `spaceId`, `schoolId`, `added` and `removed` (the `type` and `targetId` of each target) |
 | `security` | `access_denied` | Any HTTP 403 | the user if authenticated | `route` (`METHOD /path`) | `reason`, `requiredPermission` |
 | `security` | `account_locked` | An account is locked (e.g. too many failed logins) | anonymous | `user` | `email`, `reason`, `failedAttempts`, `lockedUntil` |
 

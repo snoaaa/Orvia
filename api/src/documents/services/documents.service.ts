@@ -978,7 +978,8 @@ export class DocumentsService {
       'Content-Disposition': `${disposition}; filename="${ascii}"; filename*=UTF-8''${utf8}`,
       'ETag': `"${version.checksum}"`,
       'Last-Modified': version.updatedAt.toUTCString(),
-      'Cache-Control': 'private, max-age=3600',
+      // Revalidate on every use: access can be withdrawn at any time (#110), so no copy may be reused unchecked.
+      'Cache-Control': 'private, no-cache',
     };
 
     if (range.isRange && range.contentRange) {
