@@ -1,8 +1,8 @@
 import { CommonModule } from '@angular/common';
 import { Component, inject } from '@angular/core';
 import { ActivatedRoute, RouterModule } from '@angular/router';
-import { CardComponent } from '../../theme/shared/components/card/card.component';
-import { PortalSessionService } from '../services/portal-session.service';
+import { CardComponent } from 'src/app/admin/theme/shared/components/card/card.component';
+import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
 
 @Component({
   selector: 'app-portal-section',

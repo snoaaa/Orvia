@@ -4,7 +4,7 @@ import { Component, OnInit, inject } from '@angular/core';
 import { RouterModule } from '@angular/router';
 
 // Project import
-import { PortalSessionService } from '../../identity/services/portal-session.service';
+import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
 import { BreadcrumbComponent } from '../../shared/components/breadcrumb/breadcrumb.component';
 import { LayoutStateService } from '../../shared/service/layout-state.service';
 import { SharedModule } from '../../shared/shared.module';
