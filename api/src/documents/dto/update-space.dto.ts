@@ -8,6 +8,7 @@ import {
   SPACE_PRIVACY_LEVELS,
   type SpaceLanguage,
   type SpacePrivacy,
+  normalizedLanguage,
   trimmed,
 } from './create-space.dto.js';
 
@@ -45,6 +46,7 @@ export class UpdateSpaceDto {
   description?: string | null;
 
   @ApiPropertyOptional({ enum: SPACE_LANGUAGES, description: 'Main language' })
+  @Transform(normalizedLanguage)
   @ValidateIf(provided)
   @IsIn(SPACE_LANGUAGES)
   language?: SpaceLanguage;
