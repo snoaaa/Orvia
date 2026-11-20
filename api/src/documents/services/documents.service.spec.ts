@@ -334,6 +334,20 @@ describe('DocumentsService', () => {
       expect(doc.id).toBe('doc-1');
       expect(doc.title).toBe('Notes');
       expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
+      expect(doc.currentVersion).toBeNull();
+    });
+
+    it('returns the current version, like the list (#111)', async () => {
+      const now = new Date();
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        id: 'doc-1', title: 'Notes', author: '', tags: '', space: { schoolId: 'school-1' }, currentVersionId: 'v2', createdAt: now, updatedAt: now,
+      });
+      mockPrisma.documentVersion.findUnique = vi.fn().mockResolvedValueOnce({
+        id: 'v2', documentId: 'doc-1', versionNo: 2, storageKey: 'k', mimeType: 'application/pdf', checksum: 'c', status: 'indexing', pageCount: 1, createdAt: now, updatedAt: now,
+      });
+      const doc = await service.findDocumentById('doc-1', schoolAdmin);
+      expect(mockPrisma.documentVersion.findUnique).toHaveBeenCalledWith({ where: { id: 'v2' } });
+      expect(doc.currentVersion).toMatchObject({ id: 'v2', versionNo: 2, status: 'indexing' });
     });
 
     describe('for a reader who does not manage documents (#109)', () => {

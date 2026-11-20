@@ -22,8 +22,8 @@ import {
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
-import { normalizeTags, tagWhere, typeWhere } from '../utils/document-filters.util.js';
-import { isDocumentVisibleTo, visibleDocumentsWhere } from '../utils/document-visibility.util.js';
+import { normalizeTags, tagWhere } from '../utils/document-filters.util.js';
+import { isDocumentVisibleTo, versionFiltersWhere, visibleDocumentsWhere } from '../utils/document-visibility.util.js';
 import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditAction } from '../../audit/constants/audit-events.constants.js';
@@ -65,10 +65,7 @@ export class DocumentsService {
 
     const schoolId = schoolIdFilter(actor, 'documents:read');
     const visible = visibleDocumentsWhere(actor);
-    const currentVersion: Prisma.DocumentVersionWhereInput = {
-      ...(query?.status ? { status: query.status } : {}),
-      ...(query?.type ? typeWhere(query.type) : {}),
-    };
+    const versionFilters = versionFiltersWhere(actor, query?.status, query?.type);
     const conditions: Prisma.DocumentWhereInput[] = [
       { deletedAt: null },
       ...(schoolId ? [{ space: { schoolId } }] : []),
@@ -76,7 +73,7 @@ export class DocumentsService {
       ...(query?.spaceId ? [{ spaceId: query.spaceId }] : []),
       ...(query?.q ? [{ title: { contains: query.q } }] : []),
       ...(query?.tags ?? []).map(tagWhere),
-      ...(Object.keys(currentVersion).length > 0 ? [{ currentVersion }] : []),
+      ...(versionFilters ? [versionFilters] : []),
     ];
     const where: Prisma.DocumentWhereInput = { AND: conditions };
 
@@ -111,7 +108,10 @@ export class DocumentsService {
     if (!canInSchool(actor, 'documents:manage', doc.space.schoolId) && !(await isDocumentVisibleTo(this.prisma, actor, doc.id))) {
       throw new ForbiddenException(NOT_PUBLISHED_TO_YOU);
     }
-    return DocumentMapper.toEntity(doc);
+    const currentVersion = doc.currentVersionId
+      ? await this.prisma.documentVersion.findUnique({ where: { id: doc.currentVersionId } })
+      : null;
+    return DocumentMapper.toEntity(doc, currentVersion);
   }
 
   /** Loads a document and throws 403 unless `actor` has `permission` in the school of its space. */

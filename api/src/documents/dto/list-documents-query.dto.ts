@@ -43,7 +43,11 @@ export class ListDocumentsQueryDto {
     example: 'math,physics',
     description: 'Comma-separated tags; a document must carry all of them as whole tags (up to 10)',
   })
-  @Transform(({ value }) => (typeof value === 'string' ? parseTags(value) : value))
+  // `?tags=a,b` and repeated `?tags=a,b&tags=c` both give ['a', 'b', 'c'].
+  @Transform(({ value }) => {
+    if (Array.isArray(value)) return value.flatMap((v) => (typeof v === 'string' ? parseTags(v) : [v]));
+    return typeof value === 'string' ? parseTags(value) : value;
+  })
   @IsString({ each: true })
   @ArrayMaxSize(10)
   @IsOptional()

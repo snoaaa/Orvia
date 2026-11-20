@@ -576,18 +576,23 @@ yet, so each rule also stores the document's `school_id` to make that filter che
 | School admin, content manager, staff with `documents:manage` | every document of their schools, any status (drafts included) |
 | Staff, students, parents | documents published to them (school, role, class, group or user rule) that have an `available` version |
 
-Deleted documents are never listed. Each item carries its `currentVersion` (`versionNo`, `status`, `mimeType`...).
+Deleted documents are never listed. Each item carries its `currentVersion` (`versionNo`, `status`, `mimeType`...), and so
+does `GET /documents/{id}`.
 
 | Query | Effect |
 |---|---|
 | `spaceId` | one space |
 | `q` | title contains the text, ignoring case (1-200 characters) |
-| `tags=math,exam` | carries **all** these tags, as whole tags (`math` does not match `mathematics`), up to 10 |
+| `tags=math,exam` | carries **all** these tags, as whole tags (`math` does not match `mathematics`), up to 10; `tags` may be repeated (`tags=math&tags=exam`) |
 | `status` | status of the current version: `pending`, `ocr`, `segmentation`, `indexing`, `available`, `error` (spec §3.1) |
 | `type` | file type of the current version: `pdf`, `image`, `word`, `presentation`, `spreadsheet`, `text` |
 | `page`, `limit` | the shared pagination contract (`limit` 1-100), newest first |
 
 Filters combine with AND and with the caller's scope; an invalid value → 400.
+
+`status` and `type` look at the current version only where the caller manages documents. Elsewhere the caller only
+sees available versions, so `status` other than `available` matches nothing there, and `type` matches a document
+when one of its available versions has that type (a replacement still in processing does not count).
 
 - **Processing:** readers never see a document still in processing. They see it once **any** version is `available`, so
   replacing a file does not hide the document while the new version is processed. The same rule applies to
