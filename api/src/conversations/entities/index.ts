@@ -7,4 +7,7 @@ export * from './message-generation-status.entity.js';
 export * from './message-reference.entity.js';
 export * from './retrieved-passage.entity.js';
 export * from './saved-answer.entity.js';
+export * from './paginated-saved-answers.entity.js';
+export * from './shared-answer.entity.js';
 export * from './answer-report.entity.js';
+export * from './paginated-answer-reports.entity.js';
