@@ -498,9 +498,16 @@ export class UserEditComponent implements OnInit {
         this.user.update((prev) => ({ ...prev, ...updatedUser, assignments: updatedUser.assignments ?? prev?.assignments }));
         this.modalLoading.set(false);
         this.closeModal();
-        this.successMessage.set('User reactivated successfully.');
+        const isInvited = updatedUser.status === 'INVITED';
+        this.successMessage.set(
+          isInvited
+            ? 'User reactivated (status restored to Invited).'
+            : 'User reactivated successfully.'
+        );
         this.toast.success('User Reactivated', {
-          description: 'Account access has been restored.'
+          description: isInvited
+            ? 'Invitation flow resumed (status restored to Invited).'
+            : 'Account access has been restored.'
         });
       },
       error: (error) => {

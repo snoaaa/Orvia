@@ -75,8 +75,6 @@ export interface ActiveSession {
 export interface UpdateUserPayload {
   email?: string;
   fullName?: string;
-  status?: UserStatus;
-  schoolId?: string;
 }
 
 export interface UserListFilter {
