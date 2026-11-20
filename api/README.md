@@ -758,3 +758,11 @@ With `AUDIT_DEV_TOOLS=true` (and `NODE_ENV` not `production`), Swagger shows
 - `GET /audit/dev/forbidden` – always answers 403 (recorded as `access_denied`)
 
 Otherwise these routes answer 404. Remove them once the real auth endpoints exist.
+
+## Conversations (#123)
+
+Requires `conversations:read`. Every user (including platform and school admins) only reads **their own** conversations here; monitoring uses dedicated routes. Soft-deleted conversations and soft-deleted messages are never returned, and requesting another user's conversation returns `404`.
+
+- `GET /conversations`: paginated (`page`, `limit` capped at `100`), ordered newest first (`updatedAt DESC, createdAt DESC, id DESC`). Optional filters: `spaceId` (UUID) and `q` (title search, trimmed).
+- `GET /conversations/:id`: returns the conversation with chronological messages (`createdAt ASC`) and citations (`documentId`, `versionId`, `documentName`, `versionNumber`, `pageOrImageId`, `excerpt`, `coordinates`, `available`).
+- `GET /conversations/:id/messages`: returns the chronological messages and citations for the conversation.

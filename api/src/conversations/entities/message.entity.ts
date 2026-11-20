@@ -1,4 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MessageCitationEntity } from './message-citation.entity.js';
 
 export class MessageEntity {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174021', description: 'Message UUID' })
@@ -16,14 +17,17 @@ export class MessageEntity {
   @ApiProperty({ example: 'gpt-4o-mini', description: 'Model used to generate message' })
   modelUsed: string;
 
-  @ApiProperty({ example: { temperature: 0.2, max_tokens: 500 }, description: 'Generation parameters' })
+  @ApiProperty({ example: { temperature: 0.2, max_tokens: 500 }, nullable: true, description: 'Generation parameters' })
   parameters: Record<string, unknown> | null;
 
-  @ApiProperty({ example: 'completed', description: 'Message status (streaming, completed, failed)' })
+  @ApiProperty({ example: 'completed', description: 'Message status (pending, generating, completed, failed)' })
   status: string;
 
-  @ApiProperty({ example: { userId: '123e4567-e89b-12d3-a456-426614174000', role: 'STUDENT' }, description: 'Auth snapshot at time of prompt' })
-  authSnapshot: Record<string, unknown> | null;
+  @ApiPropertyOptional({ type: [MessageCitationEntity], description: 'Source citations supporting this message' })
+  citations?: MessageCitationEntity[];
+
+  @ApiPropertyOptional({ example: null, nullable: true, description: 'Auth snapshot (internal/monitoring only)' })
+  authSnapshot?: Record<string, unknown> | null;
 
   @ApiProperty({ example: '2026-10-17T12:00:00.000Z', description: 'Creation timestamp' })
   createdAt: Date;
@@ -31,7 +35,7 @@ export class MessageEntity {
   @ApiProperty({ example: '2026-10-17T12:00:00.000Z', description: 'Last update timestamp' })
   updatedAt: Date;
 
-  @ApiProperty({ example: null, required: false, description: 'Soft deletion timestamp' })
+  @ApiPropertyOptional({ example: null, description: 'Soft deletion timestamp' })
   deletedAt?: Date | null;
 
   constructor(partial: Partial<MessageEntity>) {
