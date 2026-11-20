@@ -113,13 +113,16 @@ export class DocumentProcessingStatusService {
     const job = await tx.processingJob.findFirst({ where: { versionId }, orderBy: { createdAt: 'desc' } });
     if (!job) return;
     const finished = status === 'available' || status === 'error';
+    // Processing again (error -> pending) is a new run: its duration counts from now, not from the first run.
+    const restarted = status === 'pending';
     await tx.processingJob.update({
       where: { id: job.id },
       data: {
         status: JOB_STATUS[status],
         error,
         ...(STEPS.includes(status) ? { step: status } : {}),
-        ...(finished ? { durationMs: Math.max(0, now.getTime() - job.createdAt.getTime()) } : {}),
+        ...(restarted ? { startedAt: now, durationMs: 0 } : {}),
+        ...(finished ? { durationMs: Math.max(0, now.getTime() - job.startedAt.getTime()) } : {}),
       },
     });
   }

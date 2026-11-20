@@ -338,6 +338,8 @@ model ProcessingJob {
   ocrConfidence Float    @default(1.0) @map("ocr_confidence")
   pageCount     Int      @default(0) @map("page_count")
   chunkCount    Int      @default(0) @map("chunk_count")
+  /// When the current run started: creation, or the last retry (error -> pending). durationMs counts from here.
+  startedAt     DateTime @default(now()) @map("started_at") @db.DateTime(3)
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 

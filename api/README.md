@@ -620,15 +620,16 @@ any step before available ──► error (reason required) ──► pending (p
   status, reason?)` (exported by `DocumentsModule`). Another order → 409, `error` without a reason → 400, the same
   status again → nothing changes.
 - **Processing jobs:** each change is mirrored on the version's latest processing job: `step`, then `in_progress`,
-  `completed` or `failed`, with the `error` and `duration_ms`.
+  `completed` or `failed`, with the `error` and `duration_ms`. `duration_ms` counts from `started_at`, the start of the
+  current run: processing a failed version again (`error` → `pending`) starts a new run.
 - **First available version:** the document's readers get an `insert` sync change, since that's when they can see it.
   Rule changes (#109, #110) on a document with no available version write no sync changes.
 - **`GET /documents/{id}/status`** (`documents:manage`): the current version's `status`, `statusError` and
   `statusChangedAt`, plus its processing jobs (`steps`). Poll it to follow processing. The `currentVersion` of
   `GET /documents` carries the same fields for managers.
 - **Readers** (staff, students and parents who do not manage documents) never see processing states:
-  - Their `currentVersion` and "latest" download or stream are the **newest available** version, never a version
-    still in processing.
+  - Their `currentVersion` (in `GET /documents` and `GET /documents/{id}`) and "latest" download or stream are the
+    **newest available** version, never a version still in processing.
   - They never get `statusError`.
   - Before any version is available, the document is invisible to them (403).
 - **The worker is still a stub:** it queues the job and leaves the version `pending`. Until the real OCR,

@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
-import type { DocumentVersion, Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, canInSchool, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -83,32 +83,27 @@ export class DocumentsService {
       this.prisma.document.count({ where }),
       this.prisma.document.findMany({
         where,
-        include: { currentVersion: true, space: { select: { schoolId: true } } },
+        include: {
+          currentVersion: true,
+          space: { select: { schoolId: true } },
+          // #112: the latest available version, which is what readers see as the current one.
+          versions: { where: { status: 'available' }, orderBy: { versionNo: 'desc' }, take: 1 },
+        },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
       }),
     ]);
 
-    // #112: readers never see processing states. For a document they do not manage, their current version
-    // is the latest available one (a replacement still in processing stays invisible to them).
-    const readerDocIds = docs.filter((d) => !canInSchool(actor, 'documents:manage', d.space.schoolId)).map((d) => d.id);
-    const latestAvailable = new Map<string, DocumentVersion>();
-    if (readerDocIds.length > 0) {
-      const available = await this.prisma.documentVersion.findMany({
-        where: { documentId: { in: readerDocIds }, status: 'available' },
-        orderBy: { versionNo: 'desc' },
-      });
-      for (const v of available) if (!latestAvailable.has(v.documentId)) latestAvailable.set(v.documentId, v);
-    }
-
     const totalPages = Math.ceil(total / limit) || 1;
 
     return new PaginatedDocumentsEntity({
-      data: docs.map(({ space: _space, currentVersion, ...d }) =>
-        readerDocIds.includes(d.id)
-          ? DocumentMapper.toEntity(d, latestAvailable.get(d.id) ?? null, { forReader: true })
-          : DocumentMapper.toEntity(d, currentVersion),
+      // #112: readers never see processing states. For a document they do not manage, their current version
+      // is the latest available one (a replacement still in processing stays invisible to them).
+      data: docs.map(({ space, currentVersion, versions: [latestAvailable], ...d }) =>
+        canInSchool(actor, 'documents:manage', space.schoolId)
+          ? DocumentMapper.toEntity(d, currentVersion)
+          : DocumentMapper.toEntity(d, latestAvailable ?? null, { forReader: true }),
       ),
       total,
       page,
@@ -168,10 +163,19 @@ export class DocumentsService {
     if (!canInSchool(actor, 'documents:manage', doc.space.schoolId) && !(await isDocumentVisibleTo(this.prisma, actor, doc.id))) {
       throw new ForbiddenException(NOT_PUBLISHED_TO_YOU);
     }
+    const { space, ...rest } = doc;
+    if (!canInSchool(actor, 'documents:manage', space.schoolId)) {
+      // #112: like the list, a reader's current version is the latest available one, without the failure reason.
+      const latestAvailable = await this.prisma.documentVersion.findFirst({
+        where: { documentId: doc.id, status: 'available' },
+        orderBy: { versionNo: 'desc' },
+      });
+      return DocumentMapper.toEntity(rest, latestAvailable, { forReader: true });
+    }
     const currentVersion = doc.currentVersionId
       ? await this.prisma.documentVersion.findUnique({ where: { id: doc.currentVersionId } })
       : null;
-    return DocumentMapper.toEntity(doc, currentVersion);
+    return DocumentMapper.toEntity(rest, currentVersion);
   }
 
   /** Loads a document and throws 403 unless `actor` has `permission` in the school of its space. */

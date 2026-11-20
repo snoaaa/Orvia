@@ -160,6 +160,21 @@ describe('Document processing status (e2e)', () => {
       expect(check(await status(ids.AdminA, doc.id), 200).body.currentVersion).toMatchObject({ status: 'pending', statusError: null });
     });
 
+    it('the duration of a retried job counts from the retry, not from the first run', async () => {
+      const doc = await document('Retry');
+      await walk(doc.v1, ['ocr']);
+      check(await simulate(ids.ManagerA, doc.v1, { status: 'error', reason: 'OCR crashed' }), 200);
+      // The failed run started two days ago.
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 3600 * 1000);
+      await prisma.processingJob.updateMany({ where: { versionId: doc.v1 }, data: { startedAt: twoDaysAgo, createdAt: twoDaysAgo } });
+
+      await walk(doc.v1, ['pending', 'segmentation', 'indexing', 'available']);
+      const job = await prisma.processingJob.findFirstOrThrow({ where: { versionId: doc.v1 } });
+      expect(job.status).toBe('completed');
+      expect(job.durationMs).toBeLessThan(60_000);
+      expect(job.startedAt.getTime()).toBeGreaterThan(twoDaysAgo.getTime());
+    });
+
     it('only managers of the school may use the simulation route', async () => {
       const doc = await document('Dev route');
       check(await simulate(ids.StudentA, doc.v1, { status: 'ocr' }), 403);
@@ -200,6 +215,13 @@ describe('Document processing status (e2e)', () => {
 
       expect(check(await download(ids.StudentA, doc.id), 200).text).toBe('content v1');
       expect(check(await download(ids.ManagerA, doc.id), 200).text).toBe('content v2');
+
+      // GET /documents/:id agrees with the list.
+      const one = async (as: string) =>
+        check(await http().get(`/documents/${doc.id}`).set('Authorization', await bearer(as)), 200).body.currentVersion;
+      expect(await one(ids.StudentA)).toMatchObject({ id: doc.v1, versionNo: 1, status: 'available' });
+      expect(await one(ids.StudentA)).not.toHaveProperty('statusError');
+      expect(await one(ids.ManagerA)).toMatchObject({ id: v2, versionNo: 2, status: 'segmentation', statusError: null });
 
       // The second available version announces nothing: readers already had the document.
       await walk(v2, ['indexing']);

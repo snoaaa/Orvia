@@ -350,6 +350,27 @@ describe('DocumentsService', () => {
       expect(doc.currentVersion).toMatchObject({ id: 'v2', versionNo: 2, status: 'indexing' });
     });
 
+    it('gives a reader the latest available version instead, without the failure reason (#112)', async () => {
+      const now = new Date();
+      mockPrisma.document.findUnique.mockResolvedValueOnce({
+        id: 'doc-1', title: 'Notes', author: '', tags: '', space: { schoolId: 'school-1' }, currentVersionId: 'v2', createdAt: now, updatedAt: now,
+      });
+      mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-1' }); // published to the reader
+      mockPrisma.documentVersion.findFirst.mockResolvedValueOnce({
+        id: 'v1', documentId: 'doc-1', versionNo: 1, storageKey: 'k', mimeType: 'application/pdf', checksum: 'c', status: 'available', statusError: null, pageCount: 1, createdAt: now, updatedAt: now,
+      });
+      const reader = { ...studentUser, assignments: [{ ...studentUser.assignments[0], permissions: ['documents:read'] }] };
+      const doc = await service.findDocumentById('doc-1', reader);
+      expect(mockPrisma.documentVersion.findFirst).toHaveBeenCalledWith({
+        where: { documentId: 'doc-1', status: 'available' },
+        orderBy: { versionNo: 'desc' },
+      });
+      const sent = JSON.parse(JSON.stringify(doc));
+      expect(sent.currentVersion).toMatchObject({ id: 'v1', status: 'available' });
+      expect(sent.currentVersion).not.toHaveProperty('statusError');
+      expect(sent).not.toHaveProperty('space');
+    });
+
     describe('for a reader who does not manage documents (#109)', () => {
       const reader = {
         ...studentUser,
@@ -2065,6 +2086,7 @@ describe('DocumentsService', () => {
           updatedAt: now,
           deletedAt: null,
           space: { schoolId: 'school-1' },
+          versions: [],
           currentVersion: { id: 'v1', documentId: 'doc-1', versionNo: 3, storageKey: 'k', mimeType: 'application/pdf', checksum: 'c', status: 'available', pageCount: 2, createdAt: now, updatedAt: now },
         },
       ]);
@@ -2082,7 +2104,9 @@ describe('DocumentsService', () => {
 
       beforeEach(() => {
         mockPrisma.document.count.mockResolvedValue(1);
-        mockPrisma.document.findMany.mockResolvedValue([{ ...doc, currentVersion: version('v3', 3, 'error', 'OCR failed') }]);
+        mockPrisma.document.findMany.mockResolvedValue([
+          { ...doc, currentVersion: version('v3', 3, 'error', 'OCR failed'), versions: [version('v2', 2, 'available')] },
+        ]);
       });
 
       it('a manager sees the current version, its status and failure reason', async () => {
@@ -2092,17 +2116,20 @@ describe('DocumentsService', () => {
       });
 
       it('a reader sees the latest available version instead, without any failure reason', async () => {
-        mockPrisma.documentVersion.findMany.mockResolvedValueOnce([version('v2', 2, 'available'), version('v1', 1, 'available')]);
         const res = await service.findAllDocuments(reader);
-        expect(mockPrisma.documentVersion.findMany).toHaveBeenCalledWith({
-          where: { documentId: { in: ['doc-1'] }, status: 'available' },
+        // Read in the same query as the documents: only the latest available version of each.
+        expect(mockPrisma.document.findMany.mock.calls[0][0].include.versions).toEqual({
+          where: { status: 'available' },
           orderBy: { versionNo: 'desc' },
+          take: 1,
         });
+        expect(mockPrisma.documentVersion.findMany).not.toHaveBeenCalled();
         expect(res.data[0].currentVersion).toMatchObject({ id: 'v2', status: 'available' });
         // As sent over HTTP: no failure reason, no internal space field.
         const sent = JSON.parse(JSON.stringify(res.data[0]));
         expect(sent.currentVersion).not.toHaveProperty('statusError');
         expect(sent).not.toHaveProperty('space');
+        expect(sent).not.toHaveProperty('versions');
       });
     });
   });

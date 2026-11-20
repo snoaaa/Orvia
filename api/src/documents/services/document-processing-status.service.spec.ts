@@ -17,7 +17,7 @@ describe('DocumentProcessingStatusService (#112)', () => {
     syncChange: { createMany: vi.fn() },
   };
   const service = new DocumentProcessingStatusService(prisma as unknown as PrismaService);
-  const jobCreated = new Date(Date.now() - 5000);
+  const jobStarted = new Date(Date.now() - 5000);
   const at = (status: DocumentVersionStatus) => prisma.$queryRaw.mockResolvedValue([{ status }]);
 
   beforeEach(() => {
@@ -25,7 +25,7 @@ describe('DocumentProcessingStatusService (#112)', () => {
     prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => Promise<unknown>) => run(prisma));
     at('pending');
     prisma.documentVersion.findUniqueOrThrow.mockResolvedValue({ documentId: 'doc-1', statusError: null, statusChangedAt: new Date(0) });
-    prisma.processingJob.findFirst.mockResolvedValue({ id: 'job-1', createdAt: jobCreated });
+    prisma.processingJob.findFirst.mockResolvedValue({ id: 'job-1', createdAt: new Date(0), startedAt: jobStarted });
     prisma.document.findUnique.mockResolvedValue({
       deletedAt: null,
       space: { schoolId: 'school-a' },
@@ -67,6 +67,7 @@ describe('DocumentProcessingStatusService (#112)', () => {
     const job = prisma.processingJob.update.mock.calls[0][0].data;
     expect(job).toMatchObject({ status: 'failed', error: 'Page 3 is unreadable' });
     expect(job.durationMs).toBeGreaterThanOrEqual(5000);
+    expect(job.durationMs).toBeLessThan(60_000); // from the start of this run, not from the job's creation
   });
 
   it('requires a reason for error, before touching anything', async () => {
@@ -78,7 +79,10 @@ describe('DocumentProcessingStatusService (#112)', () => {
     at('error');
     await service.setStatus('v1', 'pending');
     expect(prisma.documentVersion.update.mock.calls[0][0].data).toMatchObject({ status: 'pending', statusError: null });
-    expect(prisma.processingJob.update.mock.calls[0][0].data).toMatchObject({ status: 'pending', error: null });
+    const job = prisma.processingJob.update.mock.calls[0][0].data;
+    expect(job).toMatchObject({ status: 'pending', error: null, durationMs: 0 });
+    expect(job.startedAt).toBeInstanceOf(Date);
+    expect(Date.now() - job.startedAt.getTime()).toBeLessThan(1000);
   });
 
   it.each([
