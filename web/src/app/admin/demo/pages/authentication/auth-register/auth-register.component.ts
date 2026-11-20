@@ -1,5 +1,5 @@
 // Angular import
-import { Component } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { RouterModule } from '@angular/router';
 
 @Component({
@@ -9,6 +9,8 @@ import { RouterModule } from '@angular/router';
   styleUrl: './auth-register.component.scss'
 })
 export class AuthRegisterComponent {
+  readonly showPassword = signal(false);
+
   // public method
   SignUpOptions = [
     {
@@ -24,4 +26,8 @@ export class AuthRegisterComponent {
       name: 'Facebook'
     }
   ];
+
+  togglePasswordVisibility(): void {
+    this.showPassword.update((v) => !v);
+  }
 }

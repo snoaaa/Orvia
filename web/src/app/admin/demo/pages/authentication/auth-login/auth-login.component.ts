@@ -28,6 +28,7 @@ export class AuthLoginComponent {
 
   readonly loading = signal(false);
   readonly error = signal('');
+  readonly showPassword = signal(false);
 
   // public method
   SignInOptions = [
@@ -36,6 +37,10 @@ export class AuthLoginComponent {
       name: 'Google'
     }
   ];
+
+  togglePasswordVisibility(): void {
+    this.showPassword.update((v) => !v);
+  }
 
   /** Signs in through the backend and, on success, redirects to the admin dashboard. */
   signIn(email: string, password: string): void {

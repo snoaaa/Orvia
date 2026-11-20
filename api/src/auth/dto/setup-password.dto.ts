@@ -1,8 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 /**
- * Request payload for setting the initial password of an invited administrator (Issue #26).
+ * Request payload for setting the initial password of an invited administrator (Issue #26 / #90).
  */
 export class SetupPasswordDto {
   @ApiProperty({
@@ -15,7 +15,8 @@ export class SetupPasswordDto {
 
   @ApiProperty({
     example: 'SecureAdminPassword2026!',
-    description: 'New password for the administrator account (minimum 8 characters, maximum 128 characters)',
+    description:
+      'New password for the administrator account (8–128 characters, upper and lowercase letters, and at least one number or special character)',
     minLength: 8,
     maxLength: 128,
   })
@@ -23,6 +24,10 @@ export class SetupPasswordDto {
   @IsNotEmpty()
   @MinLength(8)
   @MaxLength(128)
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9\W_]).+$/, {
+    message:
+      'Password must contain uppercase and lowercase letters, and at least one number or special character',
+  })
   newPassword: string;
 }
 
