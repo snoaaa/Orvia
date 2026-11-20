@@ -252,6 +252,15 @@ describe('Visible spaces (e2e)', () => {
       expect((res.body.data as { id: string }[]).map((s) => labelOf.get(s.id)).sort((a, b) => (a ?? '').localeCompare(b ?? ''))).toEqual(['roleGuest', 'roleStaff']);
     });
 
+    it('trims the search: "  math  " finds "Math 4A"', async () => {
+      const math = await prisma.space.create({ data: { schoolId: schools.A, name: `Math 4A ${stamp}` } });
+      const padded = encodeURIComponent(`  math 4a ${stamp}  `);
+      const res = check(await get(ids.AdminA, `/documents/spaces?search=${padded}`), 200);
+      expect((res.body.data as { id: string }[]).map((s) => s.id)).toEqual([math.id]);
+      // A blank search is ignored, like no search.
+      check(await get(ids.AdminA, '/documents/spaces?search=%20%20%20'), 200);
+    });
+
     it('search never widens the scope', async () => {
       const res = check(await get(ids.StudentPlain, `/documents/spaces?search=${prefix}%20roleStaff`), 200);
       expect(res.body.data).toEqual([]);

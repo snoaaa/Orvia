@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
 /** Query for the paginated space list. Same `page`/`limit` contract as the other lists. */
@@ -20,6 +20,7 @@ export class ListSpacesQueryDto {
   limit?: number;
 
   @ApiPropertyOptional({ description: 'Only the spaces whose name contains this text (case-insensitive, max 100)' })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MaxLength(100)
   @IsOptional()
