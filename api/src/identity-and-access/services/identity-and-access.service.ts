@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import type { UserStatus } from '@prisma/client';
+import type { User, UserStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import argon2 from 'argon2';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
@@ -10,6 +10,8 @@ import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
+import { assertCanGrantRole } from '../../auth/utils/role-grant.util.js';
+import { highestRoleLevel, roleScopeLevel } from '../../auth/utils/role-level.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AssignRoleDto, CreateRoleDto, UpdateRoleDto, CreateSchoolDto, UpdateSchoolDto, ListSchoolsQueryDto, ListUsersQueryDto, CreateUserDto, InviteUserDto, QueryPermissionOverviewDto, UpdateUserDto, UpdateUserProfileDto } from '../dto/index.js';
@@ -17,6 +19,7 @@ import {
   PaginatedSchoolsEntity,
   PaginatedUsersEntity,
   PermissionHolderEntity,
+  PermissionEntity,
   PermissionOverviewEntity,
   RoleEntity,
   SchoolEntity,
@@ -26,6 +29,8 @@ import {
 } from '../entities/index.js';
 import { SchoolMapper, UserMapper } from '../mappers/index.js';
 import { DomainValidationService } from './domain-validation.service.js';
+import { assertDomainsAvailable, parseDomainList } from '../utils/school-domain.util.js';
+import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 
 /** Role given to invited users when none is specified. */
 const DEFAULT_INVITE_ROLE = 'STUDENT';
@@ -34,6 +39,9 @@ interface RoleWithPermissions {
   scope: string;
   rolePermissions?: ReadonlyArray<{ permission: { code: string } }>;
 }
+
+/** A user with the school and role scope of each assignment: what the account-status rules need. */
+type UserWithAssignments = User & { assignments: { schoolId: string; role: { scope: string } }[] };
 
 /** Admin-ness of a role row (see `auth/utils/admin-role.util.ts`); a missing include counts as none. */
 function roleGrantsAdmin(role: RoleWithPermissions): boolean {
@@ -72,7 +80,7 @@ export class IdentityAndAccessService {
       assertSchoolAccess(actor, 'users:read', query.schoolId);
     }
     if (query.groupId) {
-      const group = await this.prisma.group.findUnique({ where: { id: query.groupId }, select: { schoolId: true } });
+      const group = await this.prisma.group.findFirst({ where: { id: query.groupId, deletedAt: null }, select: { schoolId: true } });
       if (!group) {
         throw new NotFoundException(`Group with ID ${query.groupId} not found`);
       }
@@ -84,11 +92,12 @@ export class IdentityAndAccessService {
 
     // Conditions one assignment must meet; also confined to the admin's schools when scoped.
     const assignment: Prisma.UserAssignmentWhereInput = {
+      ...ACTIVE_ASSIGNMENT,
       ...(query.schoolId ? { schoolId: query.schoolId } : scope ? { schoolId: scope } : {}),
       ...(query.role && { role: { name: query.role } }),
     };
     const filters: Prisma.UserWhereInput[] = [];
-    if (scope) filters.push({ assignments: { some: { schoolId: scope } } });
+    if (scope) filters.push({ assignments: { some: { ...ACTIVE_ASSIGNMENT, schoolId: scope } } });
     if (query.status) filters.push({ status: query.status });
     if (query.search) {
       // MySQL's default collation (utf8mb4_unicode_ci) makes `contains` case-insensitive.
@@ -121,7 +130,7 @@ export class IdentityAndAccessService {
         take: limit,
         include: {
           assignments: {
-            where: scope ? { schoolId: scope } : undefined,
+            where: { ...ACTIVE_ASSIGNMENT, ...(scope && { schoolId: scope }) },
             orderBy: { createdAt: 'asc' },
             include: {
               school: { select: { name: true } },
@@ -168,7 +177,7 @@ export class IdentityAndAccessService {
       where: { id },
       include: {
         assignments: {
-          where: scope ? { schoolId: scope } : undefined,
+          where: { ...ACTIVE_ASSIGNMENT, ...(scope && { schoolId: scope }) },
           orderBy: { createdAt: 'asc' },
           include: {
             school: { select: { name: true } },
@@ -218,17 +227,126 @@ export class IdentityAndAccessService {
     });
   }
 
-  /** Loads a user and throws 403 unless `actor` has `permission` in one of the user's schools. */
-  private async findUserInScope(id: string, actor: AuthenticatedUser, permission: string) {
+  /** Loads a user with the school and role scope of each assignment; 404 if they do not exist. */
+  private async findUserWithAssignments(id: string): Promise<UserWithAssignments> {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      include: { assignments: { select: { schoolId: true } } },
+      include: { assignments: { where: ACTIVE_ASSIGNMENT, select: { schoolId: true, role: { select: { scope: true } } } } },
     });
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
+    return user;
+  }
+
+  /** Loads a user and throws 403 unless `actor` has `permission` in one of the user's schools. */
+  private async findUserInScope(id: string, actor: AuthenticatedUser, permission: string): Promise<UserWithAssignments> {
+    const user = await this.findUserWithAssignments(id);
     assertSchoolAccess(actor, permission, user.assignments.map((a) => a.schoolId));
     return user;
+  }
+
+  /**
+   * Rules for changing another user's account status (Section 4.6), shared by every suspension and
+   * reactivation path so none can bypass them:
+   *  - nobody can act on their own account;
+   *  - platform-wide `users:suspend` reaches every user; otherwise the actor must hold it in ALL of
+   *    the target's schools (the status applies to the whole account), and a user without any
+   *    school is out of reach;
+   *  - the target must not hold a higher-level role than the actor (see role-level.util.ts).
+   */
+  private assertCanChangeAccountStatus(target: UserWithAssignments, actor: AuthenticatedUser, action: 'suspend' | 'reactivate'): void {
+    if (target.id === actor.id) {
+      throw new ForbiddenException(`You cannot ${action} your own account`);
+    }
+
+    const actorSchools = schoolsWithPermission(actor, 'users:suspend');
+    if (actorSchools !== 'all') {
+      const targetSchools = target.assignments.map((a) => a.schoolId);
+      if (targetSchools.length === 0 || !targetSchools.every((schoolId) => actorSchools.includes(schoolId))) {
+        throw new ForbiddenException(`You can only ${action} users whose schools you all administer`);
+      }
+    }
+
+    // A platform admin always acts at platform level, whatever shape their assignments have.
+    const actorLevel = actor.isPlatformAdmin
+      ? roleScopeLevel('platform')
+      : highestRoleLevel(
+          actor.assignments.filter((a) => a.permissions.includes('users:suspend')).map((a) => a.scope),
+        );
+    const targetLevel = highestRoleLevel(target.assignments.map((a) => a.role.scope));
+    if (targetLevel > actorLevel) {
+      throw new ForbiddenException(`You cannot ${action} a user with a higher-level role`);
+    }
+  }
+
+  /**
+   * PATCH /users/:id/suspend (#41): blocks the account and revokes all its sessions.
+   * Idempotent: an already suspended user stays suspended and any session left active is revoked.
+   */
+  async suspendUser(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    const target = await this.findUserWithAssignments(id);
+    this.assertCanChangeAccountStatus(target, actor, 'suspend');
+    return this.applySuspension(target, actor, auditContext);
+  }
+
+  /**
+   * Status a SUSPENDED user gets back. A user suspended before finishing the invitation (no password
+   * set and no Google account linked) returns to INVITED, so the invitation flow is not skipped.
+   */
+  private statusAfterReactivation(user: Pick<User, 'passwordHash' | 'googleSub'>): UserStatus {
+    return !user.passwordHash && !user.googleSub ? 'INVITED' : 'ACTIVE';
+  }
+
+  /**
+   * PATCH /users/:id/reactivate (#42): lifts the suspension so the user can sign in again. The user goes
+   * back to ACTIVE, or to INVITED when they never finished the invitation (see statusAfterReactivation).
+   * Sessions revoked by the suspension stay revoked: the user signs in again to get new ones.
+   * Idempotent for an ACTIVE user; a user who is currently INVITED is refused (409).
+   */
+  async reactivateUser(
+    id: string,
+    actor: AuthenticatedUser,
+    // Unused for now: #51 will use it to record the reactivation audit event.
+    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    const target = await this.findUserWithAssignments(id);
+    this.assertCanChangeAccountStatus(target, actor, 'reactivate');
+    if (target.status === 'INVITED') {
+      throw new ConflictException('Only a suspended user can be reactivated (this user is still INVITED)');
+    }
+    const user =
+      target.status === 'ACTIVE'
+        ? target
+        : await this.prisma.user.update({ where: { id }, data: { status: this.statusAfterReactivation(target) } });
+    return UserMapper.toEntity(user);
+  }
+
+  /**
+   * Sets SUSPENDED first, then revokes the sessions (each revocation is audited as session_revoked).
+   * In this order the user is blocked even if a revocation fails: the guard and the refresh check
+   * the status on every request, and calling suspend again revokes what is left.
+   */
+  private async applySuspension(
+    user: User,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext,
+  ): Promise<UserEntity> {
+    const suspended =
+      user.status === 'SUSPENDED'
+        ? user
+        : await this.prisma.user.update({ where: { id: user.id }, data: { status: 'SUSPENDED' } });
+    await this.sessions.revokeAllForUser(
+      user.id,
+      'user_suspended',
+      { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+      auditContext,
+    );
+    return UserMapper.toEntity(suspended);
   }
 
   /**
@@ -432,7 +550,6 @@ export class IdentityAndAccessService {
     return role;
   }
 
-  /** Suspending a user also revokes all their sessions (#12), so no token keeps working. */
   /** PATCH /users/:id (#40): full name and email only. */
   async updateUserProfile(
     id: string,
@@ -453,8 +570,14 @@ export class IdentityAndAccessService {
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<UserEntity> {
     const target = await this.findUserInScope(id, actor, 'users:update');
-    if (dto.status) {
-      // Suspending / reactivating is a separate right from editing a profile.
+    // Suspending and reactivating go through the same rules as their PATCH /users/:id/* routes, before any write.
+    const suspending = dto.status?.toUpperCase() === 'SUSPENDED';
+    if (suspending) {
+      this.assertCanChangeAccountStatus(target, actor, 'suspend');
+    } else if (dto.status?.toUpperCase() === 'ACTIVE') {
+      this.assertCanChangeAccountStatus(target, actor, 'reactivate');
+    } else if (dto.status) {
+      // Any other status is a separate right from editing a profile.
       assertSchoolAccess(actor, 'users:suspend', target.assignments.map((a) => a.schoolId));
     }
 
@@ -485,23 +608,18 @@ export class IdentityAndAccessService {
       }
     }
 
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: {
-        ...(dto.email && { email: dto.email.trim().toLowerCase() }),
-        ...(dto.fullName && { fullName: dto.fullName.trim() }),
-        ...(dto.status && { status: dto.status.toUpperCase() as UserStatus }),
-      },
-    });
-    if (updated.status === 'SUSPENDED') {
-      await this.sessions.revokeAllForUser(
-        id,
-        'user_suspended',
-        { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
-        auditContext,
-      );
-    }
-    return UserMapper.toEntity(updated);
+    // Lifting a suspension follows PATCH /users/:id/reactivate: back to INVITED if the invitation was never finished.
+    const status =
+      dto.status?.toUpperCase() === 'ACTIVE' && target.status === 'SUSPENDED'
+        ? this.statusAfterReactivation(target)
+        : (dto.status?.toUpperCase() as UserStatus | undefined);
+    const data: Prisma.UserUpdateInput = {
+      ...(dto.email && { email: dto.email.trim().toLowerCase() }),
+      ...(dto.fullName && { fullName: dto.fullName.trim() }),
+      ...(status && !suspending && { status }),
+    };
+    const updated = Object.keys(data).length > 0 ? await this.prisma.user.update({ where: { id }, data }) : target;
+    return suspending ? this.applySuspension(updated, actor, auditContext) : UserMapper.toEntity(updated);
   }
 
   /**
@@ -510,7 +628,8 @@ export class IdentityAndAccessService {
    * Enforces:
    *  - `users:assign_role` in the target school (platform admins may act on any school).
    *  - The school and the role must exist (404 / 400).
-   *  - A platform-scoped role can only be granted by someone who assigns roles platform-wide (403).
+   *  - The role must be at or below the admin's own level in that school (403), via `assertCanGrantRole`,
+   *    the same check as POST /assignments: only a platform admin can grant a platform-scoped role.
    *  - Idempotent: re-assigning the role the user already holds changes nothing and records nothing.
    *  - Tamper-evident audit event `identity_access/role_assigned` with the previous role.
    *
@@ -523,13 +642,16 @@ export class IdentityAndAccessService {
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<UserEntity> {
     const actorScope = schoolsWithPermission(actor, 'users:assign_role');
-    if (actorScope !== 'all') {
-      assertSchoolAccess(actor, 'users:assign_role', dto.schoolId);
-    }
+    assertSchoolAccess(actor, 'users:assign_role', dto.schoolId);
 
     const target = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { assignments: { include: { role: true } } },
+      include: {
+        assignments: {
+          where: ACTIVE_ASSIGNMENT,
+          include: { role: { include: { rolePermissions: { select: { permission: { select: { code: true } } } } } } },
+        },
+      },
     });
     if (!target) {
       throw new NotFoundException(`User with ID ${userId} not found`);
@@ -551,8 +673,28 @@ export class IdentityAndAccessService {
     if (!role) {
       throw new BadRequestException(`Unknown role '${roleName}'`);
     }
-    if (role.scope === 'platform' && actorScope !== 'all') {
-      throw new ForbiddenException(`Only a platform administrator can assign the ${role.name} role`);
+    assertCanGrantRole(actor, role, dto.schoolId);
+
+    if (actorScope !== 'all' && target.assignments.length > 0) {
+      const targetInSchool = target.assignments.some((a) => a.schoolId === dto.schoolId);
+      if (!targetInSchool) {
+        throw new ForbiddenException('A school admin cannot grant permissions to a user outside their school');
+      }
+    }
+
+    const roleGrantsDocManage =
+      role.name === 'CONTENT_MANAGER' ||
+      role.rolePermissions.some(
+        (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
+      );
+
+    if (roleGrantsDocManage) {
+      const isStudent =
+        target.assignments.some((a) => a.schoolId === dto.schoolId && a.role.name.toUpperCase() === 'STUDENT') ||
+        (target.assignments.length > 0 && target.assignments.every((a) => a.role.name.toUpperCase() === 'STUDENT'));
+      if (isStudent) {
+        throw new BadRequestException('Student accounts can never receive document management permissions');
+      }
     }
 
     const existing = target.assignments.find((a) => a.schoolId === dto.schoolId);
@@ -560,12 +702,47 @@ export class IdentityAndAccessService {
       return UserMapper.toEntity(target);
     }
 
+    const prevRoleGrantsDocManage =
+      existing?.role.name === 'CONTENT_MANAGER' ||
+      existing?.role.rolePermissions?.some(
+        (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
+      ) ||
+      false;
+
     if (existing) {
       await this.prisma.userAssignment.update({ where: { id: existing.id }, data: { roleId: role.id } });
     } else {
       await this.prisma.userAssignment.create({
         data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
       });
+    }
+
+    if (roleGrantsDocManage && !prevRoleGrantsDocManage) {
+      await this.audit.record(
+        AuditEvents.permissionGranted(
+          {
+            userId: target.id,
+            email: target.email,
+            schoolId: dto.schoolId,
+            permission: 'documents:manage',
+            grantedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+      );
+    } else if (!roleGrantsDocManage && prevRoleGrantsDocManage) {
+      await this.audit.record(
+        AuditEvents.permissionRevoked(
+          {
+            userId: target.id,
+            email: target.email,
+            schoolId: dto.schoolId,
+            permission: 'documents:manage',
+            revokedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+      );
     }
 
     await this.audit.record(
@@ -576,6 +753,210 @@ export class IdentityAndAccessService {
           schoolId: dto.schoolId,
           role: role.name,
           previousRole: existing?.role.name ?? null,
+          assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    return UserMapper.toEntity(target);
+  }
+
+  /**
+   * Grant document-management rights to a staff member in a school (§4.5, #88).
+   *
+   * Enforces:
+   *  - Caller must hold users:assign_role. Platform admins can grant in any school;
+   *    school admins can only grant in their own school(s).
+   *  - School admins cannot grant permissions to a user outside their school (403).
+   *  - Students can NEVER receive document-management rights (400).
+   *  - Idempotent: granting when already held is a no-op.
+   *  - Records tamper-evident audit events `permission_granted` and `role_assigned`.
+   */
+  async grantDocumentManagement(
+    userId: string,
+    schoolId: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    const actorScope = schoolsWithPermission(actor, 'users:assign_role');
+    if (actorScope !== 'all') {
+      assertSchoolAccess(actor, 'users:assign_role', schoolId);
+    }
+
+    const school = await this.prisma.school.findUnique({
+      where: { id: schoolId },
+      select: { id: true },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${schoolId} not found`);
+    }
+
+    const target = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { assignments: { include: { role: true } } },
+    });
+    if (!target) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    if (actorScope !== 'all') {
+      const targetInSchool = target.assignments.some((a) => a.schoolId === schoolId);
+      if (!targetInSchool) {
+        throw new ForbiddenException('A school admin cannot grant permissions to a user outside their school');
+      }
+    }
+
+    const isStudent =
+      target.assignments.some((a) => a.schoolId === schoolId && a.role.name.toUpperCase() === 'STUDENT') ||
+      (target.assignments.length > 0 && target.assignments.every((a) => a.role.name.toUpperCase() === 'STUDENT'));
+    if (isStudent) {
+      throw new BadRequestException('Student accounts can never receive document management permissions');
+    }
+
+    let role = await this.prisma.role.findFirst({
+      where: { name: 'CONTENT_MANAGER' },
+    });
+    if (!role) {
+      role = await this.prisma.role.create({
+        data: {
+          name: 'CONTENT_MANAGER',
+          scope: 'school',
+        },
+      });
+    }
+
+    const existing = target.assignments.find((a) => a.schoolId === schoolId);
+    if (existing?.roleId === role.id) {
+      return UserMapper.toEntity(target);
+    }
+
+    if (existing) {
+      await this.prisma.userAssignment.update({ where: { id: existing.id }, data: { roleId: role.id } });
+    } else {
+      await this.prisma.userAssignment.create({
+        data: { userId: target.id, schoolId, roleId: role.id },
+      });
+    }
+
+    await this.audit.record(
+      AuditEvents.permissionGranted(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId,
+          permission: 'documents:manage',
+          grantedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    await this.audit.record(
+      AuditEvents.roleAssigned(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId,
+          role: role.name,
+          previousRole: existing?.role.name ?? null,
+          assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    return UserMapper.toEntity(target);
+  }
+
+  /**
+   * Revoke document-management rights from a staff member in a school (§4.5, #88).
+   *
+   * Enforces:
+   *  - Caller must hold users:assign_role. Platform admins can revoke in any school;
+   *    school admins can only revoke in their own school(s).
+   *  - School admins cannot revoke permissions for a user outside their school (403).
+   *  - Idempotent: revoking when not held is a no-op.
+   *  - Reverts user assignment to STAFF.
+   *  - Records tamper-evident audit events `permission_revoked` and `role_assigned`.
+   */
+  async revokeDocumentManagement(
+    userId: string,
+    schoolId: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<UserEntity> {
+    const actorScope = schoolsWithPermission(actor, 'users:assign_role');
+    if (actorScope !== 'all') {
+      assertSchoolAccess(actor, 'users:assign_role', schoolId);
+    }
+
+    const school = await this.prisma.school.findUnique({
+      where: { id: schoolId },
+      select: { id: true },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${schoolId} not found`);
+    }
+
+    const target = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { assignments: { include: { role: true } } },
+    });
+    if (!target) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    if (actorScope !== 'all') {
+      const targetInSchool = target.assignments.some((a) => a.schoolId === schoolId);
+      if (!targetInSchool) {
+        throw new ForbiddenException('A school admin cannot revoke permissions for a user outside their school');
+      }
+    }
+
+    const existing = target.assignments.find((a) => a.schoolId === schoolId);
+    if (!existing || existing.role.name.toUpperCase() !== 'CONTENT_MANAGER') {
+      return UserMapper.toEntity(target);
+    }
+
+    let staffRole = await this.prisma.role.findFirst({
+      where: { name: 'STAFF' },
+    });
+    if (!staffRole) {
+      staffRole = await this.prisma.role.create({
+        data: {
+          name: 'STAFF',
+          scope: 'school',
+        },
+      });
+    }
+
+    await this.prisma.userAssignment.update({
+      where: { id: existing.id },
+      data: { roleId: staffRole.id },
+    });
+
+    await this.audit.record(
+      AuditEvents.permissionRevoked(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId,
+          permission: 'documents:manage',
+          revokedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
+
+    await this.audit.record(
+      AuditEvents.roleAssigned(
+        {
+          userId: target.id,
+          email: target.email,
+          schoolId,
+          role: staffRole.name,
+          previousRole: existing.role.name,
           assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
         },
         auditContext,
@@ -701,22 +1082,9 @@ export class IdentityAndAccessService {
     // `undefined` = leave the domains untouched. `''` = clear them.
     let domainList: string[] | null = null;
     if (dto.allowedDomains !== undefined) {
-      domainList = [
-        ...new Set(
-          dto.allowedDomains
-            .split(',')
-            .map((domain) => domain.trim().toLowerCase())
-            .filter((domain) => domain.length > 0),
-        ),
-      ];
-      if (domainList.length > 0) {
-        const taken = await this.prisma.schoolDomain.findFirst({
-          where: { domain: { in: domainList }, schoolId: { not: id } },
-        });
-        if (taken) {
-          throw new ConflictException(`Domain '${taken.domain}' is already assigned to another school`);
-        }
-      }
+      // Same rules as POST /schools/:id/domains (#32): valid format, no overlap with another school.
+      domainList = parseDomainList(dto.allowedDomains);
+      await assertDomainsAvailable(this.prisma, domainList, id);
     }
 
     const data = {
@@ -842,19 +1210,9 @@ export class IdentityAndAccessService {
     }
 
     const id = randomUUID();
-    const domainList = (dto.allowedDomains || '')
-      .split(',')
-      .map((d) => d.trim().toLowerCase())
-      .filter((d) => d.length > 0);
-
-    if (domainList.length > 0) {
-      const existingDomain = await this.prisma.schoolDomain.findFirst({
-        where: { domain: { in: domainList } },
-      });
-      if (existingDomain) {
-        throw new ConflictException(`Domain '${existingDomain.domain}' is already assigned to another school`);
-      }
-    }
+    // Same rules as POST /schools/:id/domains (#32): valid format, no overlap with another school.
+    const domainList = parseDomainList(dto.allowedDomains || '');
+    await assertDomainsAvailable(this.prisma, domainList);
 
     const status = dto.status?.trim() || 'active';
 
@@ -863,7 +1221,7 @@ export class IdentityAndAccessService {
         id,
         name: trimmedName,
         status,
-        allowedDomains: dto.allowedDomains ? dto.allowedDomains.trim() : '',
+        allowedDomains: domainList.join(','),
         settings: (dto.settings as object) || null,
         domains:
           domainList.length > 0
@@ -886,7 +1244,7 @@ export class IdentityAndAccessService {
           include: { permission: true },
         },
         _count: {
-          select: { assignments: true },
+          select: { assignments: { where: ACTIVE_ASSIGNMENT } },
         },
       },
     });
@@ -913,7 +1271,7 @@ export class IdentityAndAccessService {
           include: { permission: true },
         },
         _count: {
-          select: { assignments: true },
+          select: { assignments: { where: ACTIVE_ASSIGNMENT } },
         },
       },
     });
@@ -932,43 +1290,47 @@ export class IdentityAndAccessService {
     });
   }
 
-  async createRole(dto: CreateRoleDto): Promise<RoleEntity> {
+  /**
+   * POST /roles (#44), also behind the older POST /identity/roles: creates a custom role with its scope and
+   * permission codes. Platform admins only: the guard checks system:manage, and this also refuses a
+   * school-scoped role that would hold it. The role and its permissions are written in one transaction.
+   */
+  async createRole(
+    dto: CreateRoleDto,
+    actor: AuthenticatedUser,
+    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<RoleEntity> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may create roles');
+    }
     const roleName = dto.name.trim().toUpperCase();
     if (isBaseRoleName(roleName)) {
       throw new BadRequestException(`Role name '${roleName}' is reserved for system base roles`);
     }
-    const existing = await this.prisma.role.findUnique({
-      where: { name: roleName },
-    });
-    if (existing) {
-      throw new ConflictException(`Role '${roleName}' already exists`);
+
+    const codes = [...new Set(dto.permissions)];
+    const permissions = await this.prisma.permission.findMany({ where: { code: { in: codes } }, select: { id: true, code: true } });
+    const unknown = codes.filter((code) => !permissions.some((p) => p.code === code));
+    if (unknown.length > 0) {
+      throw new BadRequestException(`Unknown permission code(s): ${unknown.join(', ')}`);
     }
 
-    const id = randomUUID();
-    const role = await this.prisma.role.create({
-      data: {
-        id,
-        name: roleName,
-        scope: dto.scope || 'school',
-      },
-    });
-
-    if (dto.permissions && dto.permissions.length > 0) {
-      const perms = await this.prisma.permission.findMany({
-        where: { code: { in: dto.permissions } },
-      });
-      if (perms.length > 0) {
-        await this.prisma.rolePermission.createMany({
-          data: perms.map((p) => ({
-            roleId: role.id,
-            permissionId: p.id,
-          })),
-          skipDuplicates: true,
+    try {
+      const role = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.role.create({ data: { id: randomUUID(), name: roleName, scope: dto.scope } });
+        await tx.rolePermission.createMany({
+          data: permissions.map((p) => ({ roleId: created.id, permissionId: p.id })),
         });
+        return created;
+      });
+      return await this.findRoleById(role.id);
+    } catch (error) {
+      // The unique index on roles.name decides, so two simultaneous requests cannot both succeed.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Role '${roleName}' already exists`);
       }
+      throw error;
     }
-
-    return this.findRoleById(role.id);
   }
 
   async updateRole(id: string, dto: UpdateRoleDto): Promise<RoleEntity> {
@@ -1039,7 +1401,7 @@ export class IdentityAndAccessService {
     }
 
     const assignedCount = await this.prisma.userAssignment.count({
-      where: { roleId: role.id },
+      where: { roleId: role.id, ...ACTIVE_ASSIGNMENT },
     });
     if (assignedCount > 0) {
       throw new BadRequestException(
@@ -1055,6 +1417,20 @@ export class IdentityAndAccessService {
       success: true,
       message: `Role '${role.name}' was successfully deleted`,
     };
+  }
+
+  /**
+   * GET /permissions: the permission catalogue, sorted by category then code. Platform admins only:
+   * the guard checks system:manage, and this also refuses a school-scoped role that would hold it.
+   */
+  async listPermissions(actor: AuthenticatedUser): Promise<PermissionEntity[]> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may list permissions');
+    }
+    const rows = await this.prisma.permission.findMany({ select: { code: true, description: true } });
+    return rows
+      .map((p) => new PermissionEntity({ code: p.code, description: p.description, category: p.code.split(':')[0] }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
   }
 
   /**
@@ -1108,7 +1484,8 @@ export class IdentityAndAccessService {
       FROM permissions p
       JOIN role_permissions rp ON rp.permission_id = p.id
       JOIN user_assignments ua ON ua.role_id = rp.role_id
-      ${schoolIds ? Prisma.sql`WHERE ua.school_id IN (${Prisma.join(schoolIds)})` : Prisma.empty}
+      WHERE ua.deleted_at IS NULL
+      ${schoolIds ? Prisma.sql`AND ua.school_id IN (${Prisma.join(schoolIds)})` : Prisma.empty}
       GROUP BY p.code
     `;
     return new Map(rows.map((row) => [row.code, Number(row.holders)]));
@@ -1146,6 +1523,7 @@ export class IdentityAndAccessService {
       JOIN role_permissions rp ON rp.role_id = r.id
       JOIN permissions p ON p.id = rp.permission_id
       WHERE p.code = ${code}
+        AND ua.deleted_at IS NULL
       ${schoolIds ? Prisma.sql`AND ua.school_id IN (${Prisma.join(schoolIds)})` : Prisma.empty}
       GROUP BY ua.user_id, ua.school_id, u.email, u.full_name, u.status, s.name
       ORDER BY u.email ASC

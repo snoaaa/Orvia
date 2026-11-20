@@ -1,17 +1,37 @@
 export type UserStatus = 'INVITED' | 'ACTIVE' | 'SUSPENDED';
 
 export interface UserSchoolAssignment {
+  id?: string;
   schoolId: string;
-  roleId: string;
-  role?: {
-    id: string;
-    name: string;
-    scope: 'platform' | 'school';
-  };
+  schoolName?: string;
+  roleId?: string;
+  role?:
+    | string
+    | {
+        id?: string;
+        name: string;
+        scope?: 'platform' | 'school' | 'group' | string;
+      };
+  roleScope?: 'platform' | 'school' | 'group' | string;
+  groupId?: string | null;
+  groupName?: string | null;
   school?: {
     id: string;
     name: string;
   };
+}
+
+export interface AssignableRoleOption {
+  id: string;
+  name: string;
+  scope: 'platform' | 'school' | 'group' | string;
+  level: number;
+}
+
+export interface SchoolSummaryOption {
+  id: string;
+  name: string;
+  status?: string;
 }
 
 export interface UserEntity {
@@ -55,8 +75,6 @@ export interface ActiveSession {
 export interface UpdateUserPayload {
   email?: string;
   fullName?: string;
-  status?: UserStatus;
-  schoolId?: string;
 }
 
 export interface UserListFilter {
@@ -64,7 +82,8 @@ export interface UserListFilter {
   limit: number;
   status?: string;
   search?: string;
+  schoolId?: string;
+  role?: string;
   sortBy?: 'createdAt' | 'email' | 'fullName' | 'status';
   sortOrder?: 'asc' | 'desc';
 }
-

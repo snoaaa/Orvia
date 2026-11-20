@@ -6,9 +6,16 @@ export interface AuthRoleAssignment {
   /** 'platform' roles apply to every school; 'school' / 'group' roles only to `schoolId`. */
   scope: string;
   schoolId: string;
+  schoolName?: string | null;
   schoolStatus?: string | null;
   groupId: string | null;
   permissions: string[];
+}
+
+export interface AuthUserSchool {
+  id: string;
+  name: string;
+  status?: string | null;
 }
 
 /**
@@ -21,10 +28,14 @@ export interface AuthenticatedUser {
   fullName: string;
   status: UserStatus;
   assignments: AuthRoleAssignment[];
+  /** Distinct role names the user holds across all assignments. */
+  roles?: string[];
   /** Union of the permissions of all assignments. */
   permissions: string[];
   /** Schools the user has any role in. */
   schoolIds: string[];
+  /** School details (id, name, status) for the user's assigned schools (#92). */
+  schools?: AuthUserSchool[];
   /** Holds a platform-scoped role: acts on every school. */
   isPlatformAdmin: boolean;
   /** Primary role / school (first assignment), e.g. for audit records. */
@@ -32,6 +43,21 @@ export interface AuthenticatedUser {
   schoolId: string | null;
   /** Session id carried by the token, if any (set by #12). */
   sessionId: string | null;
+}
+
+/**
+ * Request-scoped access context (§4.5, §4.7, #89):
+ * userId, roles, permissions, schoolIds, isPlatformAdmin, and assignments.
+ */
+export interface AccessContext {
+  userId: string;
+  email: string;
+  fullName: string;
+  roles: string[];
+  permissions: string[];
+  schoolIds: string[];
+  isPlatformAdmin: boolean;
+  assignments: AuthRoleAssignment[];
 }
 
 export interface AccessTokenPayload {

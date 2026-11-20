@@ -34,6 +34,7 @@ model User {
   answerReports     AnswerReport[]
   syncChanges       SyncChange[]
   passwordSetupTokens PasswordSetupToken[]
+  documentAccess    DocumentAccess[]
 
   /// Supports the paginated user list: ORDER BY created_at DESC, id DESC (see findAllUsers).
   @@index([createdAt, id])
@@ -43,7 +44,7 @@ model User {
 model School {
   id             String         @id @default(uuid())
   name           String
-  allowedDomains String         @default("") @map("allowed_domains")
+  allowedDomains String         @default(dbgenerated("(_utf8mb4\\'\\')")) @map("allowed_domains") @db.Text
   status         String         @default("active")
   settings       Json?
   createdAt      DateTime       @default(now()) @map("created_at")
@@ -78,6 +79,7 @@ model Group {
   type      String        @default("class")
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
+  deletedAt DateTime?     @map("deleted_at")
 
   school         School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   members        GroupMember[]
@@ -86,6 +88,7 @@ model Group {
 
   @@unique([schoolId, name])
   @@index([schoolId])
+  @@index([schoolId, deletedAt])
   @@map("groups")
 }
 
@@ -153,6 +156,9 @@ model UserAssignment {
   roleId    String   @map("role_id")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
+  /// Soft delete (#49): a removed assignment is kept with its removal time, so the mobile sync can see it.
+  /// Every reader must filter on `deletedAt: null` (ACTIVE_ASSIGNMENT in src/auth/utils/active-assignment.util.ts).
+  deletedAt DateTime? @map("deleted_at") @db.DateTime(3)
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
@@ -161,6 +167,7 @@ model UserAssignment {
 
   @@index([userId])
   @@index([schoolId])
+  @@index([schoolId, deletedAt])
   @@index([groupId])
   @@index([roleId])
   @@map("user_assignments")
@@ -237,9 +244,13 @@ model Document {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
+  /// The latest version (#111), set by upload and replace. Its status and MIME type are what the document
+  /// list shows and filters on; readers only see a document once one of its versions is 'available'.
+  currentVersionId String? @unique @map("current_version_id")
 
   space             Space              @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  versions          DocumentVersion[]
+  versions          DocumentVersion[]  @relation("DocumentVersions")
+  currentVersion    DocumentVersion?   @relation("DocumentCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
   access            DocumentAccess[]
   offlineSelections OfflineSelection[]
 
@@ -249,6 +260,17 @@ model Document {
   @@map("documents")
 }
 
+/// Processing status of a document version (spec §3.1 step 2, #112).
+/// pending → ocr (images and scanned files only) → segmentation → indexing → available; error from any step.
+enum DocumentVersionStatus {
+  pending
+  ocr
+  segmentation
+  indexing
+  available
+  error
+}
+
 model DocumentVersion {
   id         String   @id @default(uuid())
   documentId String   @map("document_id")
@@ -256,12 +278,17 @@ model DocumentVersion {
   storageKey String   @map("storage_key")
   mimeType   String   @map("mime_type")
   checksum   String
-  status     String   @default("uploaded")
+  /// Pipeline status (#112), changed only through DocumentProcessingStatusService, in pipeline order.
+  status          DocumentVersionStatus @default(pending)
+  /// Why processing failed; set only while status is 'error'. Shown to document managers only.
+  statusError     String?  @map("status_error") @db.Text
+  statusChangedAt DateTime @default(now()) @map("status_changed_at") @db.DateTime(3)
   pageCount  Int      @default(0) @map("page_count")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  document          Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document          Document           @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
+  currentOf         Document?          @relation("DocumentCurrentVersion")
   processingJobs    ProcessingJob[]
   messageReferences MessageReference[]
 
@@ -269,24 +296,35 @@ model DocumentVersion {
   @@map("document_versions")
 }
 
+/// A publication rule (#109): the document is visible to one target of its own school.
+/// `targetType` is school, role, class, group or user; `targetId` is the id of that target, and the matching
+/// foreign key column (school_id, role_id, group_id or user_id) holds the same id so the rule disappears with it.
+/// `schoolId` is always the document's school, also for role, class, group and user rules, so retrieval can
+/// filter by school without joining spaces. Visibility is computed in src/documents/utils/document-visibility.util.ts.
 model DocumentAccess {
   id         String   @id @default(uuid())
   documentId String   @map("document_id")
-  schoolId   String?  @map("school_id")
+  targetType String   @map("target_type") @db.VarChar(16)
+  targetId   String   @map("target_id")
+  schoolId   String   @map("school_id")
   roleId     String?  @map("role_id")
   groupId    String?  @map("group_id")
+  userId     String?  @map("user_id")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  school     School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school     School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   role       Role?    @relation(fields: [roleId], references: [id], onDelete: Cascade)
   group      Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([documentId, targetType, targetId])
   @@index([documentId])
   @@index([schoolId])
   @@index([roleId])
   @@index([groupId])
+  @@index([userId])
   @@map("document_access")
 }
 
@@ -300,6 +338,8 @@ model ProcessingJob {
   ocrConfidence Float    @default(1.0) @map("ocr_confidence")
   pageCount     Int      @default(0) @map("page_count")
   chunkCount    Int      @default(0) @map("chunk_count")
+  /// When the current run started: creation, or the last retry (error -> pending). durationMs counts from here.
+  startedAt     DateTime @default(now()) @map("started_at") @db.DateTime(3)
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 

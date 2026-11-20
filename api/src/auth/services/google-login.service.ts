@@ -1,4 +1,4 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuditEvents, type LoginFailureReason } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
@@ -6,7 +6,8 @@ import type { AuditRequestContext } from '../../audit/utils/audit-request-contex
 import type { AuthConfig } from '../../config/index.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { DomainValidationService } from '../../identity-and-access/services/domain-validation.service.js';
-import { hasAdminAccess, toClassifiableRoles } from '../utils/admin-role.util.js';
+import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
+import { hasAdminAccess, hasPortalAccess, toClassifiableRoles } from '../utils/admin-role.util.js';
 import { SessionService, type TokenPair } from './session.service.js';
 
 /**
@@ -25,22 +26,25 @@ export interface GoogleTokenPayload {
 
 const GOOGLE_TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
 const VALID_ISSUERS = new Set(['accounts.google.com', 'https://accounts.google.com']);
+const DEV_GOOGLE_TOKEN_PREFIX = 'dev-google:';
 
 /**
- * Handles Google OAuth 2.0 / OpenID Connect login (Issue #10 & Issue #11).
+ * Handles Google OAuth 2.0 / OpenID Connect login (Issue #10, Issue #11, Issue #91).
  *
  * Security & Lifecycle Guarantees:
  *  1. Verifies Google ID token server-side via Google's tokeninfo endpoint with a strict 5000ms timeout.
  *  2. Enforces issuer, audience (against configured client IDs), expiry, and email_verified.
  *  3. In production, prevents Confused Deputy by strictly requiring configured googleClientIds.
  *  4. Looks up user by `google_sub` (returning users) or `email` (first login for invited users).
- *  5. On first login, links `google_sub` to the user and activates their account (`status: 'ACTIVE'`).
- *  6. Rejects unknown Google accounts with uniform generic 401.
+ *  5. On first login, links `google_sub` to the user, ensures `passwordHash: null`, and activates their account (`status: 'ACTIVE'`).
+ *  6. Rejects unknown Google accounts.
  *  7. Rejects administrator accounts (email + password only; PLATFORM_ADMIN or SCHOOL_ADMIN).
  *  8. Rejects suspended accounts (`status: 'SUSPENDED'`).
  *  9. Enforces per-school domain restrictions (Issue #11) against the user's assigned school(s).
- * 10. Creates session with rotating refresh token and optional device binding.
- * 11. Records tamper-evident audit events for both successes and failures.
+ * 10. When `client === 'portal'` (Issue #91), enforces web portal access (`documents:manage` / `documents.manage`)
+ *     and returns actionable error messages for unknown account, suspended account, domain not allowed, and no portal access.
+ * 11. Creates session with rotating refresh token and optional device binding.
+ * 12. Records tamper-evident audit events for both successes and failures.
  */
 @Injectable()
 export class GoogleLoginService {
@@ -55,15 +59,26 @@ export class GoogleLoginService {
   ) {}
 
   /**
+   * Returns public Google OAuth configuration for the web portal login page.
+   */
+  getPublicConfig(): { clientId: string | null } {
+    const auth = this.config.getOrThrow<AuthConfig>('auth');
+    return {
+      clientId: auth.googleClientIds[0] ?? null,
+    };
+  }
+
+  /**
    * Authenticates a user with a Google ID token.
-   *
-   * @throws UnauthorizedException on any verification or validation failure (uniform generic 401).
    */
   async login(
     idToken: string,
     context: AuditRequestContext,
     deviceId?: string | null,
+    client?: 'portal' | 'mobile',
   ): Promise<TokenPair> {
+    const isPortal = client === 'portal';
+
     // 1. Verify Google ID token
     let payload: GoogleTokenPayload;
     try {
@@ -71,6 +86,9 @@ export class GoogleLoginService {
     } catch (err) {
       this.logger.warn(`Google token verification failed: ${err instanceof Error ? err.message : String(err)}`);
       await this.recordFailure('unknown', 'invalid_google_token', null, context);
+      if (isPortal) {
+        throw new UnauthorizedException('Google authentication failed. Please try signing in again.');
+      }
       return this.deny();
     }
 
@@ -80,6 +98,9 @@ export class GoogleLoginService {
     const isVerified = payload.email_verified === true || String(payload.email_verified) === 'true';
     if (!isVerified) {
       await this.recordFailure(email, 'invalid_google_token', null, context);
+      if (isPortal) {
+        throw new UnauthorizedException('Your Google email address is not verified.');
+      }
       return this.deny();
     }
 
@@ -88,6 +109,7 @@ export class GoogleLoginService {
       where: { googleSub: payload.sub },
       include: {
         assignments: {
+          where: ACTIVE_ASSIGNMENT,
           include: {
             role: {
               select: {
@@ -108,6 +130,7 @@ export class GoogleLoginService {
         where: { email },
         include: {
           assignments: {
+            where: ACTIVE_ASSIGNMENT,
             include: {
               role: {
                 select: {
@@ -127,22 +150,39 @@ export class GoogleLoginService {
     // 3. Reject unknown accounts (no matching internal pre-invited or registered user)
     if (!user) {
       await this.recordFailure(email, 'unknown_user', null, context);
+      if (isPortal) {
+        throw new UnauthorizedException(
+          'No Orvia account was found for this Google email. Please contact your school administrator.',
+        );
+      }
       return this.deny();
     }
+
+    const classifiableRoles = toClassifiableRoles(user.assignments);
 
     // 4. Reject administrator accounts (admins are email + password only). Admin-ness is derived
     // from data (platform scope, or a role granting an administrative permission), never a name.
     const isAdmin =
       (user.authProvider === 'local' && !!user.passwordHash) ||
-      hasAdminAccess(toClassifiableRoles(user.assignments));
+      hasAdminAccess(classifiableRoles);
     if (isAdmin) {
       await this.recordFailure(email, 'not_admin', user.id, context);
+      if (isPortal) {
+        throw new ForbiddenException(
+          'Administrator accounts must sign in with email and password.',
+        );
+      }
       return this.deny();
     }
 
     // 5. Reject suspended accounts
     if (user.status === 'SUSPENDED') {
       await this.recordFailure(email, 'account_suspended', user.id, context);
+      if (isPortal) {
+        throw new ForbiddenException(
+          'Your account has been suspended. Please contact your school administrator.',
+        );
+      }
       return this.deny();
     }
 
@@ -156,6 +196,11 @@ export class GoogleLoginService {
       );
       if (isDeactivated) {
         await this.recordFailure(email, 'school_deactivated', user.id, context);
+        if (isPortal) {
+          throw new ForbiddenException(
+            'Your school is currently deactivated. Please contact your administrator.',
+          );
+        }
         return this.deny();
       }
     }
@@ -168,7 +213,20 @@ export class GoogleLoginService {
     );
     if (!domainCheck.allowed) {
       await this.recordFailure(email, 'domain_not_allowed', user.id, context);
+      if (isPortal) {
+        throw new ForbiddenException(
+          'Your Google email domain is not allowed for your school.',
+        );
+      }
       return this.deny();
+    }
+
+    // 6b. Web portal access check (Issue #91): only staff with document-management rights (or admin roles) may access the web portal
+    if (isPortal && !hasPortalAccess(classifiableRoles)) {
+      await this.recordFailure(email, 'not_admin', user.id, context);
+      throw new ForbiddenException(
+        'Access denied: the web portal is reserved for administrators and staff with document-management rights. Please use the Orvia mobile app.',
+      );
     }
 
     // 7. First login: link googleSub and transition status from INVITED to ACTIVE
@@ -182,6 +240,7 @@ export class GoogleLoginService {
         },
         include: {
           assignments: {
+            where: ACTIVE_ASSIGNMENT,
             include: {
               role: { select: { name: true, scope: true } },
               school: { select: { id: true, name: true } },
@@ -218,6 +277,24 @@ export class GoogleLoginService {
    * Validates issuer, configured audience, expiry, subject, and email verification.
    */
   async verifyGoogleToken(idToken: string): Promise<GoogleTokenPayload> {
+    const authConfig = this.config.getOrThrow<AuthConfig>('auth');
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    if (!isProduction && authConfig.devTools && idToken.startsWith(DEV_GOOGLE_TOKEN_PREFIX)) {
+      const devEmail = idToken.slice(DEV_GOOGLE_TOKEN_PREFIX.length).trim().toLowerCase();
+      if (!devEmail || !devEmail.includes('@')) {
+        throw new Error('Invalid dev Google token email');
+      }
+      return {
+        sub: `dev-google-sub-${devEmail}`,
+        email: devEmail,
+        email_verified: true,
+        iss: 'https://accounts.google.com',
+        aud: authConfig.googleClientIds[0] ?? 'dev-google-client-id',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      };
+    }
+
     const url = `${GOOGLE_TOKENINFO_URL}?id_token=${encodeURIComponent(idToken)}`;
     let response: Response;
     try {
@@ -249,9 +326,8 @@ export class GoogleLoginService {
     }
 
     // Validate audience
-    const configuredClientIds = this.config.getOrThrow<AuthConfig>('auth').googleClientIds;
+    const configuredClientIds = authConfig.googleClientIds;
     const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-    const isProduction = process.env.NODE_ENV === 'production';
     const audienceValid =
       (!isProduction && configuredClientIds.length === 0) ||
       audiences.some((a) => configuredClientIds.includes(a));

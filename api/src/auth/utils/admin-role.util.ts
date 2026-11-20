@@ -39,6 +39,39 @@ export function hasAdminAccess(roles: readonly ClassifiableRole[]): boolean {
   return roles.some(isAdminRole);
 }
 
+/**
+ * Permissions that grant web portal access for document management (§4.6, #88, #91).
+ */
+export const PORTAL_DOCUMENT_PERMISSIONS: readonly string[] = [
+  'documents:manage',
+  'documents.manage',
+  'documents:create',
+  'documents:update',
+  'documents:delete',
+  'documents:publish',
+  'documents:manage_access',
+  'documents:process',
+  'documents:access.manage',
+  'documents.access.manage',
+  'spaces:create',
+  'spaces:update',
+  'spaces:delete',
+  'spaces:manage',
+];
+
+/**
+ * True when at least one of `roles` grants web portal access (§4.6, #91):
+ * either an administrative role or a role carrying document-management rights.
+ */
+export function hasPortalAccess(roles: readonly ClassifiableRole[]): boolean {
+  if (hasAdminAccess(roles)) return true;
+  return roles.some((role) =>
+    role.permissions.some(
+      (permission) => permission === '*' || PORTAL_DOCUMENT_PERMISSIONS.includes(permission),
+    ),
+  );
+}
+
 /** The part of a Prisma `assignments` row (with `role.rolePermissions` included) we classify on. */
 export interface AssignmentWithRole {
   role: {

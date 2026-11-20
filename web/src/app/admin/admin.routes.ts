@@ -1,9 +1,13 @@
 import { Routes } from '@angular/router';
 
 // Project import
+import {
+  portalLandingGuard,
+  portalPermissionGuard
+} from './identity/guards/portal-permission.guard';
 import { AdminLayout } from './theme/layouts/admin-layout/admin-layout.component';
+import { PERMISSION_MENU_MAP } from './theme/layouts/admin-layout/navigation/navigation';
 import { GuestLayoutComponent } from './theme/layouts/guest-layout/guest-layout.component';
-import { platformAdminGuard } from './identity/roles/guards/platform-admin.guard';
 
 export const adminRoutes: Routes = [
   {
@@ -12,46 +16,145 @@ export const adminRoutes: Routes = [
     children: [
       {
         path: '',
-        redirectTo: 'dashboard/default',
+        canActivate: [portalLandingGuard],
+        loadComponent: () =>
+          import('./identity/components/not-allowed/not-allowed.component').then(
+            (c) => c.NotAllowedComponent
+          ),
         pathMatch: 'full'
       },
       {
         path: 'dashboard/default',
-        loadComponent: () => import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['dashboard'])],
+        loadComponent: () =>
+          import('./demo/dashboard/default/default.component').then((c) => c.DefaultComponent)
+      },
+      {
+        path: 'schools',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['schools'])],
+        data: {
+          sectionId: 'schools',
+          title: 'Schools',
+          description: 'Manage institutions and their allowed email domains.'
+        },
+        loadComponent: () =>
+          import('./identity/components/portal-section/portal-section.component').then(
+            (c) => c.PortalSectionComponent
+          )
       },
       {
         path: 'users',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['users'])],
         loadComponent: () =>
           import('./identity/users/user-list/user-list.component').then((c) => c.UserListComponent)
       },
       {
         path: 'users/:id',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['users'])],
         loadComponent: () =>
           import('./identity/users/user-edit/user-edit.component').then((c) => c.UserEditComponent)
       },
       {
         path: 'roles',
-        canActivate: [platformAdminGuard],
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['roles'])],
         loadComponent: () =>
           import('./identity/roles/role-list/role-list.component').then((c) => c.RoleListComponent)
       },
       {
         path: 'roles/create',
-        canActivate: [platformAdminGuard],
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['roles'])],
         loadComponent: () =>
           import('./identity/roles/role-edit/role-edit.component').then((c) => c.RoleEditComponent)
       },
       {
         path: 'roles/:id',
-        canActivate: [platformAdminGuard],
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['roles'])],
         loadComponent: () =>
           import('./identity/roles/role-edit/role-edit.component').then((c) => c.RoleEditComponent)
       },
       {
         path: 'roles/:id/edit',
-        canActivate: [platformAdminGuard],
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['roles'])],
         loadComponent: () =>
           import('./identity/roles/role-edit/role-edit.component').then((c) => c.RoleEditComponent)
+      },
+      {
+        path: 'assignments',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['assignments'])],
+        loadComponent: () =>
+          import('./identity/users/user-list/user-list.component').then((c) => c.UserListComponent)
+      },
+      {
+        path: 'spaces',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['spaces'])],
+        data: {
+          sectionId: 'spaces',
+          title: 'Spaces',
+          description: 'Manage academic knowledge spaces within your school scope.'
+        },
+        loadComponent: () =>
+          import('./identity/components/portal-section/portal-section.component').then(
+            (c) => c.PortalSectionComponent
+          )
+      },
+      {
+        path: 'documents',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['documents'])],
+        data: {
+          sectionId: 'documents',
+          title: 'Documents',
+          description: 'Upload, version, publish, and monitor documents in your school scope.'
+        },
+        loadComponent: () =>
+          import('./identity/components/portal-section/portal-section.component').then(
+            (c) => c.PortalSectionComponent
+          )
+      },
+      {
+        path: 'conversations',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['conversations'])],
+        data: {
+          sectionId: 'conversations',
+          title: 'Conversations',
+          description: 'Monitor conversations and reported answers within your scope.'
+        },
+        loadComponent: () =>
+          import('./identity/components/portal-section/portal-section.component').then(
+            (c) => c.PortalSectionComponent
+          )
+      },
+      {
+        path: 'metrics',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['metrics'])],
+        data: {
+          sectionId: 'metrics',
+          title: 'Metrics',
+          description: 'Track RAG latency, requests, and quality telemetry.'
+        },
+        loadComponent: () =>
+          import('./identity/components/portal-section/portal-section.component').then(
+            (c) => c.PortalSectionComponent
+          )
+      },
+      {
+        path: 'audit',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['audit'])],
+        data: {
+          sectionId: 'audit',
+          title: 'Audit',
+          description: 'Inspect tamper-evident security and administrative events.'
+        },
+        loadComponent: () =>
+          import('./identity/components/portal-section/portal-section.component').then(
+            (c) => c.PortalSectionComponent
+          )
+      },
+      {
+        path: 'forbidden',
+        loadComponent: () =>
+          import('./identity/components/not-allowed/not-allowed.component').then(
+            (c) => c.NotAllowedComponent
+          )
       }
     ]
   },
@@ -61,12 +164,31 @@ export const adminRoutes: Routes = [
     children: [
       {
         path: 'login',
-        loadComponent: () => import('./demo/pages/authentication/auth-login/auth-login.component').then((c) => c.AuthLoginComponent)
+        loadComponent: () =>
+          import('./demo/pages/authentication/auth-login/auth-login.component').then(
+            (c) => c.AuthLoginComponent
+          )
       },
       {
         path: 'register',
         loadComponent: () =>
-          import('./demo/pages/authentication/auth-register/auth-register.component').then((c) => c.AuthRegisterComponent)
+          import('./demo/pages/authentication/auth-register/auth-register.component').then(
+            (c) => c.AuthRegisterComponent
+          )
+      },
+      {
+        path: 'set-first-password',
+        loadComponent: () =>
+          import('./demo/pages/authentication/set-first-password/set-first-password.component').then(
+            (c) => c.SetFirstPasswordComponent
+          )
+      },
+      {
+        path: 'set-first-password/:token',
+        loadComponent: () =>
+          import('./demo/pages/authentication/set-first-password/set-first-password.component').then(
+            (c) => c.SetFirstPasswordComponent
+          )
       }
     ]
   }

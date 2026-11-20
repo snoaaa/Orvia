@@ -11,4 +11,9 @@ export class QueryRagMetricsDto {
   @IsString()
   @IsOptional()
   status?: string;
+
+  @ApiPropertyOptional({ example: '123e4567-e89b-12d3-a456-426614174001', description: 'Filter by school' })
+  @IsString()
+  @IsOptional()
+  schoolId?: string;
 }

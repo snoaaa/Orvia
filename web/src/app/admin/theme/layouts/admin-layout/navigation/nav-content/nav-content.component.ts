@@ -1,12 +1,12 @@
 // Angular import
-import { Component, OnInit, inject, output } from '@angular/core';
 import { CommonModule, Location, LocationStrategy } from '@angular/common';
+import { Component, OnInit, inject, output } from '@angular/core';
 import { RouterModule } from '@angular/router';
 
 // project import
-import { NavigationItem, NavigationItems, navigationFor, type AdminType, ADMIN_TYPE_STORAGE_KEY } from '../navigation';
+import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
 import { environment } from 'src/environments/environment';
-
+import { NavigationItem, NavigationItems } from '../navigation';
 import { NavGroupComponent } from './nav-group/nav-group.component';
 
 import { NgScrollbarModule } from 'ngx-scrollbar';
@@ -18,13 +18,12 @@ import { NgScrollbarModule } from 'ngx-scrollbar';
   styleUrls: ['./nav-content.component.scss']
 })
 export class NavContentComponent implements OnInit {
-  private location = inject(Location);
-  private locationStrategy = inject(LocationStrategy);
+  private readonly location = inject(Location);
+  private readonly locationStrategy = inject(LocationStrategy);
+  readonly session = inject(PortalSessionService);
 
   // public props
   NavCollapsedMob = output();
-
-  navigations: NavigationItem[];
 
   // version
   title = 'Demo application for version numbering';
@@ -33,15 +32,9 @@ export class NavContentComponent implements OnInit {
   navigation = NavigationItems;
   windowWidth = window.innerWidth;
 
-  // Constructor
-  constructor() {
-    this.navigations = navigationFor(NavContentComponent.adminTypeFromStorage());
-  }
-
-  /** Reads the console type from local storage. Frontend-only until the auth session exists. */
-  private static adminTypeFromStorage(): AdminType {
-    const stored = (localStorage.getItem(ADMIN_TYPE_STORAGE_KEY) ?? '').trim().toLowerCase();
-    return stored === 'school' ? 'school' : 'platform';
+  /** Reactive menu items from the session store (#92). */
+  get navigations(): NavigationItem[] {
+    return this.session.menuItems();
   }
 
   // Life cycle events

@@ -156,6 +156,8 @@ export const AuditEvents = {
       schoolId: string;
       role: string;
       previousRole?: string | null;
+      /** Group of the assignment (POST /assignments); left out of the details when not given. */
+      groupId?: string | null;
       assignedBy?: AuditActor | null;
     },
     context: AuditRequestContext,
@@ -168,8 +170,128 @@ export const AuditEvents = {
       details: {
         email: p.email.trim().toLowerCase(),
         schoolId: p.schoolId,
+        ...(p.groupId !== undefined ? { groupId: p.groupId } : {}),
         role: p.role,
         previousRole: p.previousRole ?? null,
+      },
+      context,
+    };
+  },
+
+  /**
+   * Document-management or other fine-grained permission granted to a staff member in a school (§4.5, #88).
+   */
+  permissionGranted(
+    p: {
+      userId: string;
+      email?: string | null;
+      schoolId: string;
+      permission: string;
+      grantedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.PERMISSION_GRANTED,
+      actor: p.grantedBy ?? anonymous,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        permission: p.permission,
+        schoolId: p.schoolId,
+        ...(p.email ? { email: p.email.trim().toLowerCase() } : {}),
+      },
+      context,
+    };
+  },
+
+  /**
+   * Document-management or other fine-grained permission revoked from a staff member in a school (§4.5, #88).
+   */
+  permissionRevoked(
+    p: {
+      userId: string;
+      email?: string | null;
+      schoolId: string;
+      permission: string;
+      revokedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.PERMISSION_REVOKED,
+      actor: p.revokedBy ?? anonymous,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        permission: p.permission,
+        schoolId: p.schoolId,
+        ...(p.email ? { email: p.email.trim().toLowerCase() } : {}),
+      },
+      context,
+    };
+  },
+
+  /**
+   * The role and/or group of an existing assignment changed (PATCH /assignments/:id, #48).
+   * The school of an assignment never changes, so only the role and the group have a previous value.
+   */
+  assignmentUpdated(
+    p: {
+      assignmentId: string;
+      userId: string;
+      email: string;
+      schoolId: string;
+      role: string;
+      previousRole: string;
+      groupId: string | null;
+      previousGroupId: string | null;
+      updatedBy: AuditActor;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ASSIGNMENT_UPDATED,
+      actor: p.updatedBy,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        assignmentId: p.assignmentId,
+        email: p.email.trim().toLowerCase(),
+        schoolId: p.schoolId,
+        role: p.role,
+        previousRole: p.previousRole,
+        groupId: p.groupId,
+        previousGroupId: p.previousGroupId,
+      },
+      context,
+    };
+  },
+
+  /** An assignment was removed (DELETE /assignments/:id, #49, soft delete): the user loses that role in the school. */
+  assignmentRemoved(
+    p: {
+      assignmentId: string;
+      userId: string;
+      email: string;
+      schoolId: string;
+      role: string;
+      groupId: string | null;
+      removedBy: AuditActor;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ASSIGNMENT_REMOVED,
+      actor: p.removedBy,
+      entity: { type: 'user', id: p.userId },
+      details: {
+        assignmentId: p.assignmentId,
+        email: p.email.trim().toLowerCase(),
+        schoolId: p.schoolId,
+        role: p.role,
+        groupId: p.groupId,
       },
       context,
     };
@@ -203,6 +325,190 @@ export const AuditEvents = {
         reason: p.reason,
         failedAttempts: p.failedAttempts,
         lockedUntil: p.lockedUntil ?? null,
+      },
+      context,
+    };
+  },
+
+  documentUploaded(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      versionNo: number;
+      versionId: string;
+      checksum: string;
+      mimeType: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_UPLOADED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        versionNo: p.versionNo,
+        versionId: p.versionId,
+        checksum: p.checksum,
+        mimeType: p.mimeType,
+      },
+      context,
+    };
+  },
+
+  documentUpdated(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+      changes: Record<string, { from: unknown; to: unknown }>;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_UPDATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        changes: p.changes,
+      },
+      context,
+    };
+  },
+
+  documentReplaced(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      versionNo: number;
+      versionId: string;
+      checksum: string;
+      mimeType: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_REPLACED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        versionNo: p.versionNo,
+        versionId: p.versionId,
+        checksum: p.checksum,
+        mimeType: p.mimeType,
+      },
+      context,
+    };
+  },
+
+  documentDeleted(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      title: string;
+      versionsCount: number;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_DELETED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        title: p.title,
+        versionsCount: p.versionsCount,
+      },
+      context,
+    };
+  },
+  /** A document was published to new targets (#109). `rules` lists only the targets this request added. */
+  documentPublished(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      rules: { type: string; targetId: string }[];
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_PUBLISHED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        rules: p.rules,
+      },
+      context,
+    };
+  },
+  /** The rules of a document were replaced or one was removed (#110): the targets added and removed. */
+  documentAccessChanged(
+    p: {
+      documentId: string;
+      spaceId: string;
+      schoolId: string;
+      added: { type: string; targetId: string }[];
+      removed: { type: string; targetId: string }[];
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.DOCUMENT_ACCESS_CHANGED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.actor.schoolId ?? null,
+      },
+      entity: { type: 'document', id: p.documentId },
+      details: {
+        spaceId: p.spaceId,
+        schoolId: p.schoolId,
+        added: p.added,
+        removed: p.removed,
       },
       context,
     };

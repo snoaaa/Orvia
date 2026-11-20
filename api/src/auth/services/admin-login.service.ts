@@ -10,6 +10,7 @@ import type { AuditRequestContext } from '../../audit/utils/audit-request-contex
 import { PrismaService } from '../../database/prisma.service.js';
 import { hasAdminAccess, isAdminRole, toClassifiableRoles } from '../utils/admin-role.util.js';
 import { SessionService, type TokenPair } from './session.service.js';
+import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
 
 /**
  * Precomputed argon2id hash of a throwaway string, used as the comparison target when there is no
@@ -109,6 +110,7 @@ export class AdminLoginService {
       where: { email: normalizedEmail },
       include: {
         assignments: {
+          where: ACTIVE_ASSIGNMENT,
           include: {
             role: {
               select: {
@@ -326,6 +328,7 @@ export class AdminLoginService {
         user: {
           include: {
             assignments: {
+              where: ACTIVE_ASSIGNMENT,
               include: {
                 role: { select: { name: true, scope: true } },
                 school: { select: { id: true, status: true } },
@@ -352,13 +355,19 @@ export class AdminLoginService {
       throw new ForbiddenException('Account is suspended');
     }
 
-    // Password validation rules (min length 8, max length 128)
+    // Password validation rules (8-128 chars, upper + lower, number or special character)
     if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
       throw new BadRequestException('Password must be at least 8 characters long');
     }
 
     if (newPassword.length > 128) {
       throw new BadRequestException('Password cannot exceed 128 characters');
+    }
+
+    if (!/[a-z]/.test(newPassword) || !/[A-Z]/.test(newPassword) || !/[0-9\W_]/.test(newPassword)) {
+      throw new BadRequestException(
+        'Password must contain uppercase and lowercase letters, and at least one number or special character',
+      );
     }
 
     // Hash password with argon2id

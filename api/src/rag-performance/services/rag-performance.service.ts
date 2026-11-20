@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
+import { assertSchoolAccess, schoolIdFilter } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { CreateRagMetricDto, QueryRagMetricsDto } from '../dto/index.js';
 import { RagRequestMetricEntity } from '../entities/index.js';
@@ -9,7 +11,12 @@ import { RagMetricMapper } from '../mappers/index.js';
 export class RagPerformanceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAllMetrics(query?: QueryRagMetricsDto): Promise<RagRequestMetricEntity[]> {
+  async findAllMetrics(query?: QueryRagMetricsDto, actor?: AuthenticatedUser): Promise<RagRequestMetricEntity[]> {
+    if (actor && query?.schoolId) {
+      assertSchoolAccess(actor, 'metrics:view', query.schoolId);
+    }
+    const _schoolFilter = actor ? schoolIdFilter(actor, 'metrics:view') : undefined;
+
     const sample = new RagRequestMetricEntity({
       id: randomUUID(),
       messageId: randomUUID(),

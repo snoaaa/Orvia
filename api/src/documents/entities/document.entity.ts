@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { DocumentVersionEntity } from './document-version.entity.js';
 
 export class DocumentEntity {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174010', description: 'Document UUID' })
@@ -24,6 +25,13 @@ export class DocumentEntity {
 
   @ApiProperty({ example: null, required: false, description: 'Soft deletion timestamp' })
   deletedAt?: Date | null;
+
+  @ApiProperty({
+    type: () => DocumentVersionEntity,
+    required: false,
+    description: 'Current or newly uploaded version of the document',
+  })
+  currentVersion?: DocumentVersionEntity | null;
 
   constructor(partial: Partial<DocumentEntity>) {
     Object.assign(this, partial);

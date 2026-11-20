@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
+import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 import { schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { OverviewRange } from '../dto/overview-query.dto.js';
 import {
+  OverviewAlertEntity,
   OverviewDocumentsEntity,
   OverviewEntity,
   OverviewRecentEventEntity,
@@ -23,7 +25,7 @@ interface Scope {
 }
 
 /**
- * Everything the dashboard needs, in one round trip.
+ * Everything the dashboard needs, in one round trip (§4.5 Tableau de bord, Issue #93).
  *
  * Every section is scoped exactly like the list endpoint that owns the data: a platform admin gets
  * platform-wide numbers, a school admin only their own school(s). Sections the caller may not read
@@ -37,6 +39,7 @@ export class OverviewService {
   async getOverview(actor: AuthenticatedUser, range: OverviewRange = '7d'): Promise<OverviewEntity> {
     const buckets = buildBuckets(range);
     const since = bucketStart(buckets[0], range);
+    const isPlatform = Boolean(actor.isPlatformAdmin || actor.assignments?.some((a) => a.scope === 'platform'));
 
     const [users, schools, sessions, documents, spaces, series, recent] = await Promise.all([
       this.usersSection(actor),
@@ -48,9 +51,11 @@ export class OverviewService {
       this.recentSection(actor),
     ]);
 
+    const alerts = await this.alertsSection(actor, documents);
+
     return new OverviewEntity({
       range,
-      scope: actor.isPlatformAdmin ? 'platform' : 'school',
+      scope: isPlatform ? 'platform' : 'school',
       generatedAt: new Date(),
       ...(users ? { users } : {}),
       ...(schools ? { schools } : {}),
@@ -59,6 +64,7 @@ export class OverviewService {
       ...(spaces ? { spaces } : {}),
       ...(series ? { series } : {}),
       ...(recent ? { recent } : {}),
+      ...(alerts ? { alerts } : {}),
     });
   }
 
@@ -74,7 +80,7 @@ export class OverviewService {
 
     const where: Prisma.UserWhereInput = scope.all
       ? {}
-      : { assignments: { some: { schoolId: { in: scope.schoolIds } } } };
+      : { assignments: { some: { ...ACTIVE_ASSIGNMENT, schoolId: { in: scope.schoolIds } } } };
     const grouped = await this.prisma.user.groupBy({ by: ['status'], where, _count: true });
     const countOf = (status: string) => grouped.find((g) => g.status === status)?._count ?? 0;
 
@@ -108,7 +114,7 @@ export class OverviewService {
     const where: Prisma.SessionWhereInput = {
       revokedAt: null,
       expiresAt: { gt: new Date() },
-      ...(scope.all ? {} : { user: { assignments: { some: { schoolId: { in: scope.schoolIds } } } } }),
+      ...(scope.all ? {} : { user: { assignments: { some: { ...ACTIVE_ASSIGNMENT, schoolId: { in: scope.schoolIds } } } } }),
     };
     return new OverviewSessionsEntity({ active: await this.prisma.session.count({ where }) });
   }
@@ -121,7 +127,7 @@ export class OverviewService {
       deletedAt: null,
       ...(scope.all ? {} : { space: { schoolId: { in: scope.schoolIds } } }),
     };
-    const [total, spaces, jobs] = await Promise.all([
+    const [total, spaces, jobs, versionErrors] = await Promise.all([
       this.prisma.document.count({ where }),
       this.prisma.space.count({ where: scope.all ? {} : { schoolId: { in: scope.schoolIds } } }),
       this.prisma.processingJob.groupBy({
@@ -129,12 +135,22 @@ export class OverviewService {
         where: scope.all ? {} : { version: { document: { space: { schoolId: { in: scope.schoolIds } } } } },
         _count: true,
       }),
+      this.prisma.documentVersion?.count
+        ? this.prisma.documentVersion.count({
+            where: {
+              status: 'error',
+              document: where,
+            },
+          })
+        : Promise.resolve(0),
     ]);
 
     const processingJobs: Record<string, number> = {};
     for (const job of jobs) processingJobs[job.status] = job._count;
+    const jobErrors = (processingJobs['failed'] ?? 0) + (processingJobs['error'] ?? 0);
+    const processingErrors = Math.max(jobErrors, versionErrors);
 
-    return new OverviewDocumentsEntity({ total, spaces, processingJobs });
+    return new OverviewDocumentsEntity({ total, spaces, processingErrors, processingJobs });
   }
 
   private async spacesSection(actor: AuthenticatedUser): Promise<OverviewSpaceEntity[] | undefined> {
@@ -184,7 +200,8 @@ export class OverviewService {
             sessionScope.all
               ? Prisma.empty
               : Prisma.sql`AND user_id IN (
-                  SELECT user_id FROM user_assignments WHERE school_id IN (${Prisma.join(sessionScope.schoolIds)})
+                  SELECT user_id FROM user_assignments
+                  WHERE deleted_at IS NULL AND school_id IN (${Prisma.join(sessionScope.schoolIds)})
                 )`
           }
           GROUP BY bucket
@@ -223,6 +240,17 @@ export class OverviewService {
         createdAt: true,
       },
     });
+
+    const schoolIds = [...new Set(rows.map((r) => r.schoolId).filter((s): s is string => !!s))];
+    const schools =
+      schoolIds.length > 0 && this.prisma.school?.findMany
+        ? await this.prisma.school.findMany({
+            where: { id: { in: schoolIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const schoolNames = new Map(schools.map((s) => [s.id, s.name]));
+
     return rows.map(
       (row) =>
         new OverviewRecentEventEntity({
@@ -232,9 +260,63 @@ export class OverviewService {
           actorRole: row.actorRole,
           entityType: row.entityType,
           schoolId: row.schoolId,
+          schoolName: row.schoolId ? (schoolNames.get(row.schoolId) ?? row.schoolId) : 'Platform',
           at: row.createdAt,
         }),
     );
+  }
+
+  private async alertsSection(
+    actor: AuthenticatedUser,
+    documents?: OverviewDocumentsEntity,
+  ): Promise<OverviewAlertEntity[] | undefined> {
+    const scope = this.scopeFor(actor, 'audit:read');
+    if (!scope.allowed) return undefined;
+
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const baseWhere: Prisma.AuditEventWhereInput = {
+      createdAt: { gte: since24h },
+      ...(scope.all ? {} : { schoolId: { in: scope.schoolIds } }),
+    };
+
+    const [failedLogins, lockedAccounts, accessDenied] = await Promise.all([
+      this.prisma.auditEvent.count({ where: { ...baseWhere, action: 'login_failure' } }),
+      this.prisma.auditEvent.count({ where: { ...baseWhere, action: 'account_locked' } }),
+      this.prisma.auditEvent.count({ where: { ...baseWhere, action: 'access_denied' } }),
+    ]);
+
+    const processingErrors = documents?.processingErrors ?? 0;
+
+    return [
+      new OverviewAlertEntity({
+        code: 'failed_logins',
+        title: 'Failed logins',
+        count: failedLogins,
+        severity: 'danger',
+        subtitle: scope.all ? 'All schools · last 24h' : 'Your school · last 24h',
+      }),
+      new OverviewAlertEntity({
+        code: 'accounts_locked',
+        title: 'Accounts locked',
+        count: lockedAccounts,
+        severity: 'warning',
+        subtitle: scope.all ? '15 min lockout · all schools' : '15 min lockout · your school',
+      }),
+      new OverviewAlertEntity({
+        code: 'access_denied',
+        title: 'Access denied',
+        count: accessDenied,
+        severity: 'primary',
+        subtitle: scope.all ? 'Blocked requests · last 24h' : 'Blocked requests · your school',
+      }),
+      new OverviewAlertEntity({
+        code: 'processing_errors',
+        title: 'Processing errors',
+        count: processingErrors,
+        severity: processingErrors > 0 ? 'danger' : 'warning',
+        subtitle: scope.all ? 'Document pipeline · all schools' : 'Document pipeline · your school',
+      }),
+    ];
   }
 }
 

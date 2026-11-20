@@ -1,26 +1,20 @@
 /**
- * Sidebar model and the single menu specification for the admin console.
+ * Sidebar model and permission-driven menu specification for the portal (§4.5, Issue #92).
  *
- * Two rules drive what a user sees:
- *   1. `adminTypes` — which console shows the entry (`platform`, `school`, or both when absent).
- *   2. `permission` — the API permission code (prisma/seed.ts) that reveals it, kept here so the
- *      menu can switch to permission filtering as soon as the session exposes `permissions[]`.
- *
- * Navigation is intentionally NOT wired yet: no entry has a `url`, so the sidebar renders labels
- * only and clicking never leaves the current page. `state` records whether the destination
- * already exists (`live`) or still has to be built (`planned`).
- *
- * Icons are Tabler Icons, already bundled with the template (scss/fonts/tabler-icons.min.css);
- * `icon` holds the full class list, e.g. 'ti ti-users'.
+ * Menu visibility is computed strictly from permission codes (`PERMISSION_MENU_MAP` / `item.permission`)
+ * without hard-coding role names in components:
+ *  - Platform admin: Dashboard, Schools, Users, Roles, Assignments, Spaces, Documents, Conversations, Metrics, Audit.
+ *  - School admin: Dashboard, Users, Assignments, Spaces, Documents, Conversations, Metrics, Audit.
+ *  - Staff with document-management rights: Spaces, Documents.
  */
 
-/** Which admin console is being rendered. */
+/** Which admin console is being rendered (kept for legacy compatibility). */
 export type AdminType = 'platform' | 'school';
 
 /** `live` = the screen exists · `planned` = the destination is not built yet. */
 export type NavItemState = 'live' | 'planned';
 
-/** Where the console type is remembered until the real auth session provides it. */
+/** Legacy storage key kept for backward compatibility. */
 export const ADMIN_TYPE_STORAGE_KEY = 'wamdp.adminType';
 
 export interface NavigationItem {
@@ -43,11 +37,48 @@ export interface NavigationItem {
   path?: string;
   /** API permission code that reveals this destination. */
   permission?: string;
-  /** Consoles that show it. Absent = both admin types. */
+  /** Consoles that show it (legacy fallback). */
   adminTypes?: AdminType[];
   /** Whether the destination is already built. */
   state?: NavItemState;
 }
+
+/**
+ * Permission codes that satisfy a `documents:manage` check (aligned with backend PermissionsGuard).
+ */
+export const DOCUMENT_MANAGEMENT_PERMISSIONS = new Set<string>([
+  'documents:manage',
+  'documents.manage',
+  'documents:create',
+  'documents:update',
+  'documents:delete',
+  'documents:publish',
+  'documents:manage_access',
+  'documents:process',
+  'documents:access.manage',
+  'documents.access.manage',
+  'spaces:create',
+  'spaces:update',
+  'spaces:delete',
+  'spaces:manage'
+]);
+
+/**
+ * Permission-to-menu map (§4.5, Issue #92): maps each portal menu item id to the permission code
+ * that grants access to it. No role names are used.
+ */
+export const PERMISSION_MENU_MAP: Readonly<Record<string, string>> = {
+  dashboard: 'metrics:view',
+  schools: 'schools:create',
+  users: 'users:read',
+  roles: 'system:manage',
+  assignments: 'users:assign_role',
+  spaces: 'documents:manage',
+  documents: 'documents:manage',
+  conversations: 'metrics:view',
+  metrics: 'metrics:view',
+  audit: 'audit:read'
+};
 
 export const NavigationItems: NavigationItem[] = [
   {
@@ -62,6 +93,7 @@ export const NavigationItems: NavigationItem[] = [
         classes: 'nav-item',
         url: '/admin/dashboard/default',
         icon: 'ti ti-dashboard',
+        permission: PERMISSION_MENU_MAP['dashboard'],
         state: 'live'
       }
     ]
@@ -72,40 +104,24 @@ export const NavigationItems: NavigationItem[] = [
     type: 'group',
     children: [
       {
+        id: 'schools',
+        title: 'Schools',
+        type: 'item',
+        classes: 'nav-item',
+        url: '/admin/schools',
+        icon: 'ti ti-school',
+        permission: PERMISSION_MENU_MAP['schools'],
+        adminTypes: ['platform'],
+        state: 'live'
+      },
+      {
         id: 'users',
         title: 'Users',
         type: 'item',
         classes: 'nav-item',
         url: '/admin/users',
         icon: 'ti ti-users',
-        permission: 'users:read',
-        state: 'live'
-      },
-      {
-        id: 'invitations',
-        title: 'Invitations',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-mail',
-        permission: 'users:invite',
-        state: 'planned'
-      },
-      {
-        id: 'groups',
-        title: 'Groups & classes',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-sitemap',
-        permission: 'groups:read',
-        state: 'planned'
-      },
-      {
-        id: 'schools',
-        title: 'Schools',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-school',
-        permission: 'schools:read',
+        permission: PERMISSION_MENU_MAP['users'],
         state: 'live'
       },
       {
@@ -115,26 +131,18 @@ export const NavigationItems: NavigationItem[] = [
         classes: 'nav-item',
         url: '/admin/roles',
         icon: 'ti ti-shield-lock',
-        permission: 'users:assign_role',
+        permission: PERMISSION_MENU_MAP['roles'],
         adminTypes: ['platform'],
         state: 'live'
       },
       {
-        id: 'access-matrix',
-        title: 'Access matrix',
+        id: 'assignments',
+        title: 'Assignments',
         type: 'item',
         classes: 'nav-item',
-        icon: 'ti ti-table',
-        permission: 'users:assign_role',
-        state: 'planned'
-      },
-      {
-        id: 'permissions',
-        title: 'Permissions',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-key',
-        permission: 'users:assign_role',
+        url: '/admin/assignments',
+        icon: 'ti ti-user-check',
+        permission: PERMISSION_MENU_MAP['assignments'],
         state: 'live'
       }
     ]
@@ -149,8 +157,9 @@ export const NavigationItems: NavigationItem[] = [
         title: 'Spaces',
         type: 'item',
         classes: 'nav-item',
+        url: '/admin/spaces',
         icon: 'ti ti-book',
-        permission: 'spaces:read',
+        permission: PERMISSION_MENU_MAP['spaces'],
         state: 'live'
       },
       {
@@ -158,36 +167,10 @@ export const NavigationItems: NavigationItem[] = [
         title: 'Documents',
         type: 'item',
         classes: 'nav-item',
+        url: '/admin/documents',
         icon: 'ti ti-file-text',
-        permission: 'documents:read',
+        permission: PERMISSION_MENU_MAP['documents'],
         state: 'live'
-      },
-      {
-        id: 'processing',
-        title: 'Processing queue',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-server',
-        permission: 'documents:process',
-        state: 'planned'
-      },
-      {
-        id: 'access-rules',
-        title: 'Access rules',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-lock',
-        permission: 'documents:manage_access',
-        state: 'planned'
-      },
-      {
-        id: 'publishing',
-        title: 'Publishing',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-upload',
-        permission: 'documents:publish',
-        state: 'planned'
       }
     ]
   },
@@ -201,28 +184,20 @@ export const NavigationItems: NavigationItem[] = [
         title: 'Conversations',
         type: 'item',
         classes: 'nav-item',
+        url: '/admin/conversations',
         icon: 'ti ti-messages',
-        permission: 'conversations:read',
-        state: 'planned'
+        permission: PERMISSION_MENU_MAP['conversations'],
+        state: 'live'
       },
       {
-        id: 'flagged-answers',
-        title: 'Flagged answers',
+        id: 'metrics',
+        title: 'Metrics',
         type: 'item',
         classes: 'nav-item',
-        icon: 'ti ti-flag',
-        permission: 'answers:report',
-        state: 'planned'
-      },
-      {
-        id: 'rag-performance',
-        title: 'RAG performance',
-        type: 'item',
-        classes: 'nav-item',
+        url: '/admin/metrics',
         icon: 'ti ti-chart-line',
-        permission: 'metrics:view',
-        adminTypes: ['platform'],
-        state: 'planned'
+        permission: PERMISSION_MENU_MAP['metrics'],
+        state: 'live'
       }
     ]
   },
@@ -232,108 +207,57 @@ export const NavigationItems: NavigationItem[] = [
     type: 'group',
     children: [
       {
-        id: 'sessions',
-        title: 'Sessions',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-device-desktop',
-        permission: 'users:suspend',
-        state: 'planned'
-      },
-      {
-        id: 'devices',
-        title: 'Devices',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-device-mobile',
-        permission: 'devices:manage',
-        state: 'planned'
-      },
-      {
-        id: 'sync',
-        title: 'Sync & offline',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-cloud-upload',
-        permission: 'sync:execute',
-        state: 'planned'
-      },
-      {
         id: 'audit',
-        title: 'Audit trail',
+        title: 'Audit',
         type: 'item',
         classes: 'nav-item',
+        url: '/admin/audit',
         icon: 'ti ti-history',
-        permission: 'audit:read',
+        permission: PERMISSION_MENU_MAP['audit'],
         state: 'live'
-      },
-      {
-        id: 'audit-export',
-        title: 'Audit export',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-download',
-        permission: 'audit:export',
-        adminTypes: ['platform'],
-        state: 'planned'
-      }
-    ]
-  },
-  {
-    id: 'account',
-    title: 'Account',
-    type: 'group',
-    children: [
-      {
-        id: 'my-sessions',
-        title: 'My sessions',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-device-laptop',
-        state: 'live'
-      },
-      {
-        id: 'profile',
-        title: 'Profile',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-user',
-        state: 'planned'
-      }
-    ]
-  },
-  {
-    id: 'platform',
-    title: 'Platform',
-    type: 'group',
-    children: [
-      {
-        id: 'platform-health',
-        title: 'Platform health',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-activity',
-        permission: 'system:manage',
-        adminTypes: ['platform'],
-        state: 'planned'
-      },
-      {
-        id: 'settings',
-        title: 'Settings',
-        type: 'item',
-        classes: 'nav-item',
-        icon: 'ti ti-settings',
-        permission: 'system:manage',
-        adminTypes: ['platform'],
-        state: 'planned'
       }
     ]
   }
 ];
 
 /**
- * The entries a given console can see, with groups that end up empty removed
- * (for a school admin, the whole `Platform` group disappears).
+ * Checks whether a set of user permissions satisfies `requiredPermission`
+ * (supports '*' wildcard and `documents:manage` / `documents.manage` equivalence).
+ */
+export function hasMenuPermission(
+  userPermissions: readonly string[],
+  requiredPermission?: string
+): boolean {
+  if (!requiredPermission) return true;
+  if (userPermissions.includes('*')) return true;
+  if (userPermissions.includes(requiredPermission)) return true;
+
+  if (
+    requiredPermission === 'documents:manage' ||
+    requiredPermission === 'documents.manage' ||
+    DOCUMENT_MANAGEMENT_PERMISSIONS.has(requiredPermission)
+  ) {
+    return userPermissions.some((p) => DOCUMENT_MANAGEMENT_PERMISSIONS.has(p));
+  }
+
+  return false;
+}
+
+/**
+ * Builds the visible sidebar menu purely from the signed-in user's permission codes,
+ * stripping out any group whose children are all hidden (#92).
+ */
+export function navigationForPermissions(userPermissions: readonly string[]): NavigationItem[] {
+  return NavigationItems.map((group) => ({
+    ...group,
+    children: (group.children ?? []).filter((item) =>
+      hasMenuPermission(userPermissions, item.permission)
+    )
+  })).filter((group) => (group.children?.length ?? 0) > 0);
+}
+
+/**
+ * Legacy helper kept for backward compatibility with older specs.
  */
 export function navigationFor(adminType: AdminType): NavigationItem[] {
   return NavigationItems.map((group) => ({

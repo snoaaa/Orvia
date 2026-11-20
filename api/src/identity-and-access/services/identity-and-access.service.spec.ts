@@ -173,6 +173,7 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       },
       userAssignment: {
         create: vi.fn().mockResolvedValue({}),
+        update: vi.fn().mockResolvedValue({}),
         count: vi.fn().mockResolvedValue(0),
       },
       passwordSetupToken: {
@@ -819,57 +820,7 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       });
     });
 
-    describe('createRole', () => {
-      it('creates custom role and links requested permissions', async () => {
-        mockPrisma.role.findUnique.mockResolvedValueOnce(null);
-        mockPrisma.permission.findMany.mockResolvedValueOnce([{ id: 'p1', code: 'documents:read' }]);
-        mockPrisma.role.findFirst.mockResolvedValueOnce({
-          id: 'new-role-id',
-          name: 'TA_MATH',
-          scope: 'school',
-          rolePermissions: [{ permission: { code: 'documents:read' } }],
-          _count: { assignments: 0 },
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-
-        const result = await service.createRole({
-          name: 'ta_math',
-          scope: 'school',
-          permissions: ['documents:read'],
-        });
-
-        expect(mockPrisma.role.create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: expect.objectContaining({
-              name: 'TA_MATH',
-              scope: 'school',
-            }),
-          }),
-        );
-        expect(mockPrisma.rolePermission.createMany).toHaveBeenCalled();
-        expect(result.name).toBe('TA_MATH');
-      });
-
-      it('rejects creating role with reserved base role name', async () => {
-        await expect(
-          service.createRole({
-            name: 'PLATFORM_ADMIN',
-            scope: 'platform',
-          }),
-        ).rejects.toBeInstanceOf(BadRequestException);
-      });
-
-      it('rejects duplicate role name with 409 ConflictException', async () => {
-        mockPrisma.role.findUnique.mockResolvedValueOnce({ id: 'existing', name: 'TA_MATH' });
-        await expect(
-          service.createRole({
-            name: 'TA_MATH',
-            scope: 'school',
-          }),
-        ).rejects.toBeInstanceOf(ConflictException);
-      });
-    });
+    // createRole (POST /roles, #44) is covered in roles-create.service.spec.ts.
 
     describe('updateRole', () => {
       it('updates custom role and resyncs permissions', async () => {
@@ -954,6 +905,245 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           "Cannot delete role 'ACTIVE_ROLE': still assigned to 3 user(s)",
         );
       });
+    });
+  });
+
+  describe('Document-Management Permission & Staff Assignment (#88)', () => {
+    const schoolId = '00000000-0000-0000-0000-000000000002';
+    const otherSchoolId = '00000000-0000-0000-0000-000000000003';
+    const staffUserId = 'staff-user-id';
+    const studentUserId = 'student-user-id';
+
+    const contentManagerRole = {
+      id: 'role-cm-id',
+      name: 'CONTENT_MANAGER',
+      scope: 'school',
+      rolePermissions: [{ permission: { code: 'documents:manage' } }],
+    };
+
+    const staffRole = {
+      id: 'role-staff-id',
+      name: 'STAFF',
+      scope: 'school',
+      rolePermissions: [{ permission: { code: 'documents:read' } }],
+    };
+
+    const studentRole = {
+      id: 'role-student-id',
+      name: 'STUDENT',
+      scope: 'group',
+      rolePermissions: [{ permission: { code: 'documents:read' } }],
+    };
+
+    const testSchoolAdmin: AuthenticatedUser = {
+      id: 'school-admin-id',
+      email: 'admin@school2.edu',
+      fullName: 'School Admin',
+      status: 'ACTIVE',
+      assignments: [
+        {
+          role: 'SCHOOL_ADMIN',
+          scope: 'school',
+          schoolId,
+          groupId: null,
+          permissions: ['users:assign_role', 'users:read', 'schools:read'],
+        },
+      ],
+      permissions: ['users:assign_role', 'users:read', 'schools:read'],
+      schoolIds: [schoolId],
+      isPlatformAdmin: false,
+      role: 'SCHOOL_ADMIN',
+      schoolId,
+      sessionId: null,
+    };
+
+    it('allows a school admin to grant document-management to staff in their school', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: schoolId });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: staffUserId,
+        email: 'teacher@school.edu',
+        fullName: 'Jane Teacher',
+        assignments: [
+          {
+            id: 'asg-1',
+            schoolId,
+            roleId: staffRole.id,
+            role: staffRole,
+          },
+        ],
+      });
+      mockPrisma.role.findFirst.mockResolvedValueOnce(contentManagerRole);
+      mockPrisma.userAssignment.update.mockResolvedValueOnce({});
+
+      const result = await service.grantDocumentManagement(staffUserId, schoolId, testSchoolAdmin, fakeContext);
+      expect(result).toBeDefined();
+      expect(result.id).toBe(staffUserId);
+
+      expect(mockPrisma.userAssignment.update).toHaveBeenCalledWith({
+        where: { id: 'asg-1' },
+        data: { roleId: contentManagerRole.id },
+      });
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'permission_granted',
+          details: expect.objectContaining({ permission: 'documents:manage', schoolId }),
+        }),
+      );
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'role_assigned',
+          details: expect.objectContaining({ role: 'CONTENT_MANAGER', previousRole: 'STAFF' }),
+        }),
+      );
+    });
+
+    it('allows a platform admin to grant document-management to any staff in any school', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: otherSchoolId });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: staffUserId,
+        email: 'teacher@other.edu',
+        fullName: 'Other Teacher',
+        assignments: [
+          {
+            id: 'asg-2',
+            schoolId: otherSchoolId,
+            roleId: staffRole.id,
+            role: staffRole,
+          },
+        ],
+      });
+      mockPrisma.role.findFirst.mockResolvedValueOnce(contentManagerRole);
+      mockPrisma.userAssignment.update.mockResolvedValueOnce({});
+
+      const result = await service.grantDocumentManagement(staffUserId, otherSchoolId, platformAdmin, fakeContext);
+      expect(result).toBeDefined();
+      expect(mockPrisma.userAssignment.update).toHaveBeenCalledWith({
+        where: { id: 'asg-2' },
+        data: { roleId: contentManagerRole.id },
+      });
+    });
+
+    it('denies school admin granting permissions in another school (403)', async () => {
+      await expect(
+        service.grantDocumentManagement(staffUserId, otherSchoolId, testSchoolAdmin, fakeContext),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('denies school admin granting permissions to a user outside their school (403)', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: schoolId });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: staffUserId,
+        email: 'outsider@other.edu',
+        fullName: 'Outsider',
+        assignments: [
+          {
+            id: 'asg-3',
+            schoolId: otherSchoolId,
+            roleId: staffRole.id,
+            role: staffRole,
+          },
+        ],
+      });
+
+      await expect(
+        service.grantDocumentManagement(staffUserId, schoolId, testSchoolAdmin, fakeContext),
+      ).rejects.toThrow('A school admin cannot grant permissions to a user outside their school');
+    });
+
+    it('rejects granting document-management to a student account with 400 BadRequestException', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: schoolId });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: studentUserId,
+        email: 'student@school.edu',
+        fullName: 'Sam Student',
+        assignments: [
+          {
+            id: 'asg-student',
+            schoolId,
+            roleId: studentRole.id,
+            role: studentRole,
+          },
+        ],
+      });
+
+      await expect(
+        service.grantDocumentManagement(studentUserId, schoolId, testSchoolAdmin, fakeContext),
+      ).rejects.toThrow('Student accounts can never receive document management permissions');
+    });
+
+    it('is idempotent when user already has document-management rights in the school', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: schoolId });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: staffUserId,
+        email: 'teacher@school.edu',
+        fullName: 'Jane Teacher',
+        assignments: [
+          {
+            id: 'asg-cm',
+            schoolId,
+            roleId: contentManagerRole.id,
+            role: contentManagerRole,
+          },
+        ],
+      });
+      mockPrisma.role.findFirst.mockResolvedValueOnce(contentManagerRole);
+
+      const result = await service.grantDocumentManagement(staffUserId, schoolId, testSchoolAdmin, fakeContext);
+      expect(result).toBeDefined();
+      expect(mockPrisma.userAssignment.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a school admin to revoke document-management from staff in their school', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: schoolId });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: staffUserId,
+        email: 'teacher@school.edu',
+        fullName: 'Jane Teacher',
+        assignments: [
+          {
+            id: 'asg-cm',
+            schoolId,
+            roleId: contentManagerRole.id,
+            role: contentManagerRole,
+          },
+        ],
+      });
+      mockPrisma.role.findFirst.mockResolvedValueOnce(staffRole);
+      mockPrisma.userAssignment.update.mockResolvedValueOnce({});
+
+      const result = await service.revokeDocumentManagement(staffUserId, schoolId, testSchoolAdmin, fakeContext);
+      expect(result).toBeDefined();
+      expect(mockPrisma.userAssignment.update).toHaveBeenCalledWith({
+        where: { id: 'asg-cm' },
+        data: { roleId: staffRole.id },
+      });
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'permission_revoked',
+          details: expect.objectContaining({ permission: 'documents:manage', schoolId }),
+        }),
+      );
+    });
+
+    it('denies school admin revoking permissions for user outside their school (403)', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: schoolId });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: staffUserId,
+        email: 'outsider@other.edu',
+        fullName: 'Outsider',
+        assignments: [
+          {
+            id: 'asg-outside',
+            schoolId: otherSchoolId,
+            roleId: contentManagerRole.id,
+            role: contentManagerRole,
+          },
+        ],
+      });
+
+      await expect(
+        service.revokeDocumentManagement(staffUserId, schoolId, testSchoolAdmin, fakeContext),
+      ).rejects.toThrow('A school admin cannot revoke permissions for a user outside their school');
     });
   });
 });

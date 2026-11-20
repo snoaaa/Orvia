@@ -85,42 +85,43 @@ describe('UserManagementService', () => {
     req.flush(mockUser);
   });
 
-  it('should patch user profile', () => {
+  it('should patch user profile via dedicated PATCH /users/:id without status (#95)', () => {
     const updated = { ...mockUser, fullName: 'Admin Updated' };
 
     service.updateUser('user-uuid-1', { fullName: 'Admin Updated' }).subscribe((user) => {
       expect(user.fullName).toBe('Admin Updated');
     });
 
-    const req = httpMock.expectOne(`${environment.apiUrl}/identity/users/user-uuid-1`);
+    const req = httpMock.expectOne(`${environment.apiUrl}/users/user-uuid-1`);
     expect(req.request.method).toBe('PATCH');
     expect(req.request.body).toEqual({ fullName: 'Admin Updated' });
+    expect(req.request.body.status).toBeUndefined();
     req.flush(updated);
   });
 
-  it('should suspend user account and return updated user with status SUSPENDED', () => {
+  it('should suspend user account via dedicated PATCH /users/:id/suspend endpoint (#95)', () => {
     const suspended = { ...mockUser, status: 'SUSPENDED' as const };
 
     service.suspendUser('user-uuid-1').subscribe((user) => {
       expect(user.status).toBe('SUSPENDED');
     });
 
-    const req = httpMock.expectOne(`${environment.apiUrl}/identity/users/user-uuid-1`);
+    const req = httpMock.expectOne(`${environment.apiUrl}/users/user-uuid-1/suspend`);
     expect(req.request.method).toBe('PATCH');
-    expect(req.request.body).toEqual({ status: 'SUSPENDED' });
+    expect(req.request.body).toEqual({});
     req.flush(suspended);
   });
 
-  it('should reactivate user account and return updated user with status ACTIVE', () => {
+  it('should reactivate user account via dedicated PATCH /users/:id/reactivate endpoint (#95)', () => {
     const reactivated = { ...mockUser, status: 'ACTIVE' as const };
 
     service.reactivateUser('user-uuid-1').subscribe((user) => {
       expect(user.status).toBe('ACTIVE');
     });
 
-    const req = httpMock.expectOne(`${environment.apiUrl}/identity/users/user-uuid-1`);
+    const req = httpMock.expectOne(`${environment.apiUrl}/users/user-uuid-1/reactivate`);
     expect(req.request.method).toBe('PATCH');
-    expect(req.request.body).toEqual({ status: 'ACTIVE' });
+    expect(req.request.body).toEqual({});
     req.flush(reactivated);
   });
 
@@ -154,6 +155,30 @@ describe('UserManagementService', () => {
     const req = httpMock.expectOne(`${environment.apiUrl}/identity/users/user-uuid-1/sessions`);
     expect(req.request.method).toBe('DELETE');
     req.flush({ revoked: 3 });
+  });
+
+  it('should fetch assignable roles and toggle document-management rights (#94)', () => {
+    service.getAssignableRoles('school-a').subscribe((roles) => {
+      expect(roles.length).toBe(1);
+      expect(roles[0].name).toBe('STAFF');
+    });
+
+    const rolesReq = httpMock.expectOne(
+      (r) => r.url === `${environment.apiUrl}/assignments/assignable-roles`
+    );
+    expect(rolesReq.request.params.get('schoolId')).toBe('school-a');
+    rolesReq.flush([{ id: 'r1', name: 'STAFF', scope: 'school', level: 2 }]);
+
+    service.setDocumentManagement('user-uuid-1', 'school-a', true).subscribe((res) => {
+      expect(res.id).toBe('user-uuid-1');
+    });
+
+    const docReq = httpMock.expectOne(
+      `${environment.apiUrl}/users/user-uuid-1/document-management`
+    );
+    expect(docReq.request.method).toBe('POST');
+    expect(docReq.request.body).toEqual({ schoolId: 'school-a', granted: true });
+    docReq.flush(mockUser);
   });
 });
 
