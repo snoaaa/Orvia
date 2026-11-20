@@ -175,6 +175,20 @@ export const adminRoutes: Routes = [
           import('./demo/pages/authentication/auth-register/auth-register.component').then(
             (c) => c.AuthRegisterComponent
           )
+      },
+      {
+        path: 'set-first-password',
+        loadComponent: () =>
+          import('./demo/pages/authentication/set-first-password/set-first-password.component').then(
+            (c) => c.SetFirstPasswordComponent
+          )
+      },
+      {
+        path: 'set-first-password/:token',
+        loadComponent: () =>
+          import('./demo/pages/authentication/set-first-password/set-first-password.component').then(
+            (c) => c.SetFirstPasswordComponent
+          )
       }
     ]
   }

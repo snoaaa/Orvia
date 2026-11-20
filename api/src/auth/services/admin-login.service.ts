@@ -355,13 +355,19 @@ export class AdminLoginService {
       throw new ForbiddenException('Account is suspended');
     }
 
-    // Password validation rules (min length 8, max length 128)
+    // Password validation rules (8-128 chars, upper + lower, number or special character)
     if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
       throw new BadRequestException('Password must be at least 8 characters long');
     }
 
     if (newPassword.length > 128) {
       throw new BadRequestException('Password cannot exceed 128 characters');
+    }
+
+    if (!/[a-z]/.test(newPassword) || !/[A-Z]/.test(newPassword) || !/[0-9\W_]/.test(newPassword)) {
+      throw new BadRequestException(
+        'Password must contain uppercase and lowercase letters, and at least one number or special character',
+      );
     }
 
     // Hash password with argon2id

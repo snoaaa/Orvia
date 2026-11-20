@@ -755,6 +755,12 @@ describe('DocumentsService', () => {
         expect.stringMatching(/^spaces\/space-1\/docs\/[a-f0-9-]+\/v1\.docx$/),
         docxFile.buffer,
       );
+      expect(mockProcessingQueueService.enqueueJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          targetStep: 'office_extraction',
+        }),
+      );
     });
 
     it('successfully uploads an enterprise PowerPoint (.pptx) and queues slide_extraction', async () => {
@@ -1760,6 +1766,12 @@ describe('DocumentsService', () => {
       expect(mockStorageService.save).toHaveBeenCalledWith(
         'spaces/space-1/docs/doc-1/v3.docx',
         docxFile.buffer,
+      );
+      expect(mockProcessingQueueService.enqueueJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          targetStep: 'office_extraction',
+        }),
       );
     });
 
