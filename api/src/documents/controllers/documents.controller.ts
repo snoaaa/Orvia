@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
@@ -78,6 +79,7 @@ export class DocumentsController {
   }
 
   @Post('spaces')
+  @HttpCode(HttpStatus.CREATED)
   @RequirePermission('spaces:create')
   @ApiOperation({
     summary: 'Create a document space in one of your schools (§4.1, #97)',
