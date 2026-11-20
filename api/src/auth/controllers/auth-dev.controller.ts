@@ -12,9 +12,9 @@ import { SessionCleanupService } from '../services/session-cleanup.service.js';
 import { SessionService, type TokenPair } from '../services/session.service.js';
 import { ACTIVE_ASSIGNMENT } from '../utils/active-assignment.util.js';
 
-/** Hidden (404) unless AUTH_DEV_TOOLS=true and not in production. */
+/** Hidden (404) unless AUTH_DEV_TOOLS=true and not in production. Also guards the documents dev routes (#112). */
 @Injectable()
-class AuthDevToolsGuard implements CanActivate {
+export class AuthDevToolsGuard implements CanActivate {
   constructor(private readonly config: ConfigService) {}
 
   canActivate(): boolean {

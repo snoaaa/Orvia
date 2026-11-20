@@ -5,3 +5,4 @@ export * from './list-documents-query.dto.js';
 export * from './list-spaces-query.dto.js';
 export * from './upload-document.dto.js';
 export * from './add-document-access.dto.js';
+export * from './set-version-status.dto.js';

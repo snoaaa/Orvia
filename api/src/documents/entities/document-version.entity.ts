@@ -19,8 +19,24 @@ export class DocumentVersionEntity {
   @ApiProperty({ example: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', description: 'SHA-256 checksum' })
   checksum: string;
 
-  @ApiProperty({ example: 'available', description: 'Processing status: pending, ocr, segmentation, indexing, available or error (spec §3.1)' })
+  @ApiProperty({
+    enum: ['pending', 'ocr', 'segmentation', 'indexing', 'available', 'error'],
+    example: 'available',
+    description: 'Processing status (spec §3.1). Readers only ever get available versions.',
+  })
   status: string;
+
+  @ApiProperty({
+    example: null,
+    required: false,
+    nullable: true,
+    type: String,
+    description: 'Why processing failed (status error). Only returned to document managers.',
+  })
+  statusError?: string | null;
+
+  @ApiProperty({ example: '2026-10-17T12:05:00.000Z', required: false, description: 'When the status last changed' })
+  statusChangedAt?: Date;
 
   @ApiProperty({ example: 42, description: 'Page count' })
   pageCount: number;
