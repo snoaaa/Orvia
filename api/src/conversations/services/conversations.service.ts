@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
+import type { AuthConfig } from '../../config/index.js';
 import { schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { isDocumentVisibleTo } from '../../documents/utils/document-visibility.util.js';
@@ -65,6 +66,7 @@ export class ConversationsService {
 
   private getShareSecret(): string {
     return (
+      this.configService?.get<AuthConfig>('auth')?.jwtAccessSecret ??
       this.configService?.get<string>('JWT_ACCESS_SECRET') ??
       process.env.JWT_ACCESS_SECRET ??
       'wamdp-dev-only-secret-change-me'
@@ -473,8 +475,8 @@ export class ConversationsService {
     if (!message || message.conversation.userId !== actor.id) {
       throw new NotFoundException(`Message with ID ${dto.messageId} not found`);
     }
-    if (message.role !== 'assistant') {
-      throw new BadRequestException('Only assistant answers can be reported');
+    if (message.role !== 'assistant' || ['pending', 'generating'].includes(normalizeGenerationStatus(message.status))) {
+      throw new BadRequestException('Only completed assistant answers can be reported');
     }
 
     const created = await this.prisma.answerReport.create({
