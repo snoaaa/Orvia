@@ -1,8 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 /**
- * Request payload for Google OAuth 2.0 / OpenID Connect login (Issue #10).
+ * Request payload for Google OAuth 2.0 / OpenID Connect login (Issue #10 & #91).
  *
  * The client application performs the OAuth flow with Google and passes the
  * received Google ID token (`idToken`) to this endpoint for cryptographic verification.
@@ -27,4 +27,15 @@ export class GoogleLoginDto {
   @IsUUID()
   @IsOptional()
   deviceId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Client surface initiating Google login. When set to "portal", enforces web portal access ' +
+      '(admin role or documents.manage / documents:manage) and returns descriptive error messages (#91).',
+    enum: ['portal', 'mobile'],
+    example: 'portal',
+  })
+  @IsIn(['portal', 'mobile'])
+  @IsOptional()
+  client?: 'portal' | 'mobile';
 }
