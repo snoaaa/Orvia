@@ -451,7 +451,7 @@ export class DocumentsService {
         spaceId: doc.spaceId,
         storageKey,
         mimeType: finalMimeType,
-        targetStep: step === 'ocr' ? 'ocr' : undefined,
+        targetStep: step,
       });
 
       // 5. Write audit entry
@@ -596,13 +596,13 @@ export class DocumentsService {
   }
 
   /**
-   * Uploads a PDF to a space (§4.1, §6 Scalabilité, §9, #102):
-   * 1. Validates space exists and verifies caller has `documents:create` access to space's school.
-   * 2. Runs pre-ingestion validation (size, magic bytes, antivirus, duplicates).
-   * 3. Confirms verified MIME type is `application/pdf`.
+   * Uploads a document (PDF, Office OpenXML/OLE2, OpenDocument, Text/Markdown/CSV) to a space (§4.1, §6 Scalabilité, §9, #102, #150):
+   * 1. Validates space exists and verifies caller has `documents:manage` access to space's school.
+   * 2. Runs pre-ingestion validation (size, magic bytes & deep container inspection, antivirus, duplicates).
+   * 3. Confirms verified MIME type is an allowed document format (directing images to `/upload-image`).
    * 4. Atomically writes file to storage via `StorageService`.
-   * 5. Atomically creates Document, DocumentVersion (v1, status: 'pending'), and ProcessingJob in DB.
-   * 6. Enqueues background job to `ProcessingQueueService` asynchronously.
+   * 5. Atomically creates Document, DocumentVersion (v1, status: 'pending'), and format-specific ProcessingJob in DB.
+   * 6. Enqueues background job to `ProcessingQueueService` asynchronously with the format-aware pipeline step.
    * 7. Returns `DocumentEntity` with `currentVersion`.
    */
   async uploadPdf(
@@ -717,6 +717,7 @@ export class DocumentsService {
         spaceId,
         storageKey,
         mimeType: validated.mimeType,
+        targetStep: step,
       });
 
       // 5. Record tamper-evident audit event (§4.5, #107)
