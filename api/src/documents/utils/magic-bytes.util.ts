@@ -48,6 +48,14 @@ export interface DetectedFileType {
   extension: AllowedFileExtension;
 }
 
+export type ProcessingPipelineStep =
+  | 'ingestion'
+  | 'office_extraction'
+  | 'slide_extraction'
+  | 'tabular_extraction'
+  | 'text_chunking'
+  | 'ocr';
+
 export const ALLOWED_MIME_TYPES: readonly AllowedMimeType[] = [
   'application/pdf',
   'image/jpeg',
@@ -151,44 +159,53 @@ export function detectMimeTypeFromBuffer(buffer: Buffer, originalName?: string):
 
   // 5. Check ZIP Containers (DOCX, PPTX, XLSX, ODT, ODS, ODP)
   if (buffer.length >= 4 && buffer.subarray(0, 4).equals(ZIP_MAGIC)) {
-    // Deep inspection: verify inner OpenXML or OpenDocument structure
-    // Prevents arbitrary or malicious .zip archives from masquerading as documents.
-    if (buffer.includes('word/')) {
+    // Deep inspection: verify inner OpenXML root parts or OpenDocument mimetype entries.
+    // Prevents arbitrary or malicious .zip archives from masquerading as documents (#150).
+    if (buffer.includes('word/document.xml')) {
       return {
         mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         extension: 'docx',
       };
     }
 
-    if (buffer.includes('ppt/')) {
+    if (buffer.includes('ppt/presentation.xml')) {
       return {
         mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         extension: 'pptx',
       };
     }
 
-    if (buffer.includes('xl/')) {
+    if (buffer.includes('xl/workbook.xml')) {
       return {
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         extension: 'xlsx',
       };
     }
 
-    if (buffer.includes('mimetypeapplication/vnd.oasis.opendocument.text')) {
+    if (
+      buffer.includes('mimetypeapplication/vnd.oasis.opendocument.text') ||
+      (buffer.includes('application/vnd.oasis.opendocument.text') && buffer.includes('content.xml'))
+    ) {
       return {
         mimeType: 'application/vnd.oasis.opendocument.text',
         extension: 'odt',
       };
     }
 
-    if (buffer.includes('mimetypeapplication/vnd.oasis.opendocument.spreadsheet')) {
+    if (
+      buffer.includes('mimetypeapplication/vnd.oasis.opendocument.spreadsheet') ||
+      (buffer.includes('application/vnd.oasis.opendocument.spreadsheet') && buffer.includes('content.xml'))
+    ) {
       return {
         mimeType: 'application/vnd.oasis.opendocument.spreadsheet',
         extension: 'ods',
       };
     }
 
-    if (buffer.includes('mimetypeapplication/vnd.oasis.opendocument.presentation')) {
+    if (
+      buffer.includes('mimetypeapplication/vnd.oasis.opendocument.presentation') ||
+      (buffer.includes('application/vnd.oasis.opendocument.presentation') && buffer.includes('content.xml'))
+    ) {
       return {
         mimeType: 'application/vnd.oasis.opendocument.presentation',
         extension: 'odp',
@@ -211,7 +228,8 @@ export function detectMimeTypeFromBuffer(buffer: Buffer, originalName?: string):
     const isPpt =
       buffer.includes(Buffer.from('PowerPoint Document', 'utf16le')) ||
       buffer.includes(Buffer.from('Current User', 'utf16le')) ||
-      buffer.includes(Buffer.from('PowerPoint Document', 'latin1'));
+      buffer.includes(Buffer.from('PowerPoint Document', 'latin1')) ||
+      buffer.includes(Buffer.from('Current User', 'latin1'));
     if (isPpt) {
       return { mimeType: 'application/vnd.ms-powerpoint', extension: 'ppt' };
     }
@@ -219,30 +237,19 @@ export function detectMimeTypeFromBuffer(buffer: Buffer, originalName?: string):
     const isExcel =
       buffer.includes(Buffer.from('Workbook', 'utf16le')) ||
       buffer.includes(Buffer.from('Book', 'utf16le')) ||
-      buffer.includes(Buffer.from('Workbook', 'latin1'));
+      buffer.includes(Buffer.from('Workbook', 'latin1')) ||
+      buffer.includes(Buffer.from('Book', 'latin1'));
     if (isExcel) {
       return { mimeType: 'application/vnd.ms-excel', extension: 'xls' };
     }
 
-    // Fall back to originalName extension if valid legacy office
-    if (originalName) {
-      if (/\.docx?$/i.test(originalName)) {
-        return { mimeType: 'application/msword', extension: 'doc' };
-      }
-      if (/\.pptx?$/i.test(originalName)) {
-        return { mimeType: 'application/vnd.ms-powerpoint', extension: 'ppt' };
-      }
-      if (/\.xlsx?$/i.test(originalName)) {
-        return { mimeType: 'application/vnd.ms-excel', extension: 'xls' };
-      }
-    }
-
-    return { mimeType: 'application/msword', extension: 'doc' };
+    // Refuse non-Office OLE2 containers (e.g. .msi installers or .msg files)
+    return null;
   }
 
   // 7. Check Plain Text, Markdown, and CSV
-  // Must be valid UTF-8, must not contain binary null bytes (0x00), and must have allowed extension
-  if (!buffer.includes(0x00)) {
+  // Must be valid UTF-8, must not contain binary control bytes, and must have allowed extension
+  if (!hasDisallowedBinaryBytes(buffer)) {
     const isUtf8 = isBufferValidUtf8(buffer);
     if (isUtf8 && originalName) {
       if (/\.md$/i.test(originalName)) {
@@ -261,14 +268,26 @@ export function detectMimeTypeFromBuffer(buffer: Buffer, originalName?: string):
 }
 
 /**
- * Validates that buffer consists of valid UTF-8 sequences.
+ * Checks if buffer contains null bytes (0x00) or non-text binary control characters
+ * (0x01-0x08, 0x0E-0x1F) outside standard whitespace (\t, \n, \v, \f, \r).
+ */
+function hasDisallowedBinaryBytes(buffer: Buffer): boolean {
+  for (let i = 0; i < buffer.length; i++) {
+    const byte = buffer[i];
+    if (byte === 0x00 || (byte > 0x00 && byte < 0x09) || (byte > 0x0d && byte < 0x20)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Validates that buffer consists of strict valid UTF-8 sequences.
  */
 function isBufferValidUtf8(buffer: Buffer): boolean {
   try {
-    const text = buffer.toString('utf-8');
-    // Ensure text encodes back without byte-level corruption
-    const roundtrip = Buffer.from(text, 'utf-8');
-    return roundtrip.length === buffer.length;
+    new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    return true;
   } catch {
     return false;
   }
@@ -289,7 +308,7 @@ export function isImageMimeType(mimeType: string): boolean {
 /**
  * Determines the initial processing job step based on MIME type (§4.1, §9, #150).
  */
-export function determineInitialProcessingStep(mimeType: string): string {
+export function determineInitialProcessingStep(mimeType: string): ProcessingPipelineStep {
   switch (mimeType) {
     case 'application/pdf':
       return 'ingestion';

@@ -1,5 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service.js';
+import {
+  type ProcessingPipelineStep,
+  determineInitialProcessingStep,
+} from '../utils/magic-bytes.util.js';
 
 export interface EnqueueProcessingJobInput {
   jobId: string;
@@ -8,7 +12,7 @@ export interface EnqueueProcessingJobInput {
   spaceId: string;
   storageKey: string;
   mimeType: string;
-  targetStep?: 'ingestion' | 'ocr';
+  targetStep?: ProcessingPipelineStep;
 }
 
 @Injectable()
@@ -19,7 +23,7 @@ export class ProcessingQueueService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Pushes a processing job to the asynchronous ingestion queue (§6 Scalabilité, §9 Processing).
+   * Pushes a processing job to the asynchronous ingestion queue (§6 Scalabilité, §9 Processing, #150).
    * Returns immediately without blocking the HTTP upload response.
    */
   enqueueJob(job: EnqueueProcessingJobInput): void {
@@ -47,11 +51,12 @@ export class ProcessingQueueService {
   }
 
   /**
-   * Background processor hook: updates step or invokes pipeline worker (§9).
+   * Background processor hook: transitions job to format-specific queued state or invokes pipeline worker (§9, #150).
    */
   private async processNext(job: EnqueueProcessingJobInput): Promise<void> {
     try {
-      const nextStep = job.targetStep === 'ocr' ? 'ocr_queued' : 'ingestion_queued';
+      const resolvedStep = job.targetStep ?? determineInitialProcessingStep(job.mimeType);
+      const nextStep = `${resolvedStep}_queued`;
       // Transition processing job state to mark step received
       await this.prisma.processingJob.update({
         where: { id: job.jobId },

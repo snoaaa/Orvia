@@ -378,9 +378,10 @@ export class DocumentsController {
   @RequirePermission('documents:manage')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
-    summary: 'Validate an uploaded file for ingestion (§5.2, #100)',
+    summary: 'Validate an uploaded file for ingestion (§5.2, #100, #150)',
     description:
-      'Pre-ingestion validation: checks MIME type via magic bytes (PDF, JPEG, PNG, HEIC), ' +
+      'Pre-ingestion validation: checks MIME type via magic bytes and deep container inspection ' +
+      '(PDF, Word DOCX/DOC, PowerPoint PPTX/PPT, Excel XLSX/XLS, OpenDocument ODT/ODS/ODP, Text TXT/MD/CSV, and Images JPEG/PNG/HEIC), ' +
       'enforces configured max file size, scans for malware (EICAR & ClamAV), ' +
       'computes SHA-256 content checksum, and ensures no duplicate checksum exists in the target space.',
   })
@@ -393,7 +394,7 @@ export class DocumentsController {
         file: {
           type: 'string',
           format: 'binary',
-          description: 'Document or image file (PDF, JPEG, PNG, HEIC)',
+          description: 'Document or image file (PDF, Office, OpenDocument, Text/CSV/Markdown, or Image)',
         },
       },
       required: ['file'],
