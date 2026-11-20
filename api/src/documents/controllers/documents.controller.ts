@@ -115,8 +115,9 @@ export class DocumentsController {
   })
   @ApiParam({ name: 'id', description: 'Space UUID' })
   @ApiResponse({ status: 200, description: 'Space retrieved successfully', type: SpaceEntity })
+  @ApiResponse({ status: 400, description: 'Invalid UUID' })
   @ApiResponse({ status: 404, description: 'Space not found, deleted, or outside what the caller may see' })
-  async getSpaceById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
+  async getSpaceById(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
     return this.documentsService.findSpaceById(id, actor);
   }
 

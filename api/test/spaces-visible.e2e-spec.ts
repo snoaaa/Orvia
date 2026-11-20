@@ -291,6 +291,12 @@ describe('Visible spaces (e2e)', () => {
       check(await get(ids.AdminA, `/documents/spaces/${spaces.deletedSpace}`), 404);
     });
 
+    it('answers 400 for an id that is not a UUID, and still 404 for a valid but unknown id', async () => {
+      check(await get(ids.AdminA, '/documents/spaces/not-a-uuid'), 400);
+      check(await get(platformAdminId, '/documents/spaces/not-a-uuid'), 400);
+      check(await get(ids.AdminA, '/documents/spaces/00000000-0000-4000-8000-000000000000'), 404);
+    });
+
     it('platform admin opens any active space', async () => {
       check(await get(platformAdminId, `/documents/spaces/${spaces.schoolB}`), 200);
       check(await get(platformAdminId, `/documents/spaces/${spaces.empty}`), 200);
