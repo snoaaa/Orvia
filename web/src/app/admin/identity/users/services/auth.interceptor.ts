@@ -50,12 +50,12 @@ function autoLogin(http: HttpClient): Observable<LoginResponse> {
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const http = inject(HttpClient);
 
-  // Skip public auth endpoints to prevent recursion or unwanted auto-login
+  // Skip public auth requests to prevent recursion or unwanted auto-login
   if (
     !req.url.startsWith(environment.apiUrl) ||
     req.url.includes('/auth/admin/login') ||
-    req.url.includes('/auth/password/setup') ||
-    req.url.includes('/auth/google')
+    req.url.includes('/auth/google') ||
+    req.url.includes('/auth/password/setup')
   ) {
     return next(req);
   }

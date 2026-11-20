@@ -65,6 +65,16 @@ export class AuthController {
     );
   }
 
+  @Get('google/config')
+  @Public()
+  @ApiOperation({
+    summary: 'Public Google OAuth client configuration for the web portal (#91)',
+  })
+  @ApiResponse({ status: 200, description: 'Configured Google OAuth 2.0 client ID' })
+  googleConfig(): { clientId: string | null } {
+    return this.googleLoginService.getPublicConfig();
+  }
+
   @Post('google')
   @Public()
   @HttpCode(200)
@@ -73,16 +83,19 @@ export class AuthController {
     description:
       'Authenticates students and non-admin users via institutional Google OAuth. ' +
       'Verifies Google ID token server-side, validates school domain restrictions, ' +
+      'enforces web portal permissions (documents.manage) when client="portal", ' +
       'links google_sub, and transitions invited users to active status.',
   })
   @ApiResponse({ status: 200, description: 'Authenticated successfully', type: TokenPairEntity })
   @ApiResponse({ status: 400, description: 'Validation failed' })
-  @ApiResponse({ status: 401, description: 'Authentication failed' })
+  @ApiResponse({ status: 401, description: 'Authentication failed or unknown account' })
+  @ApiResponse({ status: 403, description: 'Suspended account, domain not allowed, or no portal access' })
   async googleLogin(@Body() dto: GoogleLoginDto, @Req() req: Request): Promise<TokenPairEntity> {
     return this.googleLoginService.login(
       dto.idToken,
       auditContextFromRequest(req),
       dto.deviceId,
+      dto.client,
     );
   }
 

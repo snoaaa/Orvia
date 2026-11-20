@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoogleLoginService, type GoogleTokenPayload } from './google-login.service.js';
 
@@ -405,6 +405,111 @@ describe('GoogleLoginService (Unit Tests)', () => {
 
       await expect(service.verifyGoogleToken('token')).rejects.toThrow(/expired/i);
       vi.unstubAllGlobals();
+    });
+  });
+
+  describe('Web Portal Google Sign-In (Issue #91 — client="portal")', () => {
+    it('allows a staff member with document-management rights (documents:manage) to sign in to the portal and stores no password', async () => {
+      const staffWithDocManage = {
+        ...studentUser,
+        id: 'user-staff-docmgr',
+        email: 'docmgr@school.edu',
+        assignments: [
+          {
+            schoolId: 'school-1',
+            role: {
+              name: 'STAFF',
+              scope: 'school',
+              rolePermissions: [{ permission: { code: 'documents:manage' } }],
+            },
+            school: { id: 'school-1', name: 'School One', status: 'active' },
+          },
+        ],
+      };
+      mockPrisma.user.findUnique.mockResolvedValue(staffWithDocManage);
+      mockPrisma.user.update.mockResolvedValue({
+        ...staffWithDocManage,
+        status: 'ACTIVE',
+        googleSub: validPayload.sub,
+        passwordHash: null,
+      });
+
+      const tokens = await service.login('valid-token', fakeContext, null, 'portal');
+
+      expect(tokens.accessToken).toBe('access-jwt-mock');
+      expect(mockPrisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'user-staff-docmgr' },
+          data: {
+            googleSub: validPayload.sub,
+            authProvider: 'google',
+            status: 'ACTIVE',
+          },
+        }),
+      );
+    });
+
+    it('refuses a staff member without document-management rights on the portal with a clear mobile app message', async () => {
+      const regularStaff = {
+        ...studentUser,
+        id: 'user-regular-staff',
+        email: 'staff@school.edu',
+        assignments: [
+          {
+            schoolId: 'school-1',
+            role: {
+              name: 'STAFF',
+              scope: 'school',
+              rolePermissions: [
+                { permission: { code: 'spaces:read' } },
+                { permission: { code: 'documents:read' } },
+              ],
+            },
+            school: { id: 'school-1', name: 'School One', status: 'active' },
+          },
+        ],
+      };
+      mockPrisma.user.findUnique.mockResolvedValue(regularStaff);
+
+      await expect(service.login('valid-token', fakeContext, null, 'portal')).rejects.toThrow(
+        /reserved for administrators and staff with document-management rights\. Please use the Orvia mobile app/i,
+      );
+      expect(mockSessions.createSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses a student on the portal with a clear mobile app message', async () => {
+      await expect(service.login('valid-token', fakeContext, null, 'portal')).rejects.toThrow(
+        /reserved for administrators and staff with document-management rights\. Please use the Orvia mobile app/i,
+      );
+      expect(mockSessions.createSession).not.toHaveBeenCalled();
+    });
+
+    it('shows clear errors on the portal for unknown account, suspended account, and domain not allowed', async () => {
+      // 1. Unknown account
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      await expect(service.login('valid-token', fakeContext, null, 'portal')).rejects.toThrow(
+        /No Orvia account was found for this Google email/i,
+      );
+
+      // 2. Suspended account
+      mockPrisma.user.findUnique.mockResolvedValue({
+        ...studentUser,
+        status: 'SUSPENDED' as const,
+      });
+      await expect(service.login('valid-token', fakeContext, null, 'portal')).rejects.toThrow(
+        /Your account has been suspended/i,
+      );
+
+      // 3. Domain not allowed
+      mockPrisma.user.findUnique.mockResolvedValue(studentUser);
+      mockDomainValidation.validateDomainForUser.mockResolvedValue({
+        allowed: false,
+        matchedSchoolId: null,
+      });
+      await expect(service.login('valid-token', fakeContext, null, 'portal')).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 });
