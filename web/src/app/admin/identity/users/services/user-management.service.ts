@@ -1,8 +1,16 @@
 import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, catchError, of, throwError } from 'rxjs';
+import { Observable, catchError, map, throwError } from 'rxjs';
 import { environment } from 'src/environments/environment';
-import { ActiveSession, PaginatedUsers, UpdateUserPayload, UserEntity, UserListFilter } from '../models/user.model';
+import {
+  ActiveSession,
+  AssignableRoleOption,
+  PaginatedUsers,
+  SchoolSummaryOption,
+  UpdateUserPayload,
+  UserEntity,
+  UserListFilter
+} from '../models/user.model';
 
 @Injectable({
   providedIn: 'root'
@@ -12,7 +20,7 @@ export class UserManagementService {
   private readonly apiUrl = environment.apiUrl;
 
   /**
-   * Fetches paginated users with optional search and filters.
+   * Fetches paginated users with optional search, school, role, and status filters.
    */
   getUsers(filters: Partial<UserListFilter> = {}): Observable<PaginatedUsers> {
     let params = new HttpParams()
@@ -24,6 +32,12 @@ export class UserManagementService {
     }
     if (filters.search && filters.search.trim()) {
       params = params.set('search', filters.search.trim());
+    }
+    if (filters.schoolId && filters.schoolId.trim()) {
+      params = params.set('schoolId', filters.schoolId.trim());
+    }
+    if (filters.role && filters.role !== 'ALL' && filters.role.trim()) {
+      params = params.set('role', filters.role.trim());
     }
     if (filters.sortBy) {
       params = params.set('sortBy', filters.sortBy);
@@ -73,6 +87,53 @@ export class UserManagementService {
    */
   reactivateUser(id: string): Observable<UserEntity> {
     return this.updateUser(id, { status: 'ACTIVE' });
+  }
+
+  /**
+   * Fetches the roles the current administrator is permitted to assign (#94).
+   */
+  getAssignableRoles(schoolId?: string): Observable<AssignableRoleOption[]> {
+    let params = new HttpParams();
+    if (schoolId && schoolId.trim()) {
+      params = params.set('schoolId', schoolId.trim());
+    }
+    return this.http
+      .get<AssignableRoleOption[]>(`${this.apiUrl}/assignments/assignable-roles`, { params })
+      .pipe(catchError((error) => throwError(() => error)));
+  }
+
+  /**
+   * Fetches schools visible to the current administrator.
+   */
+  getSchools(): Observable<SchoolSummaryOption[]> {
+    const params = new HttpParams().set('limit', '100');
+    return this.http
+      .get<{ data: SchoolSummaryOption[] }>(`${this.apiUrl}/schools`, { params })
+      .pipe(
+        map((res) => res.data ?? []),
+        catchError((error) => throwError(() => error))
+      );
+  }
+
+  /**
+   * Assigns or updates a user's role in a school (`PATCH /identity/users/:id/role`).
+   */
+  assignRole(userId: string, schoolId: string, role: string): Observable<UserEntity> {
+    return this.http
+      .patch<UserEntity>(`${this.apiUrl}/identity/users/${userId}/role`, { schoolId, role })
+      .pipe(catchError((error) => throwError(() => error)));
+  }
+
+  /**
+   * Grants or revokes document-management rights for a staff member in a school (§4.5, #88, #94).
+   */
+  setDocumentManagement(userId: string, schoolId: string, granted: boolean): Observable<UserEntity> {
+    return this.http
+      .post<UserEntity>(`${this.apiUrl}/users/${userId}/document-management`, {
+        schoolId,
+        granted
+      })
+      .pipe(catchError((error) => throwError(() => error)));
   }
 
   /**
@@ -144,4 +205,3 @@ export class UserManagementService {
     return fallback;
   }
 }
-

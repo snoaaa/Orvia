@@ -1,19 +1,26 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, inject, signal } from '@angular/core';
-import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { FormBuilder, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
-import { CardComponent } from '../../../theme/shared/components/card/card.component';
-import { ConfirmationModalComponent } from '../components/confirmation-modal/confirmation-modal.component';
-import { ActiveSession, UserEntity } from '../models/user.model';
-import { PortalSessionService } from '../../services/portal-session.service';
-import { UserManagementService } from '../services/user-management.service';
 import { GoeyToastService } from 'goey-toast-angular';
+import { CardComponent } from '../../../theme/shared/components/card/card.component';
+import { PortalSessionService } from '../../services/portal-session.service';
+import { ConfirmationModalComponent } from '../components/confirmation-modal/confirmation-modal.component';
+import {
+  ActiveSession,
+  AssignableRoleOption,
+  SchoolSummaryOption,
+  UserEntity,
+  UserSchoolAssignment
+} from '../models/user.model';
+import { UserManagementService } from '../services/user-management.service';
 
 @Component({
   selector: 'app-user-edit',
   standalone: true,
   imports: [
     CommonModule,
+    FormsModule,
     ReactiveFormsModule,
     RouterModule,
     CardComponent,
@@ -38,6 +45,35 @@ export class UserEditComponent implements OnInit {
   readonly isSessionsLoading = signal<boolean>(false);
   readonly copiedId = signal<boolean>(false);
 
+  // Role assignment & document management state (#94)
+  readonly rawRoles = signal<AssignableRoleOption[]>([]);
+  readonly schools = signal<SchoolSummaryOption[]>([]);
+  readonly selectedAssignSchoolId = signal<string>('');
+  readonly selectedAssignRole = signal<string>('');
+  readonly isAssigningRole = signal<boolean>(false);
+  readonly isTogglingDocMgmt = signal<boolean>(false);
+
+  /**
+   * Roles the signed-in admin may assign (#94):
+   * platform-scoped roles are filtered out for school admins.
+   */
+  readonly assignableRoles = computed<AssignableRoleOption[]>(() => {
+    const isPlatform = this.session.isPlatformAdmin();
+    return this.rawRoles().filter((r) => isPlatform || r.scope !== 'platform');
+  });
+
+  /**
+   * Assignments visible to the current administrator:
+   * platform admins see all school assignments; school admins see only their school's assignments.
+   */
+  readonly visibleAssignments = computed<UserSchoolAssignment[]>(() => {
+    const list = this.user()?.assignments ?? [];
+    if (this.session.isPlatformAdmin()) return list;
+    const adminSchools = this.session.user()?.schoolIds ?? [];
+    if (adminSchools.length === 0) return list;
+    return list.filter((a) => adminSchools.includes(a.schoolId));
+  });
+
   readonly successMessage = signal<string>('');
   readonly errorMessage = signal<string>('');
   readonly sessionSuccessMessage = signal<string>('');
@@ -61,6 +97,42 @@ export class UserEditComponent implements OnInit {
     this.userId.set(id);
     this.loadUserData(id);
     this.loadUserSessions(id);
+    this.loadRoleAndSchoolOptions();
+  }
+
+  loadRoleAndSchoolOptions(): void {
+    const fixedSchool = this.session.isPlatformAdmin()
+      ? undefined
+      : (this.session.activeSchoolId() ?? undefined);
+
+    if (fixedSchool) {
+      this.selectedAssignSchoolId.set(fixedSchool);
+    }
+
+    if (typeof this.userService.getAssignableRoles === 'function') {
+      this.userService.getAssignableRoles(fixedSchool).subscribe({
+        next: (roles) => {
+          this.rawRoles.set(roles);
+          const filtered = this.assignableRoles();
+          if (filtered.length > 0 && !this.selectedAssignRole()) {
+            this.selectedAssignRole.set(filtered[0].name);
+          }
+        },
+        error: () => {}
+      });
+    }
+
+    if (this.session.isPlatformAdmin() && typeof this.userService.getSchools === 'function') {
+      this.userService.getSchools().subscribe({
+        next: (schools) => {
+          this.schools.set(schools);
+          if (schools.length > 0 && !this.selectedAssignSchoolId()) {
+            this.selectedAssignSchoolId.set(schools[0].id);
+          }
+        },
+        error: () => {}
+      });
+    }
   }
 
   loadUserData(id: string): void {
@@ -102,8 +174,137 @@ export class UserEditComponent implements OnInit {
     });
   }
 
+  getAssignmentRoleName(a: UserSchoolAssignment): string {
+    if (!a.role) return '';
+    return typeof a.role === 'string' ? a.role : a.role.name;
+  }
+
+  getAssignmentSchoolName(a: UserSchoolAssignment): string {
+    return a.schoolName || a.school?.name || this.session.activeSchoolName() || a.schoolId;
+  }
+
+  /**
+   * True when the assignment is a staff role (`STAFF` or `CONTENT_MANAGER`),
+   * making it eligible for the 'Document management' toggle (#94).
+   */
+  isStaffAssignment(a: UserSchoolAssignment): boolean {
+    const roleName = this.getAssignmentRoleName(a).toUpperCase();
+    return roleName === 'STAFF' || roleName === 'CONTENT_MANAGER';
+  }
+
+  /**
+   * True when the staff assignment currently holds document-management rights (`CONTENT_MANAGER`).
+   */
+  hasDocumentManagement(a: UserSchoolAssignment): boolean {
+    return this.getAssignmentRoleName(a).toUpperCase() === 'CONTENT_MANAGER';
+  }
+
+  /**
+   * True when the signed-in administrator may edit/manage the viewed user (#94):
+   * school admins cannot touch platform admins or users outside their school.
+   */
+  canTouchCurrentUser(): boolean {
+    const target = this.user();
+    if (!target) return false;
+    if (this.session.isPlatformAdmin()) return true;
+
+    const assignments = target.assignments ?? [];
+    const hasPlatformRole = assignments.some((a) => {
+      const roleName = this.getAssignmentRoleName(a).toUpperCase();
+      const scope = a.roleScope || (typeof a.role === 'object' ? a.role?.scope : undefined);
+      return roleName === 'PLATFORM_ADMIN' || scope === 'platform';
+    });
+    if (hasPlatformRole) return false;
+
+    const adminSchools = this.session.user()?.schoolIds ?? [];
+    if (adminSchools.length > 0 && assignments.length > 0) {
+      return assignments.some((a) => adminSchools.includes(a.schoolId));
+    }
+    return true;
+  }
+
+  /**
+   * True when the signed-in administrator may suspend or reactivate the viewed user (#94):
+   * nobody can suspend their own account, and school admins cannot act on higher-level admins.
+   */
+  canChangeCurrentUserStatus(): boolean {
+    const target = this.user();
+    if (!target || !this.canTouchCurrentUser()) return false;
+    const currentUserId = this.session.user()?.id;
+    if (currentUserId && target.id === currentUserId) return false;
+    return this.session.hasPermission('users:suspend');
+  }
+
+  /**
+   * Toggles document-management rights (`documents:manage`) on a staff assignment (#88, #94).
+   */
+  toggleDocumentManagement(assignment: UserSchoolAssignment, granted: boolean): void {
+    if (this.isTogglingDocMgmt() || !this.canTouchCurrentUser()) return;
+
+    this.isTogglingDocMgmt.set(true);
+    this.userService.setDocumentManagement(this.userId(), assignment.schoolId, granted).subscribe({
+      next: () => {
+        const nextRole = granted ? 'CONTENT_MANAGER' : 'STAFF';
+        this.user.update((current) => {
+          if (!current) return current;
+          const updatedAssignments = (current.assignments ?? []).map((a) =>
+            a.schoolId === assignment.schoolId ? { ...a, role: nextRole } : a
+          );
+          return { ...current, assignments: updatedAssignments };
+        });
+        this.isTogglingDocMgmt.set(false);
+        this.toast.success(
+          granted ? 'Document Management Granted' : 'Document Management Revoked',
+          {
+            description: granted
+              ? 'Staff member can now access the web portal to manage spaces and documents.'
+              : 'Document-management portal rights have been removed.'
+          }
+        );
+      },
+      error: (error) => {
+        this.isTogglingDocMgmt.set(false);
+        const msg = this.userService.extractErrorMessage(
+          error,
+          'Could not update document-management permission.'
+        );
+        this.toast.error('Permission Update Failed', { description: msg });
+      }
+    });
+  }
+
+  /**
+   * Assigns or updates the user's role in the selected (or fixed) school (#94).
+   */
+  assignRoleInSchool(): void {
+    if (this.isAssigningRole() || !this.canTouchCurrentUser()) return;
+
+    const schoolId = this.session.isPlatformAdmin()
+      ? this.selectedAssignSchoolId()
+      : (this.session.activeSchoolId() ?? this.selectedAssignSchoolId());
+    const role = this.selectedAssignRole();
+
+    if (!schoolId || !role) return;
+
+    this.isAssigningRole.set(true);
+    this.userService.assignRole(this.userId(), schoolId, role).subscribe({
+      next: () => {
+        this.isAssigningRole.set(false);
+        this.toast.success('Role Assigned', {
+          description: `Assigned ${role} in the selected school.`
+        });
+        this.loadUserData(this.userId());
+      },
+      error: (error) => {
+        this.isAssigningRole.set(false);
+        const msg = this.userService.extractErrorMessage(error, 'Failed to assign role.');
+        this.toast.error('Role Assignment Failed', { description: msg });
+      }
+    });
+  }
+
   saveProfile(): void {
-    if (this.editForm.invalid || this.isSaving()) return;
+    if (this.editForm.invalid || this.isSaving() || !this.canTouchCurrentUser()) return;
 
     this.isSaving.set(true);
     this.successMessage.set('');
@@ -117,7 +318,7 @@ export class UserEditComponent implements OnInit {
 
     this.userService.updateUser(this.userId(), payload).subscribe({
       next: (updatedUser) => {
-        this.user.set(updatedUser);
+        this.user.update((prev) => ({ ...prev, ...updatedUser, assignments: updatedUser.assignments ?? prev?.assignments }));
         this.editForm.patchValue({
           fullName: updatedUser.fullName,
           email: updatedUser.email
@@ -272,7 +473,7 @@ export class UserEditComponent implements OnInit {
   private executeSuspend(): void {
     this.userService.suspendUser(this.userId()).subscribe({
       next: (updatedUser) => {
-        this.user.set(updatedUser);
+        this.user.update((prev) => ({ ...prev, ...updatedUser, assignments: updatedUser.assignments ?? prev?.assignments }));
         this.modalLoading.set(false);
         this.closeModal();
         this.successMessage.set('User suspended. All active sessions have been revoked.');
@@ -294,7 +495,7 @@ export class UserEditComponent implements OnInit {
   private executeReactivate(): void {
     this.userService.reactivateUser(this.userId()).subscribe({
       next: (updatedUser) => {
-        this.user.set(updatedUser);
+        this.user.update((prev) => ({ ...prev, ...updatedUser, assignments: updatedUser.assignments ?? prev?.assignments }));
         this.modalLoading.set(false);
         this.closeModal();
         this.successMessage.set('User reactivated successfully.');
