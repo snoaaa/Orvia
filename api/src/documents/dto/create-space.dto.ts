@@ -18,6 +18,7 @@ export const DEFAULT_SPACE_PRIVACY: SpacePrivacy = 'public';
 export const SPACE_NAME_MAX_LENGTH = 100;
 export const SPACE_DESCRIPTION_MAX_LENGTH = 2000;
 
+export const normalizedLanguage = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 export const trimmed = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
 /** Body of POST /documents/spaces (#97). */
@@ -49,6 +50,7 @@ export class CreateSpaceDto {
   description?: string;
 
   @ApiPropertyOptional({ enum: SPACE_LANGUAGES, default: DEFAULT_SPACE_LANGUAGE, description: 'Main language' })
+  @Transform(normalizedLanguage)
   @IsIn(SPACE_LANGUAGES)
   @IsOptional()
   language?: SpaceLanguage;

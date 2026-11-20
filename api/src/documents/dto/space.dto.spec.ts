@@ -25,6 +25,16 @@ describe('CreateSpaceDto (#97)', () => {
     }
   });
 
+  it('accepts a language in any case and normalizes it to lowercase', async () => {
+    for (const [input, expected] of [['EN', 'en'], [' Fr ', 'fr']]) {
+      const body = { schoolId: SCHOOL_ID, name: 'Mathematics', language: input };
+      expect(await invalidFields(CreateSpaceDto, body)).toEqual([]);
+      expect(plainToInstance(CreateSpaceDto, body).language).toBe(expected);
+      expect(await invalidFields(UpdateSpaceDto, { language: input })).toEqual([]);
+      expect(plainToInstance(UpdateSpaceDto, { language: input }).language).toBe(expected);
+    }
+  });
+
   it('trims the name and the description', () => {
     const dto = plainToInstance(CreateSpaceDto, { schoolId: SCHOOL_ID, name: '  Mathematics  ', description: '  Algebra ' });
     expect(dto.name).toBe('Mathematics');

@@ -136,6 +136,18 @@ describe('Create and update a space (e2e)', () => {
         expect(await stored(res.body.id)).toMatchObject({ description: null, language: 'en', privacy: 'public' });
       });
 
+      it('saves a language sent in upper case as lower case', async () => {
+        const name = uniqueName('Upper');
+        const res = check(await create(ids.ManagerA, { schoolId: schools.A, name, language: ' FR ' }), 201);
+
+        expect(res.body.language).toBe('fr');
+        expect(await stored(res.body.id)).toMatchObject({ language: 'fr' });
+
+        const upd = check(await update(ids.ManagerA, res.body.id, { language: 'EN' }), 200);
+        expect(upd.body.language).toBe('en');
+        expect(await stored(res.body.id)).toMatchObject({ language: 'en' });
+      });
+
       it('stores the description, language and privacy, and trims the name', async () => {
         const name = uniqueName('Droit');
         const res = check(
