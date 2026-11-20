@@ -556,16 +556,20 @@ describe('DocumentsService', () => {
     const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
 
     beforeEach(() => {
-      mockPrisma.space.findUnique.mockResolvedValue(stored);
+      let written = {};
+      mockPrisma.space.findUnique.mockImplementation(async () => ({ ...stored, ...written }));
       mockPrisma.space.findFirst.mockResolvedValue(null);
-      mockPrisma.space.update.mockImplementation(async ({ data }: any) => ({ ...stored, ...data }));
+      mockPrisma.space.updateMany.mockImplementation(async ({ data }: any) => {
+        written = data;
+        return { count: 1 };
+      });
     });
 
     it('updates the given fields only and returns the new values', async () => {
       const space = await service.updateSpace('space-1', { name: 'Maths', language: 'fr' }, updater, context);
 
-      expect(mockPrisma.space.update).toHaveBeenCalledWith({
-        where: { id: 'space-1' },
+      expect(mockPrisma.space.updateMany).toHaveBeenCalledWith({
+        where: { id: 'space-1', deletedAt: null },
         data: { name: 'Maths', language: 'fr' },
       });
       expect(space).toMatchObject({
@@ -600,7 +604,10 @@ describe('DocumentsService', () => {
 
     it.each([null, ''])('clears the description with %j', async (description) => {
       const space = await service.updateSpace('space-1', { description }, updater);
-      expect(mockPrisma.space.update).toHaveBeenCalledWith({ where: { id: 'space-1' }, data: { description: null } });
+      expect(mockPrisma.space.updateMany).toHaveBeenCalledWith({
+        where: { id: 'space-1', deletedAt: null },
+        data: { description: null },
+      });
       expect(space.description).toBe('');
     });
 
@@ -608,13 +615,13 @@ describe('DocumentsService', () => {
       const space = await service.updateSpace('space-1', { name: 'Mathematics', privacy: 'public' }, updater);
 
       expect(space.name).toBe('Mathematics');
-      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
       expect(mockAudit.record).not.toHaveBeenCalled();
     });
 
     it('rejects an empty body with 400', async () => {
       await expect(service.updateSpace('space-1', {}, updater)).rejects.toBeInstanceOf(BadRequestException);
-      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
     });
 
     it('returns 404 for an unknown space', async () => {
@@ -624,10 +631,16 @@ describe('DocumentsService', () => {
       );
     });
 
+    it('returns 404 and records nothing when the space was deleted after it was read (count 0)', async () => {
+      mockPrisma.space.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.updateSpace('space-1', { name: 'Maths' }, updater)).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
     it('lets a platform admin update a space of any school', async () => {
       mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
       await service.updateSpace('space-1', { name: 'Maths' }, platformAdmin);
-      expect(mockPrisma.space.update).toHaveBeenCalled();
+      expect(mockPrisma.space.updateMany).toHaveBeenCalled();
     });
 
     it('lets a holder of documents:manage update a space of their school', async () => {
@@ -637,7 +650,7 @@ describe('DocumentsService', () => {
         assignments: [{ ...staffUser.assignments[0], permissions: ['documents:manage'] }],
       };
       await service.updateSpace('space-1', { name: 'Maths' }, manager);
-      expect(mockPrisma.space.update).toHaveBeenCalled();
+      expect(mockPrisma.space.updateMany).toHaveBeenCalled();
     });
 
     it.each([
@@ -648,7 +661,7 @@ describe('DocumentsService', () => {
     ])('rejects %s with 403', async (_label, actor, schoolId) => {
       mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId });
       await expect(service.updateSpace('space-1', { name: 'Maths' }, actor)).rejects.toBeInstanceOf(ForbiddenException);
-      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
       expect(mockAudit.record).not.toHaveBeenCalled();
     });
 
@@ -661,7 +674,7 @@ describe('DocumentsService', () => {
         where: { deletedAt: null, schoolId: 'school-1', name: 'Physics', id: { not: 'space-1' } },
         select: { id: true },
       });
-      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
     });
 
     it('does not look for a name conflict when the name is unchanged', async () => {
@@ -670,7 +683,7 @@ describe('DocumentsService', () => {
     });
 
     it('maps the unique index violation (P2002) to the same 409 and records nothing', async () => {
-      mockPrisma.space.update.mockRejectedValueOnce(
+      mockPrisma.space.updateMany.mockRejectedValueOnce(
         new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }),
       );
       await expect(service.updateSpace('space-1', { name: 'Physics' }, updater)).rejects.toThrow(

@@ -514,14 +514,25 @@ export class DocumentsService {
       await this.assertSpaceNameIsFree(space.schoolId, changes.name.to as string, id);
     }
 
-    let updated;
+    // Conditional write: a DELETE that lands between the read above and this write must win, otherwise
+    // the "[deleted <timestamp>]" name could be overwritten and the unique index collision come back.
     try {
-      updated = await this.prisma.space.update({
-        where: { id },
+      const { count } = await this.prisma.space.updateMany({
+        where: { id, ...ACTIVE_SPACE },
         data: Object.fromEntries(Object.entries(changes).map(([field, change]) => [field, change.to])),
       });
+      if (count === 0) {
+        throw new NotFoundException(`Space with ID ${id} not found`);
+      }
     } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
       throw this.spaceNameConflictOr(error, dto.name ?? space.name);
+    }
+    const updated = await this.prisma.space.findUnique({ where: { id, ...ACTIVE_SPACE } });
+    if (!updated) {
+      throw new NotFoundException(`Space with ID ${id} not found`);
     }
 
     await this.audit.record(
