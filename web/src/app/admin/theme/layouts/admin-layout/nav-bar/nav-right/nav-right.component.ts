@@ -1,31 +1,32 @@
-﻿// angular import
-import { Component, output, inject, input } from '@angular/core';
-import { RouterModule } from '@angular/router';
+// angular import
+import { HttpClient } from '@angular/common/http';
+import { Component, inject, input, output } from '@angular/core';
+import { Router, RouterModule } from '@angular/router';
 
 // project import
+import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
 import { SharedModule } from 'src/app/admin/theme/shared/shared.module';
-
-// third party
+import { environment } from 'src/environments/environment';
 
 // icon
 import { IconService } from '@ant-design/icons-angular';
 import {
+  ArrowRightOutline,
   BellOutline,
-  SettingOutline,
+  CheckCircleOutline,
+  CommentOutline,
+  EditOutline,
   GiftOutline,
+  LockOutline,
+  LogoutOutline,
   MessageOutline,
   PhoneOutline,
-  CheckCircleOutline,
-  LogoutOutline,
-  EditOutline,
-  UserOutline,
   ProfileOutline,
-  WalletOutline,
   QuestionCircleOutline,
-  LockOutline,
-  CommentOutline,
+  SettingOutline,
   UnorderedListOutline,
-  ArrowRightOutline
+  UserOutline,
+  WalletOutline
 } from '@ant-design/icons-angular/icons';
 
 @Component({
@@ -35,7 +36,10 @@ import {
   styleUrls: ['./nav-right.component.scss']
 })
 export class NavRightComponent {
-  private iconService = inject(IconService);
+  private readonly iconService = inject(IconService);
+  private readonly http = inject(HttpClient);
+  private readonly router = inject(Router);
+  readonly session = inject(PortalSessionService);
 
   // public props
   styleSelectorToggle = input<boolean>();
@@ -57,7 +61,6 @@ export class NavRightComponent {
         LogoutOutline,
         EditOutline,
         UserOutline,
-        EditOutline,
         ProfileOutline,
         QuestionCircleOutline,
         LockOutline,
@@ -72,24 +75,14 @@ export class NavRightComponent {
 
   profile = [
     {
-      icon: 'edit',
-      title: 'Edit Profile'
-    },
-    {
       icon: 'user',
-      title: 'View Profile'
-    },
-    {
-      icon: 'profile',
-      title: 'Social Profile'
-    },
-    {
-      icon: 'wallet',
-      title: 'Billing'
+      title: 'View Profile',
+      action: 'profile'
     },
     {
       icon: 'logout',
-      title: 'Logout'
+      title: 'Logout',
+      action: 'logout'
     }
   ];
 
@@ -99,20 +92,33 @@ export class NavRightComponent {
       title: 'Support'
     },
     {
-      icon: 'user',
-      title: 'Account Settings'
-    },
-    {
       icon: 'lock',
       title: 'Privacy Center'
-    },
-    {
-      icon: 'comment',
-      title: 'Feedback'
-    },
-    {
-      icon: 'unordered-list',
-      title: 'History'
     }
   ];
+
+  onSchoolChange(schoolId: string): void {
+    this.session.selectSchool(schoolId || null);
+  }
+
+  onProfileTaskClick(action?: string): void {
+    if (action === 'logout') {
+      this.logout();
+    }
+  }
+
+  logout(): void {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('accessToken') : null;
+    if (token) {
+      this.http
+        .post(
+          `${environment.apiUrl}/auth/logout`,
+          {},
+          { headers: { Authorization: `Bearer ${token}` } }
+        )
+        .subscribe({ error: () => {} });
+    }
+    this.session.clearSession();
+    void this.router.navigateByUrl('/admin/login');
+  }
 }

@@ -1,14 +1,15 @@
 // Angular import
-import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Component, OnInit, inject } from '@angular/core';
 import { RouterModule } from '@angular/router';
 
 // Project import
+import { PortalSessionService } from '../../identity/services/portal-session.service';
+import { BreadcrumbComponent } from '../../shared/components/breadcrumb/breadcrumb.component';
+import { LayoutStateService } from '../../shared/service/layout-state.service';
 import { SharedModule } from '../../shared/shared.module';
 import { NavBarComponent } from './nav-bar/nav-bar.component';
 import { NavigationComponent } from './navigation/navigation.component';
-import { BreadcrumbComponent } from '../../shared/components/breadcrumb/breadcrumb.component';
-import { LayoutStateService } from '../../shared/service/layout-state.service';
 
 @Component({
   selector: 'app-admin',
@@ -16,8 +17,9 @@ import { LayoutStateService } from '../../shared/service/layout-state.service';
   templateUrl: './admin-layout.component.html',
   styleUrls: ['./admin-layout.component.scss']
 })
-export class AdminLayout {
-  private layoutState = inject(LayoutStateService);
+export class AdminLayout implements OnInit {
+  private readonly layoutState = inject(LayoutStateService);
+  private readonly session = inject(PortalSessionService);
 
   // public props
   navCollapsed = false;
@@ -26,6 +28,12 @@ export class AdminLayout {
   // Constructor
   constructor() {
     this.windowWidth = window.innerWidth;
+  }
+
+  ngOnInit(): void {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('accessToken')) {
+      this.session.loadProfile().subscribe();
+    }
   }
 
   get navCollapsedMob(): boolean {
@@ -54,4 +62,3 @@ export class AdminLayout {
     this.navCollapsed = !this.navCollapsed;
   }
 }
-

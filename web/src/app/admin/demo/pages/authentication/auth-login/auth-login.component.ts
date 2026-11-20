@@ -2,6 +2,10 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
+import {
+  PortalSessionService,
+  PortalSessionUser
+} from 'src/app/admin/identity/services/portal-session.service';
 import { environment } from 'src/environments/environment';
 
 /** Response of POST /auth/admin/login and POST /auth/google (TokenPairEntity in the API). */
@@ -14,18 +18,8 @@ export interface TokenPair {
   refreshExpiresAt: string;
 }
 
-/** Subset of GET /auth/me used to verify portal access rights (#91). */
-export interface AuthenticatedPortalUser {
-  id: string;
-  email: string;
-  fullName: string;
-  status: string;
-  role: string | null;
-  roles?: string[];
-  permissions: string[];
-  schoolIds: string[];
-  isPlatformAdmin: boolean;
-}
+/** Subset of GET /auth/me used to verify portal access rights (#91, #92). */
+export type AuthenticatedPortalUser = PortalSessionUser;
 
 const PORTAL_ALLOWED_PERMISSIONS = new Set([
   '*',
@@ -68,6 +62,7 @@ export class AuthLoginComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute, { optional: true });
   private readonly toast = inject(GoeyToastService);
+  private readonly session = inject(PortalSessionService);
 
   readonly loading = signal(false);
   readonly googleLoading = signal(false);
@@ -175,7 +170,10 @@ export class AuthLoginComponent implements OnInit, OnDestroy {
     this.showPassword.update((v) => !v);
   }
 
-  /** Signs in an administrator through email + password and redirects to the portal dashboard. */
+  /**
+   * Signs in through email + password, populates the session store with roles, permissions,
+   * and schools, and redirects to the role-appropriate default landing page (#92).
+   */
   signIn(email: string, password: string): void {
     if (this.loading() || this.googleLoading()) return;
 
@@ -186,9 +184,24 @@ export class AuthLoginComponent implements OnInit, OnDestroy {
       next: ({ accessToken, refreshToken }) => {
         localStorage.setItem('accessToken', accessToken);
         localStorage.setItem('refreshToken', refreshToken);
-        this.loading.set(false);
-        this.toast.success('Signed In', { description: 'Welcome to the WAMDP Admin Console.' });
-        void this.router.navigateByUrl('/admin/dashboard/default');
+
+        this.http
+          .get<PortalSessionUser>(`${environment.apiUrl}/auth/me`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          })
+          .subscribe({
+            next: (me) => {
+              this.session.setUser(me);
+              this.loading.set(false);
+              this.toast.success('Signed In', { description: 'Welcome to the WAMDP Admin Console.' });
+              void this.router.navigateByUrl(this.session.defaultLandingUrl());
+            },
+            error: () => {
+              this.loading.set(false);
+              this.toast.success('Signed In', { description: 'Welcome to the WAMDP Admin Console.' });
+              void this.router.navigateByUrl('/admin/dashboard/default');
+            }
+          });
       },
       error: (response: HttpErrorResponse) => {
         this.loading.set(false);
@@ -200,7 +213,7 @@ export class AuthLoginComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Initiates Google OAuth 2.0 / OpenID Connect sign-in for staff with document-management rights (#91).
+   * Initiates Google OAuth 2.0 / OpenID Connect sign-in for staff with document-management rights (#91, #92).
    * Accepts an explicit `idToken` when provided (e.g. from callback or tests), or opens the
    * Google OpenID Connect authentication flow in the browser.
    */
@@ -234,7 +247,7 @@ export class AuthLoginComponent implements OnInit, OnDestroy {
   /**
    * Sends the Google ID token to `POST /auth/google` (`client: 'portal'`), verifies that the
    * authenticated user holds portal access (`admin` or `documents:manage`), stores the session,
-   * and redirects to the portal.
+   * and redirects to the role-appropriate portal landing page (#91, #92).
    */
   exchangeGoogleIdToken(idToken: string): void {
     if (this.loading()) return;
@@ -251,15 +264,13 @@ export class AuthLoginComponent implements OnInit, OnDestroy {
         next: ({ accessToken, refreshToken }) => {
           // Verify portal permissions against GET /auth/me before completing login
           this.http
-            .get<AuthenticatedPortalUser>(`${environment.apiUrl}/auth/me`, {
+            .get<PortalSessionUser>(`${environment.apiUrl}/auth/me`, {
               headers: { Authorization: `Bearer ${accessToken}` }
             })
             .subscribe({
               next: (me) => {
                 if (!userHasPortalAccess(me)) {
-                  localStorage.removeItem('accessToken');
-                  localStorage.removeItem('refreshToken');
-                  localStorage.removeItem('currentUser');
+                  this.session.clearSession();
                   // Revoke the server session immediately as defense-in-depth
                   this.http
                     .post(`${environment.apiUrl}/auth/logout`, {}, { headers: { Authorization: `Bearer ${accessToken}` } })
@@ -272,17 +283,15 @@ export class AuthLoginComponent implements OnInit, OnDestroy {
 
                 localStorage.setItem('accessToken', accessToken);
                 localStorage.setItem('refreshToken', refreshToken);
-                localStorage.setItem('currentUser', JSON.stringify(me));
+                this.session.setUser(me);
                 this.googleLoading.set(false);
                 this.toast.success('Signed In', {
                   description: `Welcome, ${me.fullName || me.email}.`
                 });
-                void this.router.navigateByUrl('/admin/dashboard/default');
+                void this.router.navigateByUrl(this.session.defaultLandingUrl());
               },
               error: (meErr: HttpErrorResponse) => {
-                localStorage.removeItem('accessToken');
-                localStorage.removeItem('refreshToken');
-                localStorage.removeItem('currentUser');
+                this.session.clearSession();
                 this.googleLoading.set(false);
                 const errorMsg = readErrorMessage(meErr, 'Could not verify portal permissions.');
                 this.error.set(errorMsg);
@@ -291,9 +300,7 @@ export class AuthLoginComponent implements OnInit, OnDestroy {
             });
         },
         error: (response: HttpErrorResponse) => {
-          localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
-          localStorage.removeItem('currentUser');
+          this.session.clearSession();
           this.googleLoading.set(false);
           const errorMsg = readErrorMessage(
             response,
@@ -394,7 +401,7 @@ function generateCryptographicNonce(): string {
   return Math.random().toString(36).substring(2) + Date.now().toString(36);
 }
 
-export function userHasPortalAccess(user: AuthenticatedPortalUser | null | undefined): boolean {
+export function userHasPortalAccess(user: Partial<PortalSessionUser> | null | undefined): boolean {
   if (!user) return false;
   if (user.isPlatformAdmin) return true;
   return (user.permissions ?? []).some((p) => PORTAL_ALLOWED_PERMISSIONS.has(p));

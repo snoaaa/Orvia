@@ -103,7 +103,7 @@ describe('AuthLoginComponent (Issue #91 — Google Sign-In for Staff with Docume
     expect(localStorage.getItem('accessToken')).toBe('staff-access-jwt');
     expect(localStorage.getItem('refreshToken')).toBe('staff-refresh-token');
     expect(toastMock.success).toHaveBeenCalled();
-    expect(router.navigateByUrl).toHaveBeenCalledWith('/admin/dashboard/default');
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/admin/spaces');
   });
 
   it('refuses a staff member without document-management rights or a student with a clear mobile app message', async () => {

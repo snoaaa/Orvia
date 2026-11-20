@@ -7,6 +7,7 @@ import { FallOutline, RiseOutline } from '@ant-design/icons-angular/icons';
 import { CardComponent } from '../../../theme/shared/components/card/card.component';
 import { ConfirmationModalComponent } from '../components/confirmation-modal/confirmation-modal.component';
 import { PaginatedUsers, UserEntity } from '../models/user.model';
+import { PortalSessionService } from '../../services/portal-session.service';
 import { UserManagementService } from '../services/user-management.service';
 import { NgbDropdownModule } from '@ng-bootstrap/ng-bootstrap';
 import { GoeyToastService } from 'goey-toast-angular';
@@ -31,6 +32,7 @@ export class UserListComponent implements OnInit {
   private readonly userService = inject(UserManagementService);
   private readonly iconService = inject(IconService);
   private readonly toast = inject(GoeyToastService);
+  readonly session = inject(PortalSessionService);
 
   // Users data
   readonly users = signal<UserEntity[]>([]);

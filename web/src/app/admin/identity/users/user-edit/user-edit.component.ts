@@ -5,6 +5,7 @@ import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { CardComponent } from '../../../theme/shared/components/card/card.component';
 import { ConfirmationModalComponent } from '../components/confirmation-modal/confirmation-modal.component';
 import { ActiveSession, UserEntity } from '../models/user.model';
+import { PortalSessionService } from '../../services/portal-session.service';
 import { UserManagementService } from '../services/user-management.service';
 import { GoeyToastService } from 'goey-toast-angular';
 
@@ -27,6 +28,7 @@ export class UserEditComponent implements OnInit {
   private readonly fb = inject(FormBuilder);
   private readonly userService = inject(UserManagementService);
   private readonly toast = inject(GoeyToastService);
+  readonly session = inject(PortalSessionService);
 
   readonly userId = signal<string>('');
   readonly user = signal<UserEntity | null>(null);

@@ -170,6 +170,9 @@
                   [ngClass]="sortBy() === 'email' ? (sortOrder() === 'asc' ? 'ti-arrow-up text-primary' : 'ti-arrow-down text-primary') : 'ti-arrows-sort text-muted'"
                 ></i>
               </th>
+              @if (session.showSchoolColumn()) {
+                <th class="text-nowrap school-column">SCHOOL</th>
+              }
               <th (click)="toggleSort('status')" class="cursor-pointer user-select-none text-nowrap" style="width: 125px;">
                 STATUS
                 <i
@@ -191,14 +194,14 @@
           <tbody>
             @if (isInitialLoading()) {
               <tr>
-                <td colspan="6" class="text-center py-5 text-muted">
+                <td [attr.colspan]="session.showSchoolColumn() ? 7 : 6" class="text-center py-5 text-muted">
                   <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
                   Loading users...
                 </td>
               </tr>
             } @else if (users().length === 0) {
               <tr>
-                <td colspan="6" class="text-center py-5 text-muted">
+                <td [attr.colspan]="session.showSchoolColumn() ? 7 : 6" class="text-center py-5 text-muted">
                   No users found matching current filters.
                 </td>
               </tr>
@@ -215,6 +218,11 @@
                       {{ u.email }}
                     </a>
                   </td>
+                  @if (session.showSchoolColumn()) {
+                    <td class="text-nowrap school-column">
+                      {{ u.assignments?.[0]?.school?.name || '—' }}
+                    </td>
+                  }
                   <td class="text-nowrap">
                     <span class="status-indicator">
                       <i class="badge-circle {{ getStatusBadgeClass(u.status) }} me-2"></i>
@@ -235,35 +243,39 @@
                         <i class="ti ti-dots-vertical f-18"></i>
                       </button>
                       <div class="dropdown-menu dropdown-menu-end shadow" ngbDropdownMenu>
-                        <a
-                          [routerLink]="['/admin/users', u.id]"
-                          class="dropdown-item"
-                          ngbDropdownItem
-                        >
-                          <i class="ti ti-edit text-primary me-2 f-15"></i>
-                          <span>Edit Details</span>
-                        </a>
-                        <div class="dropdown-divider my-1"></div>
-                        @if (u.status === 'ACTIVE' || u.status === 'INVITED') {
-                          <button
-                            type="button"
-                            class="dropdown-item text-danger"
-                            (click)="openSuspendModal(u, $event)"
+                        @if (session.hasPermission('users:update')) {
+                          <a
+                            [routerLink]="['/admin/users', u.id]"
+                            class="dropdown-item"
                             ngbDropdownItem
                           >
-                            <i class="ti ti-ban text-danger me-2 f-15"></i>
-                            <span>Suspend User</span>
-                          </button>
-                        } @else if (u.status === 'SUSPENDED') {
-                          <button
-                            type="button"
-                            class="dropdown-item text-success"
-                            (click)="openReactivateModal(u, $event)"
-                            ngbDropdownItem
-                          >
-                            <i class="ti ti-check text-success me-2 f-15"></i>
-                            <span>Reactivate User</span>
-                          </button>
+                            <i class="ti ti-edit text-primary me-2 f-15"></i>
+                            <span>Edit Details</span>
+                          </a>
+                        }
+                        @if (session.hasPermission('users:suspend')) {
+                          <div class="dropdown-divider my-1"></div>
+                          @if (u.status === 'ACTIVE' || u.status === 'INVITED') {
+                            <button
+                              type="button"
+                              class="dropdown-item text-danger"
+                              (click)="openSuspendModal(u, $event)"
+                              ngbDropdownItem
+                            >
+                              <i class="ti ti-ban text-danger me-2 f-15"></i>
+                              <span>Suspend User</span>
+                            </button>
+                          } @else if (u.status === 'SUSPENDED') {
+                            <button
+                              type="button"
+                              class="dropdown-item text-success"
+                              (click)="openReactivateModal(u, $event)"
+                              ngbDropdownItem
+                            >
+                              <i class="ti ti-check text-success me-2 f-15"></i>
+                              <span>Reactivate User</span>
+                            </button>
+                          }
                         }
                       </div>
                     </div>
