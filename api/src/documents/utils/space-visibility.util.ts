@@ -124,8 +124,8 @@ export function buildVisibleSpacesWhere(
     and.push(tiers.length > 0 ? { OR: tiers } : { id: NOTHING_ID });
   }
   if (filters.schoolId) and.push({ schoolId: filters.schoolId });
-  const search = filters.search?.trim();
-  if (search) and.push({ name: { contains: search } });
+  // `search` is already trimmed by ListSpacesQueryDto; an empty one is ignored.
+  if (filters.search) and.push({ name: { contains: filters.search } });
 
   return and.length > 0 ? { ...ACTIVE_SPACE, AND: and } : { ...ACTIVE_SPACE };
 }

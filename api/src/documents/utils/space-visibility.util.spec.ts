@@ -131,7 +131,7 @@ describe('buildVisibleSpacesWhere', () => {
   });
 
   it('platform: schoolId and search narrow the result', () => {
-    expect(buildVisibleSpacesWhere(buildVisibilityContext(platform), { schoolId: 'S2', search: ' math ' })).toEqual({
+    expect(buildVisibleSpacesWhere(buildVisibilityContext(platform), { schoolId: 'S2', search: 'math' })).toEqual({
       ...ACTIVE_SPACE,
       AND: [{ schoolId: 'S2' }, { name: { contains: 'math' } }],
     });
@@ -167,7 +167,7 @@ describe('buildVisibleSpacesWhere', () => {
     });
   });
 
-  it('blank search is ignored', () => {
-    expect(buildVisibleSpacesWhere(buildVisibilityContext(platform), { search: '   ' })).toEqual(ACTIVE_SPACE);
+  it('empty search is ignored', () => {
+    expect(buildVisibleSpacesWhere(buildVisibilityContext(platform), { search: '' })).toEqual(ACTIVE_SPACE);
   });
 });
