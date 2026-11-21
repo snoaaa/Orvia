@@ -119,9 +119,13 @@
               @for (space of spaces(); track space.id) {
                 <tr>
                   <td class="name-cell">
-                    <div class="f-w-500 text-dark text-truncate" [title]="space.name">
+                    <a
+                      [routerLink]="['/admin/spaces', space.id, 'documents']"
+                      class="f-w-500 text-dark text-truncate d-block space-documents-link"
+                      [title]="'Open the documents of ' + space.name"
+                    >
                       {{ space.name }}
-                    </div>
+                    </a>
                     @if (space.description) {
                       <small class="text-muted text-truncate d-block" [title]="space.description">
                         {{ space.description }}

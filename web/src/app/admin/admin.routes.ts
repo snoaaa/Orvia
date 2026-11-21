@@ -101,6 +101,14 @@ export const adminRoutes: Routes = [
           )
       },
       {
+        path: 'spaces/:spaceId/documents',
+        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['documents'])],
+        loadComponent: () =>
+          import('./documents/space-documents/space-document-list/space-document-list.component').then(
+            (c) => c.SpaceDocumentListComponent
+          )
+      },
+      {
         path: 'spaces/:id/edit',
         canActivate: [portalPermissionGuard('spaces:update')],
         loadComponent: () =>
