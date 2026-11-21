@@ -87,14 +87,25 @@ export const adminRoutes: Routes = [
       {
         path: 'spaces',
         canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['spaces'])],
-        data: {
-          sectionId: 'spaces',
-          title: 'Spaces',
-          description: 'Manage academic knowledge spaces within your school scope.'
-        },
         loadComponent: () =>
-          import('./identity/components/portal-section/portal-section.component').then(
-            (c) => c.PortalSectionComponent
+          import('./documents/spaces/space-list/space-list.component').then(
+            (c) => c.SpaceListComponent
+          )
+      },
+      {
+        path: 'spaces/new',
+        canActivate: [portalPermissionGuard('spaces:create')],
+        loadComponent: () =>
+          import('./documents/spaces/space-edit/space-edit.component').then(
+            (c) => c.SpaceEditComponent
+          )
+      },
+      {
+        path: 'spaces/:id/edit',
+        canActivate: [portalPermissionGuard('spaces:update')],
+        loadComponent: () =>
+          import('./documents/spaces/space-edit/space-edit.component').then(
+            (c) => c.SpaceEditComponent
           )
       },
       {
