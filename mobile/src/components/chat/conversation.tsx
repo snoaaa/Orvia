@@ -15,7 +15,6 @@ import { useEffect } from "react";
 import Animated, {
   runOnJS,
   useAnimatedReaction,
-  useAnimatedProps,
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
@@ -31,7 +30,6 @@ const IS_GLASS = Platform.OS === 'ios';
 
 // Removed AnimatedLegendList to fix Fabric crash on custom components
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Reanimated animated styles are opaque worklet objects
 type AnimatedStyle = any;
 
 type ConversationContextValue = {
@@ -102,7 +100,6 @@ export function Conversation({
 
   // -- Layout bookkeeping --------------------------------------------------
 
-  const [composerOffsetHeight, setComposerOffsetHeight] = useState(68);
   const composerHeight = useSharedValue(68);
   const scrollViewHeight = useSharedValue(0);
   const totalContentHeight = useSharedValue(0);
@@ -173,8 +170,12 @@ export function Conversation({
       animated: true,
       viewOffset: -bottomInset.value,
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  scrollToBottomRef.current = scrollToBottom;
+
+  useEffect(() => {
+    scrollToBottomRef.current = scrollToBottom;
+  }, [scrollToBottom]);
 
   // -- Animated styles -----------------------------------------------------
   const topPadding = IS_GLASS ? 128 : 16;
@@ -188,6 +189,7 @@ export function Conversation({
     const blankSpace = scrollHeight - messagesOnlyHeight.value - bottom;
     const footerHeight = Math.max(0, blankSpace - topPadding);
 
+    // eslint-disable-next-line react-hooks/immutability -- Reanimated SharedValue mutation in worklet
     currentFooterHeight.value = footerHeight;
     return { height: footerHeight };
   });
@@ -228,7 +230,7 @@ export function Conversation({
   const onPromptInputLayout = useCallback((e: LayoutChangeEvent) => {
     const h = e.nativeEvent.layout.height;
     composerHeight.value = h;
-    setComposerOffsetHeight(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -- Context value -------------------------------------------------------
@@ -247,7 +249,7 @@ export function Conversation({
       <View className="flex-1 bg-background">
         <View className="flex-1">
           <LegendList
-            ref={listRef}
+            ref={listRef as never}
             data={messages}
             renderItem={renderMessage as any}
             keyExtractor={(item) => (item as ChatMessage).id}

@@ -1,7 +1,7 @@
 "use no memo";
 import { SymbolImage } from "@/components/symbol-image";
 import { TouchableGlass } from "@/components/touchable-glass";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ComponentRef, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 
@@ -111,14 +111,14 @@ export function PromptInputBody({ children }: { children: ReactNode }) {
  * input value from `ChatContext`.
  */
 export function PromptInputTextarea({
-  placeholder = "Chat with Agent...",
+  placeholder = "Ask a question…",
   maxLength = 1000,
 }: {
   placeholder?: string;
   maxLength?: number;
 }) {
   const { input, setInput } = useChatContext();
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
   useEffect(() => {
     if (input === "") {
