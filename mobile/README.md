@@ -1,56 +1,81 @@
-# Welcome to your Expo app 👋
+# Orvia Mobile Application
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Cross-platform React Native (Expo) mobile application for **Orvia (WAMDP)** — an educational RAG knowledge assistant for staff, students, and guests with offline-first local storage and permission-adapted navigation.
 
-## Get started
+## Quick Start
 
-1. Install dependencies
+1. **Install dependencies**
 
    ```bash
+   cd mobile
    npm install
    ```
 
-2. Start the app
+2. **Configure environment variables**
 
    ```bash
-   npx expo start
+   cp .env.example .env.local
    ```
 
-In the output, you'll find options to open the app in a
+   Set `EXPO_PUBLIC_API_URL` to your Orvia API address (defaults to your Metro host IP on port `8084`, or `http://localhost:8084`).
+   For local dev testing with `AUTH_DEV_TOOLS=true` on the API, you may optionally set `EXPO_PUBLIC_DEV_EMAIL=student.a@demo.test`.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+3. **Run on Android, iOS, or Web**
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+   ```bash
+   npm run start      # Start Expo dev server
+   npm run android    # Build and run on Android
+   npm run web        # Run web target
+   npm run lint       # Run ESLint
+   npm run typecheck  # Run TypeScript check (tsc --noEmit)
+   ```
 
-## Get a fresh project
+---
 
-When you're ready, run:
+## Architecture (MVVM + Component-Oriented)
 
-```bash
-npm run reset-project
+The mobile client follows the **MVVM (Model-View-ViewModel)** pattern combined with a **component-oriented UI architecture** (specs §5.1, §6, §10):
+
+```text
+mobile/src/
+├── app/               # Thin Expo Router entry files (routing only, delegates to views/)
+├── views/             # Pure UI screens bound to ViewModels (no direct HTTP or SQLite calls)
+├── view-models/       # Stateful hooks & session context coordinating Models and Services
+├── models/            # Domain entities, DTO types, and preference interfaces
+├── services/          # External I/O layer:
+│   ├── api/           #   HTTP client with env base URL, Bearer token & ApiError handling
+│   ├── storage/       #   SQLite (expo-sqlite) local database + migrations + web adapter
+│   ├── auth-service.ts
+│   ├── chat-service.ts
+│   └── space-service.ts
+├── components/        # Reusable, composable UI building blocks (chat/, markdown/, PermissionGate, etc.)
+├── i18n/              # Internationalization (French `fr` primary, English `en` supported)
+├── theme/             # Light / Dark / System theme management synced with Uniwind & SQLite
+├── utils/             # Permission helpers (`permissions.ts`) and styling utilities
+└── config/            # Environment resolution (`env.ts`) and module feature flags (`features.ts`)
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### Layer Responsibilities
 
-### Other setup steps
+1. **Models (`src/models/`)**
+   - Define immutable TypeScript contracts matching the Orvia NestJS backend (`AuthenticatedUser`, `Space`, `DocumentItem`, `ChatMessage`, `MessageCitation`, `ConversationSummary`, `AppPreferences`).
+2. **Services (`src/services/`)**
+   - **API Client (`src/services/api/api-client.ts`)**: Reads `EXPO_PUBLIC_API_URL` (with Metro host auto-detection fallback), attaches `Authorization: Bearer <token>`, normalizes errors into `ApiError`, and provides `401` hooks for session refresh/sign-out.
+   - **Local Storage (`src/services/storage/database.ts`)**: Uses `expo-sqlite` (`orvia.db`) with versioned migrations (`schema_migrations`, `app_preferences`, `spaces`, `conversations`, `messages`, `documents`, `sync_queue`) plus a web-compatible `database.web.ts` adapter.
+   - **Domain Services (`auth-service.ts`, `space-service.ts`, `chat-service.ts`)**: Wrap API calls and synchronize local SQLite caches.
+3. **ViewModels (`src/view-models/`)**
+   - `AppSessionProvider` / `useAppSession`: Initializes SQLite, bootstraps session state, exposes active roles and permission predicates.
+   - `useChatViewModel`, `useSpacesViewModel`, `useChatsViewModel`, `useSettingsViewModel`: Encapsulate screen state, async polling (`#122`), error recovery, and persistence without leaking I/O logic into Views.
+4. **Views (`src/views/`) & Routes (`src/app/`)**
+   - `src/app/*` defines Expo Router screens (`index`, `spaces`, `chats`, `import`, `attachments`, `(settings)/settings`, `(settings)/profile`).
+   - `src/views/*` renders UI declaratively from ViewModel state and localized strings.
+5. **Components (`src/components/`)**
+   - Component-oriented UI primitives (`chat/`, `markdown/`, `PermissionGate`, `DrawerContent`, `MainHeader`).
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+---
 
-## Learn more
+## Key Cross-Cutting Capabilities
 
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- **Internationalization (`src/i18n/`)**: French (`fr`) is configured as the primary language (§6) with runtime switching to English (`en`), persisted in SQLite (`app_preferences`).
+- **Theming (`src/theme/`)**: Supports `system`, `light`, and `dark` themes via Uniwind CSS tokens (`src/global.css`) and React Navigation themes, persisted in SQLite.
+- **Role & Permission Adaptation (`src/utils/permissions.ts`, `src/components/permission-gate.tsx`)**: Screens and actions (such as document import via `documents:manage`) adapt dynamically to the authenticated user's roles and permissions (`STAFF`, `STUDENT`, `PARENT_GUEST`, `CONTENT_MANAGER`, etc.).

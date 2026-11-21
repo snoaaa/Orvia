@@ -124,14 +124,14 @@ export function Conversation({
       <View className="relative flex-1 bg-background">
         {/* Empty state overlay */}
         {messages.length === 0 && emptyState && (
-          <View className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+          <View className="absolute inset-0 z-10 flex items-center justify-center">
             {emptyState}
           </View>
         )}
 
         {/* Message list */}
         <LegendList
-          ref={listRef}
+          ref={listRef as never}
           data={messages}
           renderItem={renderMessage as any}
           keyExtractor={(item) => (item as ChatMessage).id}

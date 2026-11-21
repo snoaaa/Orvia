@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/immutability, react-hooks/refs */
+"use no memo";
 /**
  * Simplified drawer layout forked from react-native-drawer-layout.
  * Only supports "back" type (drawer behind content), left-side, LTR.
@@ -6,7 +8,6 @@
 import * as Haptics from "expo-haptics";
 import * as React from "react";
 import {
-  InteractionManager,
   Keyboard,
   Pressable,
   useWindowDimensions,
@@ -85,18 +86,9 @@ export function DrawerLayout({
   const callOnOpen = React.useCallback(() => onOpenRef.current(), []);
   const callOnClose = React.useCallback(() => onCloseRef.current(), []);
 
-  const interactionHandleRef = React.useRef<number | null>(null);
+  const startInteraction = React.useCallback(() => {}, []);
 
-  const startInteraction = React.useCallback(() => {
-    interactionHandleRef.current = InteractionManager.createInteractionHandle();
-  }, []);
-
-  const endInteraction = React.useCallback(() => {
-    if (interactionHandleRef.current != null) {
-      InteractionManager.clearInteractionHandle(interactionHandleRef.current);
-      interactionHandleRef.current = null;
-    }
-  }, []);
+  const endInteraction = React.useCallback(() => {}, []);
 
   const touchStartX = useSharedValue(0);
   const touchX = useSharedValue(0);
