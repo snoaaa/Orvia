@@ -239,7 +239,12 @@ export const localStorage: LocalStorageAdapter = {
       let citations: MessageCitation[] = [];
       if (r.citations_json) {
         try {
-          citations = JSON.parse(r.citations_json) as MessageCitation[];
+          // Citations cached before the #119 contract have no marker or zone.
+          citations = (JSON.parse(r.citations_json) as Partial<MessageCitation>[]).map((c, i) => ({
+            ...(c as MessageCitation),
+            marker: c.marker ?? i + 1,
+            zone: c.zone ?? null,
+          }));
         } catch {
           citations = [];
         }

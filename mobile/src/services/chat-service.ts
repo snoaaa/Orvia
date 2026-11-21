@@ -77,9 +77,10 @@ export const chatService = {
     conversationId: string,
     question: string,
   ): Promise<ConversationMessageResponse> {
+    // Chat contract (#119): the API answers with the pending answer, whose status is then polled.
     return apiClient.post<ConversationMessageResponse>(
       `/conversations/${conversationId}/messages`,
-      { role: "user", content: question },
+      { question },
     );
   },
 
