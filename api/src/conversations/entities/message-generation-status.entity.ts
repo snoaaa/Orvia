@@ -1,27 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MESSAGE_GENERATION_STATUSES, type MessageGenerationStatus } from '../utils/generation-status.util.js';
 import { MessageEntity } from './message.entity.js';
 
-export const MESSAGE_GENERATION_STATUSES = ['pending', 'generating', 'done', 'failed'] as const;
-export type MessageGenerationStatus = (typeof MESSAGE_GENERATION_STATUSES)[number];
-
-/** Normalizes stored message status values (including legacy 'completed'/'streaming') into §4.2 states. */
-export function normalizeGenerationStatus(raw?: string | null): MessageGenerationStatus {
-  switch (raw) {
-    case 'pending':
-      return 'pending';
-    case 'generating':
-    case 'streaming':
-      return 'generating';
-    case 'done':
-    case 'completed':
-      return 'done';
-    case 'failed':
-    case 'error':
-      return 'failed';
-    default:
-      return 'pending';
-  }
-}
+// Moved to utils (the message entity needs them too); exported here for existing imports.
+export { MESSAGE_GENERATION_STATUSES, normalizeGenerationStatus } from '../utils/generation-status.util.js';
+export type { MessageGenerationStatus } from '../utils/generation-status.util.js';
 
 /** Polling response for GET /conversations/:id/messages/:messageId/status (#122). */
 export class MessageGenerationStatusEntity {

@@ -138,7 +138,7 @@ export function MessageCitations({
 
   return (
     <View className="mt-2.5 flex-row flex-wrap gap-1.5">
-      {citations.map((citation, idx) => (
+      {citations.map((citation) => (
         <Pressable
           key={citation.id}
           disabled={!citation.available || !onPressCitation}
@@ -158,7 +158,7 @@ export function MessageCitations({
                 : "text-muted-foreground line-through"
             }`}
           >
-            [{idx + 1}] {citation.documentName} · {citation.pageOrImageId}
+            [{citation.marker}] {citation.documentName} · {citation.pageOrImageId}
           </Text>
         </Pressable>
       ))}

@@ -1,14 +1,24 @@
 export type MessageGenerationStatus = "pending" | "generating" | "done" | "failed";
 
+/** Where a citation's excerpt is on its page: fractions of the page (0 to 1) from the top-left corner (#119). */
+export interface CitationZone {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A source of an answer (API chat contract, #119). `[n]` in the answer text is the citation whose `marker` is n. */
 export interface MessageCitation {
   id: string;
+  marker: number;
   documentId: string;
   versionId: string;
   documentName: string;
   versionNumber: number;
   pageOrImageId: string;
   excerpt: string;
-  coordinates: string | null;
+  zone: CitationZone | null;
   available: boolean;
 }
 

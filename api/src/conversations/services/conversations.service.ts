@@ -8,8 +8,8 @@ import { schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { isDocumentVisibleTo } from '../../documents/utils/document-visibility.util.js';
 import type {
+  AskQuestionDto,
   CreateConversationDto,
-  CreateMessageDto,
   ListConversationsQueryDto,
   ListReportsQueryDto,
   ListSavedAnswersQueryDto,
@@ -37,7 +37,7 @@ import { signShareToken, verifyShareToken } from '../utils/share-token.util.js';
 
 const MESSAGE_INCLUDE = {
   references: {
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] as Prisma.MessageReferenceOrderByWithRelationInput[],
+    orderBy: { marker: 'asc' } as Prisma.MessageReferenceOrderByWithRelationInput,
     include: {
       documentVersion: {
         select: {
@@ -267,9 +267,22 @@ export class ConversationsService {
     return ConversationMapper.fromDtoToCreateInput(dto, id);
   }
 
-  async addMessage(conversationId: string, dto: CreateMessageDto): Promise<MessageEntity> {
-    const id = randomUUID();
-    return MessageMapper.fromDtoToCreateInput(dto, id, conversationId);
+  /**
+   * Asks a question in one of the caller's conversations (#119): answers with the pending answer, whose status
+   * the client polls (`GET /conversations/:id/messages/:messageId/status`, #122). 404 for an unknown or deleted
+   * conversation, or someone else's.
+   *
+   * Contract only: storing the question and its answer and running retrieval on `dto.spaceIds` is #121.
+   */
+  async askQuestion(conversationId: string, _dto: AskQuestionDto, actor: AuthenticatedUser): Promise<MessageEntity> {
+    const conversation = await this.prisma.conversation.findFirst({
+      where: { id: conversationId, userId: actor.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!conversation) {
+      throw new NotFoundException(`Conversation with ID ${conversationId} not found`);
+    }
+    return MessageMapper.pendingAnswer(randomUUID(), conversation.id);
   }
 
   /**
@@ -452,7 +465,8 @@ export class ConversationsService {
       messageId: message.id,
       content: message.content,
       modelUsed: message.modelUsed,
-      citations,
+      notEnoughEvidence: message.notEnoughEvidence,
+      citations: message.notEnoughEvidence ? [] : citations,
       redactedCitationsCount,
       createdAt: message.createdAt,
     });
