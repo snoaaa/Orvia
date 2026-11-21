@@ -1,0 +1,29 @@
+@use '../../shared/table-loading' as table;
+
+@include table.table-loading();
+
+.search-input,
+.school-filter {
+  width: 240px;
+}
+
+.page-size-select {
+  width: 75px;
+}
+
+.name-cell {
+  max-width: 420px;
+}
+
+.language-column,
+.privacy-column {
+  width: 110px;
+}
+
+.date-column {
+  width: 130px;
+}
+
+.action-column {
+  width: 110px;
+}

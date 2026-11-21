@@ -33,11 +33,6 @@ import { PortalSessionService } from 'src/app/admin/identity/services/portal-ses
                   <i class="ti ti-trash me-1"></i>Delete School
                 </button>
               }
-              @if (sectionId === 'spaces' && session.hasPermission('documents:manage')) {
-                <button type="button" id="btn-create-space" class="btn btn-sm btn-primary">
-                  <i class="ti ti-plus me-1"></i>New Space
-                </button>
-              }
               @if (sectionId === 'documents' && session.hasPermission('documents:manage')) {
                 <button type="button" id="btn-upload-document" class="btn btn-sm btn-primary">
                   <i class="ti ti-upload me-1"></i>Upload Document
