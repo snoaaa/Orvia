@@ -207,10 +207,11 @@ describe('ConversationsService (#123)', () => {
             references: [
               {
                 id: 'ref-1',
+                marker: 1,
                 documentVersionId: 'ver-1',
                 pageOrImageId: 'page_3',
                 excerpt: 'Rate of change excerpt',
-                coordinates: '{"x1":10}',
+                coordinates: '{"x":0.1,"y":0.2,"width":0.5,"height":0.1}',
                 documentVersion: {
                   id: 'ver-1',
                   documentId: 'doc-1',
@@ -221,6 +222,7 @@ describe('ConversationsService (#123)', () => {
               },
               {
                 id: 'ref-2',
+                marker: 2,
                 documentVersionId: 'ver-2',
                 pageOrImageId: 'page_1',
                 excerpt: 'Deleted doc excerpt',
@@ -245,16 +247,23 @@ describe('ConversationsService (#123)', () => {
       expect(detail.id).toBe('conv-1');
       expect(detail.spaceName).toBe('Math');
       expect(detail.messages).toHaveLength(2);
+      // #119: stored statuses are given in the contract's states, and every message has the evidence flag.
+      expect(detail.messages.map((m) => [m.status, m.notEnoughEvidence])).toEqual([
+        ['done', false],
+        ['done', false],
+      ]);
+      expect(detail.messages[0].citations).toEqual([]);
       expect(detail.messages[1].citations).toEqual([
         expect.objectContaining({
           id: 'ref-1',
+          marker: 1,
           documentId: 'doc-1',
           versionId: 'ver-1',
           documentName: 'Calculus Textbook',
           versionNumber: 2,
           pageOrImageId: 'page_3',
           excerpt: 'Rate of change excerpt',
-          coordinates: '{"x1":10}',
+          zone: { x: 0.1, y: 0.2, width: 0.5, height: 0.1 },
           available: true,
         }),
         expect.objectContaining({
@@ -293,6 +302,34 @@ describe('ConversationsService (#123)', () => {
       const messages = await service.findMessages('conv-1', student);
       expect(messages).toHaveLength(1);
       expect(messages[0].id).toBe('msg-1');
+    });
+  });
+
+  describe('askQuestion (#119)', () => {
+    const question = { question: 'What is a derivative?' };
+
+    it("answers with the pending answer of one of the caller's conversations", async () => {
+      mockPrisma.conversation.findFirst.mockResolvedValueOnce({ id: 'conv-1' });
+      const answer = await service.askQuestion('conv-1', question, student);
+
+      expect(mockPrisma.conversation.findFirst).toHaveBeenCalledWith({
+        where: { id: 'conv-1', userId: student.id, deletedAt: null },
+        select: { id: true },
+      });
+      expect(answer).toMatchObject({
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: '',
+        status: 'pending',
+        notEnoughEvidence: false,
+        citations: [],
+      });
+      expect(answer.id).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it("answers 404 for an unknown or deleted conversation, or another user's", async () => {
+      mockPrisma.conversation.findFirst.mockResolvedValueOnce(null);
+      await expect(service.askQuestion('conv-1', question, student)).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -464,10 +501,12 @@ describe('ConversationsService (#123)', () => {
         conversationId: 'conv-1',
         content: 'Shared answer text',
         modelUsed: 'mock-rag',
+        notEnoughEvidence: false,
         createdAt: new Date(),
         references: [
           {
             id: 'ref-1',
+            marker: 1,
             documentVersionId: 'ver-1',
             pageOrImageId: 'page_1',
             excerpt: 'Visible excerpt',
@@ -482,6 +521,7 @@ describe('ConversationsService (#123)', () => {
           },
           {
             id: 'ref-2',
+            marker: 2,
             documentVersionId: 'ver-2',
             pageOrImageId: 'page_2',
             excerpt: 'Secret excerpt',
@@ -502,6 +542,7 @@ describe('ConversationsService (#123)', () => {
       expect(view.citations).toHaveLength(1);
       expect(view.citations[0].documentId).toBe('doc-1');
       expect(view.redactedCitationsCount).toBe(1);
+      expect(view.notEnoughEvidence).toBe(false);
     });
 
     it('scopes findReports to school admin schools and allows platform admin to see all', async () => {
