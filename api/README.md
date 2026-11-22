@@ -475,21 +475,35 @@ returned by `GET /permissions` and by `GET /roles`) — but at least one must be
 whole payload is validated before anything is written:
 
 - **Base roles cannot be edited** (400 `System base roles cannot be edited`). Renaming a custom role *to* a
-  base role name is 400 too, and a name already taken is 409.
+  base role name is 400 too, and a name already taken is 409 (also when two concurrent renames race: the
+  unique index answers 409, not 500).
 - The permission set is **replaced**, not merged: an empty array makes the role grant nothing, an unknown,
-  blank or over-long (100+ characters) code or id is 400, and sending both spellings is 400.
+  blank or over-long (100+ characters) code or id is 400, and sending both spellings is 400. Codes are
+  trimmed before they are deduplicated, so `["documents:read", " documents:read "]` is the same 400 as the
+  unpadded duplicate; `permissionIds` are matched case-insensitively (an upper-case UUID is accepted).
+- **A field sent as `null` is a 400**, never a crash or a silent wipe: `name`, `scope`, `permissions` and
+  `permissionIds` accept *absent* (`undefined`) or a valid value, nothing else.
 - The two rules above apply: `system:manage` needs the platform scope, and the scope of an assigned role
   cannot change.
+- **The role row is locked (`SELECT ... FOR UPDATE`) before any of this is decided**, so the
+  assigned-role rule cannot be raced: `POST /assignments` locks the same row, so a re-scope and an
+  assignment cannot both go through (the loser gets 400, or 409 `changed scope while the assignment was
+  being created`), and a role can never end up platform-scoped with a school assignment created against it.
 - A payload that changes nothing writes nothing and audits nothing.
-- The role row, its permission set and the **`updated_at` of its active assignments** are written in one
-  transaction, so the mobile delta sync (Section 4.7) picks the change up for every holder without touching
-  each user.
+- The role row, its permission set, the **`updated_at` of its active assignments** *and* the audit row are
+  written in **one transaction**, so a failed audit append rolls the edit back instead of leaving an
+  unaudited change (Section 4.7's mobile sync included).
 - Permissions are read from the database on every request, so a user holding the role is allowed or refused
   by the new set **on their very next request**; the change is audited as `identity_access/role_updated`
-  with the permission diff (`addedPermissions`, `removedPermissions`).
+  with `previousName`, `previousScope`, `scope`, and the permission diff (`addedPermissions`,
+  `removedPermissions`) — a scope-only edit is therefore readable in the trail.
 
 Answer 200 with the updated role (same shape as `GET /roles/{id}`). The older
 `PATCH /identity/roles/{id}`, used by the web role editor, runs the same code.
+
+`permissions` and `permissionIds` are parallel arrays: both are built from one list sorted by code, so
+`permissionIds[i]` always belongs to `permissions[i]` (this matters for the dotted codes, where UTF-16
+order and `localeCompare` disagree).
 
 ## Assignments
 
@@ -767,7 +781,7 @@ Same permissions and target checks as `POST`. Both record `document_access_chang
 | `authentication` | `session_revoked` | A session is revoked (admin action, suspension, token reuse) | the admin, or anonymous if automatic | `session` | `ownerUserId`, `reason` |
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
-| `identity_access` | `role_updated` | A custom role is edited (`PATCH /roles/{id}`, #45); not recorded when nothing changes | the platform admin | `role` | `role`, `previousName`, `scope`, `permissions`, `addedPermissions`, `removedPermissions` |
+| `identity_access` | `role_updated` | A custom role is edited (`PATCH /roles/{id}`, #45); not recorded when nothing changes | the platform admin | `role` | `role`, `previousName`, `previousScope`, `scope`, `permissions`, `addedPermissions`, `removedPermissions` |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `documents` | `document_published` | A document is published to new targets (`POST /documents/{id}/access`); not recorded when every target was already there | the admin or content manager | `document` | `spaceId`, `schoolId`, `rules` (the `type` and `targetId` of each target added) |

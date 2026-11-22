@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser, AuthRoleAssignment } from '../../auth/types/authenticated-user.js';
 import type { UpdateRoleDto } from '../dto/index.js';
@@ -92,6 +93,8 @@ describe('IdentityAndAccessService - update role (#45)', () => {
         ),
       },
       userAssignment: { updateMany, count },
+      // The role row is locked and resolved in one statement, inside the transaction (#45 review).
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'role-1' }]),
       $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
     };
 
@@ -178,11 +181,40 @@ describe('IdentityAndAccessService - update role (#45)', () => {
         details: expect.objectContaining({
           role: 'TEACHING_ASSISTANT',
           previousName: 'TEACHING_ASSISTANT',
+          previousScope: 'school',
           permissions: ['rag:query'],
           addedPermissions: ['rag:query'],
           removedPermissions: ['documents:read'],
         }),
       }),
+      // The audit row is appended in the same transaction as the write (#45 review).
+      expect.anything(),
+    );
+  });
+
+  it('records the previous scope, so a scope-only edit is readable', async () => {
+    const { service, prisma, audit } = setup();
+    prisma.role.findFirst
+      .mockResolvedValueOnce(roleRow())
+      .mockResolvedValueOnce(roleRow({ scope: 'group' }));
+
+    await service.updateRole('role-1', dto({ scope: 'group' }), platformAdmin);
+
+    expect(audit.record.mock.calls[0][0]).toMatchObject({
+      action: 'role_updated',
+      details: { previousScope: 'school', scope: 'group' },
+    });
+  });
+
+  it('answers 409, not 500, when a concurrent rename loses the unique index', async () => {
+    const { service, prisma } = setup();
+    prisma.role.findFirst.mockResolvedValueOnce(roleRow()).mockResolvedValueOnce(roleRow());
+    prisma.role.update.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.22.0' }),
+    );
+
+    await expect(service.updateRole('role-1', dto({ name: 'another_name' }), platformAdmin)).rejects.toBeInstanceOf(
+      ConflictException,
     );
   });
 
@@ -372,6 +404,45 @@ describe('IdentityAndAccessService - update role (#45)', () => {
 
       expect(remove).toHaveBeenCalledWith({ where: { id: 'role-1' } });
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('permission ids stay aligned with codes (#45 review)', () => {
+    // `documents.access.manage` sorts before `documents:access.manage` under UTF-16 but after it under
+    // `localeCompare`, which is how the two arrays used to drift apart.
+    const dotted = [
+      { id: 'id-colon', code: 'documents:access.manage' },
+      { id: 'id-dot', code: 'documents.access.manage' },
+      { id: 'id-update', code: 'documents:update' },
+    ];
+
+    it('maps both arrays from one list sorted by code, in findRoleById', async () => {
+      const { service, prisma } = setup();
+      prisma.role.findFirst.mockResolvedValueOnce(
+        roleRow({ rolePermissions: dotted.map((permission) => ({ permission })) }),
+      );
+
+      const role = await service.findRoleById('role-1');
+
+      const byCode = new Map(dotted.map((permission) => [permission.code, permission.id]));
+      expect(role.permissions).toEqual([...role.permissions!].sort());
+      role.permissions!.forEach((code, index) => {
+        expect(role.permissionIds![index]).toBe(byCode.get(code));
+      });
+    });
+
+    it('does the same for every row of findAllRoles', async () => {
+      const { service, prisma } = setup();
+      prisma.role.findMany = vi.fn().mockResolvedValue([
+        roleRow({ rolePermissions: dotted.map((permission) => ({ permission })) }),
+      ]);
+
+      const [role] = await service.findAllRoles();
+
+      const byCode = new Map(dotted.map((permission) => [permission.code, permission.id]));
+      role.permissions!.forEach((code, index) => {
+        expect(role.permissionIds![index]).toBe(byCode.get(code));
+      });
     });
   });
 });

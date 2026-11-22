@@ -182,6 +182,8 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       },
       $transaction: vi.fn().mockImplementation(async (callback: any) => {
         const tx = {
+          // `updateRole` resolves and locks the role row in one statement (#45 review).
+          $queryRaw: vi.fn().mockResolvedValue([{ id: 'custom-id' }]),
           user: {
             create: vi.fn().mockImplementation(({ data }: { data: any }) =>
               Promise.resolve({

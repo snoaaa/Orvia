@@ -210,6 +210,41 @@ describe('Role edition (e2e)', () => {
       expect(await codesOf(created.id)).toEqual(wanted);
     });
 
+    it('accepts upper-case permission ids, which MySQL matches case-insensitively (#45 review)', async () => {
+      const created = check(await createRole('IDS_UPPER'), 201).body;
+      const catalogue = check(await http().get('/permissions').set('Authorization', await bearer(platformAdminId)), 200);
+      const upperIds = catalogue.body
+        .filter((permission: { code: string }) => ['rag:query', 'spaces:read'].includes(permission.code))
+        .map((permission: { id: string }) => permission.id.toUpperCase());
+      expect(upperIds).toHaveLength(2);
+
+      const res = check(await patch(created.id, { permissionIds: upperIds }, platformAdminId), 200);
+
+      expect(res.body.permissions).toEqual(['rag:query', 'spaces:read']);
+      expect(await codesOf(created.id)).toEqual(['rag:query', 'spaces:read']);
+    });
+
+    it('keeps permissionIds aligned with permissions, including for dotted codes (#45 review)', async () => {
+      // `documents.access.manage` and `documents:access.manage` order differently under UTF-16 `.sort()`
+      // than under `localeCompare`, which is how the two arrays drifted apart.
+      const res = check(
+        await http().get('/roles/SCHOOL_ADMIN').set('Authorization', await bearer(platformAdminId)),
+        200,
+      );
+      const { permissions, permissionIds } = res.body as { permissions: string[]; permissionIds: string[] };
+      expect(permissions.length).toBeGreaterThan(10);
+      expect(permissionIds).toHaveLength(permissions.length);
+
+      const catalogue = check(await http().get('/permissions').set('Authorization', await bearer(platformAdminId)), 200);
+      const idByCode = new Map<string, string>(
+        (catalogue.body as Array<{ id: string; code: string }>).map((permission) => [permission.code, permission.id]),
+      );
+      permissions.forEach((code, index) => {
+        expect({ code, id: permissionIds[index] }).toEqual({ code, id: idByCode.get(code) });
+      });
+      expect(permissions).toEqual([...permissions].sort());
+    });
+
     it('clears the permission set with an empty array', async () => {
       const created = check(await createRole('CLEAR'), 201).body;
 
@@ -336,6 +371,30 @@ describe('Role edition (e2e)', () => {
       expect(await codesOf(created.id)).toEqual(['documents:read', 'rag:query']);
     });
 
+    it.each<[string, Record<string, unknown>]>([
+      ['name', { name: null }],
+      ['scope', { scope: null }],
+      ['permissions', { permissions: null }],
+      ['permissionIds', { permissionIds: null }],
+    ])('rejects a null %s instead of crashing or wiping the set (#45 review)', async (label, body) => {
+      const created = check(await createRole(`NULL_${label.toUpperCase()}`), 201).body;
+
+      check(await patch(created.id, body, platformAdminId), 400);
+
+      // The whole point: the role is untouched, not rewritten with null/[].
+      const after = await prisma.role.findUniqueOrThrow({ where: { id: created.id } });
+      expect(after.name).toBe(roleName(`NULL_${label.toUpperCase()}`));
+      expect(after.scope).toBe('school');
+      expect(await codesOf(created.id)).toEqual(['documents:read', 'rag:query']);
+    });
+
+    it('rejects padded duplicates, which trimming turns into real duplicates (#45 review)', async () => {
+      const created = check(await createRole('PADDED_DUP'), 201).body;
+
+      check(await patch(created.id, { permissions: ['documents:read', ' documents:read '] }, platformAdminId), 400);
+      expect(await codesOf(created.id)).toEqual(['documents:read', 'rag:query']);
+    });
+
     it('answers 404 for an unknown role', async () => {
       check(await patch('00000000-0000-4000-8000-000000000000', { permissions: [] }, platformAdminId), 404);
     });
@@ -403,6 +462,34 @@ describe('Role edition (e2e)', () => {
       const res = check(await patch(created.id, { scope: 'group' }, platformAdminId), 200);
 
       expect(res.body.scope).toBe('group');
+    });
+
+    it('cannot re-scope a role to platform while an assignment to it is being created (#45 review)', async () => {
+      const created = check(await createRole('RACE'), 201).body;
+      const holderId = await user('RaceHolder', 'STAFF');
+      // Free the seeded STAFF assignment so the concurrent POST /assignments can insert this role.
+      await prisma.userAssignment.deleteMany({ where: { userId: holderId } });
+
+      const auth = await bearer(platformAdminId);
+      const [patched, assigned] = await Promise.all([
+        http().patch(`/roles/${created.id}`).set('Authorization', auth).send({ scope: 'platform' }),
+        http()
+          .post('/assignments')
+          .set('Authorization', auth)
+          .send({ userId: holderId, schoolId, role: roleName('RACE') }),
+      ]);
+
+      // Both lock the roles row, so exactly one of them can win: either the re-scope sees the new
+      // assignment (400) or the assignment sees the new scope (409).
+      const winners = [patched.status, assigned.status].filter((status) => status < 300);
+      expect(winners).toHaveLength(1);
+
+      const role = await prisma.role.findUniqueOrThrow({ where: { id: created.id } });
+      const activeAssignments = await prisma.userAssignment.count({
+        where: { roleId: created.id, deletedAt: null },
+      });
+      // The invariant the race used to break: a platform-scoped role never carries a school assignment.
+      expect(role.scope === 'platform' && activeAssignments > 0).toBe(false);
     });
 
     it('refuses a school-scoped system:manage holder before revealing anything', async () => {

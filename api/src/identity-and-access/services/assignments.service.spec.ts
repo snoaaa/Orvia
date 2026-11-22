@@ -50,6 +50,16 @@ describe('AssignmentsService', () => {
     prisma.role.findMany.mockResolvedValue(Object.values(ROLES));
     prisma.group.findUnique.mockResolvedValue({ id: 'group-1', name: 'ISI 4', schoolId: 'school-a' });
     prisma.$transaction.mockImplementation((fn) => fn(tx));
+    // The role-row lock (#45) answers with the role looked up by id, so a scope change made by a
+    // concurrent PATCH /roles/:id can be simulated with a single `mockImplementation`.
+    tx.$queryRaw.mockImplementation((strings: TemplateStringsArray, ...params: unknown[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('FROM roles')) {
+        const locked = Object.values(ROLES).find((candidate) => candidate.id === params[0]);
+        return Promise.resolve(locked ? [{ id: locked.id, scope: locked.scope, name: locked.name }] : []);
+      }
+      return Promise.resolve([{ id: 'user-1' }]);
+    });
     tx.userAssignment.findFirst.mockResolvedValue(null);
     tx.userAssignment.create.mockImplementation(({ data }) =>
       Promise.resolve({ id: 'assignment-1', createdAt: new Date(), ...data }),
@@ -169,12 +179,30 @@ describe('AssignmentsService', () => {
       expect(audit.record).not.toHaveBeenCalled();
     });
 
-    it('locks the user row before checking for an existing assignment', async () => {
+    it('locks the user row and the role row before checking for an existing assignment', async () => {
       await service.createAssignment(dto, actor('school'));
-      expect(tx.$queryRaw).toHaveBeenCalled();
+
+      const sqls = tx.$queryRaw.mock.calls.map((call) => (call[0] as string[]).join('?'));
+      expect(sqls[0]).toContain('FROM users');
+      expect(sqls[1]).toContain('FROM roles');
       expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
         tx.userAssignment.findFirst.mock.invocationCallOrder[0],
       );
+      expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
+        tx.userAssignment.findFirst.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('re-reads the role scope under the lock and refuses when a concurrent edit re-scoped it', async () => {
+      // A concurrent PATCH /roles/:id re-scoped STAFF to platform between the lookup and the lock.
+      tx.$queryRaw.mockImplementation((strings: TemplateStringsArray) =>
+        strings.join('?').includes('FROM roles')
+          ? Promise.resolve([{ id: 'r-staff', scope: 'platform', name: 'STAFF' }])
+          : Promise.resolve([{ id: 'user-1' }]),
+      );
+
+      await expect(service.createAssignment(dto, actor('school'))).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.userAssignment.create).not.toHaveBeenCalled();
     });
 
     it('ignores removed assignments (#49): for the 409 check and for the user level', async () => {
