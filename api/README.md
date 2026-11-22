@@ -246,7 +246,8 @@ so one call per filter also gives a counter (e.g. `GET /identity/users?status=IN
 | `GET /schools`, `GET /identity/schools` | `status`, `search` (name) |
 | `GET /documents` | newest first (`created_at DESC, id DESC`, indexed) |
 | `GET /documents/spaces` | alphabetical (`name`, then `id`) |
-| `GET /audit/events`, `GET /identity/permissions` | **not paginated** — `audit` takes `limit` (≤500); `permissions` returns the matrix with holder counts (see below) |
+| `GET /audit/events` | newest first (`seq DESC`); `category`, `action`, `actorId`, `entityType`, `schoolId`, `from`/`to` (ISO 8601, on `createdAt`) |
+| `GET /identity/permissions` | **not paginated** — returns the matrix with holder counts (see below) |
 
 ### Permission overview
 
@@ -728,6 +729,8 @@ Same permissions and target checks as `POST`. Both record `document_access_chang
 **Reading is school-scoped:** `GET /audit/events` returns every event to a platform administrator,
 but a school administrator only the events whose `school_id` is one of their own schools. Events
 without a school (platform actions, unknown-user login failures) stay invisible to them.
+
+**Listing (#96):** the answer is paginated (`page`, `limit` default 10, max 100) as `{ data, total, page, limit, totalPages }`. Filters: `category`, `action`, `actorId`, `entityType`, `schoolId`, `from`, `to` (`from` after `to` is a 400). `schoolId` is validated against the caller's scope: a school administrator passing another school gets 403. Each event carries `actorName`, `actorEmail` and `schoolName`, resolved with two batched lookups (the table has no foreign keys); they are `null` for anonymous actors or users/schools that no longer exist (the raw `actorId`/`schoolId` stay). Before/after values are not separate columns: they live in `details` (e.g. `changes: { field: { from, to } }` or `previousRole`).
 `GET /audit/verify` and `npm run audit:verify` still check the **whole** chain regardless of the caller.
 
 Every event also stores `ip`, `device_id` (from the `X-Device-Id` header) and the user agent
