@@ -1,8 +1,9 @@
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, Paperclip } from "lucide-react";
 import { Children, type ReactNode, isValidElement } from "react";
 import {
   ActivityIndicator,
   Pressable,
+  Text,
   TextInput,
   View,
 } from "react-native";
@@ -66,7 +67,7 @@ export function PromptInputAction({
 }
 
 /**
- * Container wrapping the textarea and the footer row with submit.
+ * Container wrapping the textarea and the footer row with submit + tools.
  * On web, PromptInputBody renders the textarea children PLUS a footer row.
  */
 export function PromptInputBody({ children }: { children: ReactNode }) {
@@ -86,8 +87,18 @@ export function PromptInputBody({ children }: { children: ReactNode }) {
     <View className="flex flex-col">
       {/* Textarea area */}
       {textarea}
-      {/* Footer row */}
-      <View className="flex flex-row items-center justify-end px-3 pb-3">
+      {/* Footer row: tools on left, submit on right */}
+      <View className="flex flex-row items-center justify-between px-3 pb-3">
+        <View className="flex flex-row items-center gap-1">
+          {/* Attachments button */}
+          <Pressable className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/40 transition-colors hover:bg-accent">
+            <Paperclip size={14} className="text-muted-foreground" />
+          </Pressable>
+          {/* Model selector mock */}
+          <Pressable className="flex h-7 flex-row items-center gap-1.5 rounded-lg px-2 transition-colors hover:bg-accent">
+            <Text className="text-[12px] text-muted-foreground">Opus</Text>
+          </Pressable>
+        </View>
         {submit}
       </View>
     </View>
@@ -95,10 +106,11 @@ export function PromptInputBody({ children }: { children: ReactNode }) {
 }
 
 /**
- * Auto-growing text input matching Orvia's web composer textarea.
+ * Auto-growing text input matching Vercel chatbot's textarea.
+ * resize: none removes the browser resize handle.
  */
 export function PromptInputTextarea({
-  placeholder = "Posez une question sur vos documents…",
+  placeholder = "Chat with Agent...",
   maxLength = 1000,
 }: {
   placeholder?: string;

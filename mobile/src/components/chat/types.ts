@@ -1,5 +1,5 @@
-export type {
-  ChatMessage,
-  MessageCitation,
-  MessageGenerationStatus,
-} from "@/models/chat";
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
