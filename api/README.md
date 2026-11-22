@@ -704,7 +704,7 @@ field; a request that changes nothing returns 200 without a write or an audit ev
 
 ### Unique names
 
-A unique index on `spaces (school_id, name)` (migration `9_spaces_unique_name`) backs the 409, so two
+A unique index on `spaces (school_id, name)` (migration `13_spaces_unique_name`) backs the 409, so two
 simultaneous requests cannot both succeed; MySQL compares names ignoring case. **`npm run db:migrate`
 fails if a school already has two spaces with the same name**: rename them first, for example after
 listing them with:
