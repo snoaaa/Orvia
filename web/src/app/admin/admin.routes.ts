@@ -145,8 +145,8 @@ export const adminRoutes: Routes = [
           description: 'Inspect tamper-evident security and administrative events.'
         },
         loadComponent: () =>
-          import('./identity/components/portal-section/portal-section.component').then(
-            (c) => c.PortalSectionComponent
+          import('./identity/audit/audit-list/audit-list.component').then(
+            (c) => c.AuditListComponent
           )
       },
       {
