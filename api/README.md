@@ -516,14 +516,22 @@ Removes a custom role nobody holds. `{id}` is the role UUID or its **name** (cas
   recreated by the seed, so they are never removed.
 - **A role that is still assigned is refused** (400) with the exact count:
   `Cannot delete role 'TEACHING_ASSISTANT': still assigned to 3 user(s). Please reassign them before deleting.`
-  Only **active** assignments count, so a soft-deleted assignment (`DELETE /assignments/{id}`) no longer
-  blocks the delete.
+  The count is of **distinct users** (one person holding the role in two schools is one user), and only
+  **active** assignments count, so a soft-deleted assignment (`DELETE /assignments/{id}`) no longer blocks
+  the delete.
 - **Platform admins only**: the route needs `system:manage`, and the service also refuses a school-scoped
   role holding it (403 `Only platform administrators may delete roles`), checked *before* the role lookup so
   a non-platform admin cannot probe which role ids exist.
-- Deleting also drops the role's `role_permissions` rows and any `document_access` rule that granted it
-  (both `ON DELETE CASCADE`). The number of dropped access rules is recorded in the audit event, so it is
-  visible when a document's audience lost a role.
+- **One transaction, one lock.** The lookup, the checks, the counts, the delete and the audit row all run in
+  a single `$transaction` that starts by locking the role row (`SELECT ... FOR UPDATE`), and the delete goes
+  through `deleteMany` so a role removed in the meantime answers **404** instead of a Prisma `P2025` 500.
+  Two concurrent deletes therefore answer `200` + `404` with **one** audit row, an assignment being created
+  at the same time cannot slip between the count and the delete (both lock the same row; the assignment gets
+  a clean 400/409, never a foreign-key 500), and a failed audit append rolls the deletion back.
+- Deleting also drops the role's `role_permissions` rows, any `document_access` rule that granted it and any
+  remaining `user_assignments` rows (all `ON DELETE CASCADE`). The audit event records both counts:
+  `documentAccessRulesRemoved` (so a document's audience change is visible) and `assignmentRecordsRemoved`
+  (soft-deleted tombstones kept for the mobile delta sync, #49, which the cascade wipes otherwise).
 - Unknown role → 404. Answer 200 `{ "success": true, "message": "Role 'X' was successfully deleted" }`, and
   the deletion is audited as `identity_access/role_deleted`.
 
@@ -806,7 +814,7 @@ Same permissions and target checks as `POST`. Both record `document_access_chang
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
 | `identity_access` | `role_updated` | A custom role is edited (`PATCH /roles/{id}`, #45); not recorded when nothing changes | the platform admin | `role` | `role`, `previousName`, `previousScope`, `scope`, `permissions`, `addedPermissions`, `removedPermissions` |
-| `identity_access` | `role_deleted` | An unused custom role is deleted (`DELETE /roles/{id}`, #46) | the platform admin | `role` | `role`, `scope`, `documentAccessRulesRemoved` |
+| `identity_access` | `role_deleted` | An unused custom role is deleted (`DELETE /roles/{id}`, #46) | the platform admin | `role` | `role`, `scope`, `documentAccessRulesRemoved`, `assignmentRecordsRemoved` |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `documents` | `document_published` | A document is published to new targets (`POST /documents/{id}/access`); not recorded when every target was already there | the admin or content manager | `document` | `spaceId`, `schoolId`, `rules` (the `type` and `targetId` of each target added) |

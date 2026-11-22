@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
@@ -80,49 +80,62 @@ export class AssignmentsService {
 
     const group = dto.groupId ? await this.findGroupOfSchool(dto.groupId, dto.schoolId, role.scope) : null;
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
-      // Lock the role as well: PATCH /roles/:id (#45) locks it before deciding whether its scope may
-      // change, so the two requests serialize. Without the lock, a role could be re-scoped to `platform`
-      // between this check and the insert, silently giving a school-assigned user access to every school.
-      const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
-        SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
-      `;
-      const freshRole = lockedRole[0];
-      if (!freshRole) {
-        throw new BadRequestException(`Unknown role '${dto.role}'`);
-      }
-      if (freshRole.scope !== role.scope) {
-        // The role was re-scoped by a concurrent PATCH /roles/:id after this request had already judged
-        // it as a `role.scope` role. Finishing the insert would attach a user to a role whose meaning
-        // changed (a school role becoming `platform` grants every school), so refuse and let the caller
-        // retry against the new state.
-        throw new ConflictException(
-          `Role '${freshRole.name}' changed scope while the assignment was being created; retry the request`,
-        );
-      }
-      // A removed assignment (#49) does not block a new one in the same school.
-      const existing = await tx.userAssignment.findFirst({
-        where: { userId: target.id, schoolId: school.id, ...ACTIVE_ASSIGNMENT },
-        select: { role: { select: { name: true } } },
-      });
-      if (existing) {
-        throw new ConflictException(
-          `User already has the ${existing.role.name} role in this school; use PATCH /identity/users/:id/role to change it`,
-        );
-      }
-      const assignment = await tx.userAssignment.create({
-        data: { userId: target.id, schoolId: school.id, groupId: group?.id ?? null, roleId: role.id },
-      });
-      if (group) {
-        await tx.groupMember.upsert({
-          where: { groupId_userId: { groupId: group.id, userId: target.id } },
-          create: { groupId: group.id, userId: target.id },
-          update: {},
+    const created = await (async () => {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
+          // Lock the role as well: PATCH /roles/:id (#45) and DELETE /roles/:id (#46) lock it before
+          // deciding whether their change is allowed, so the three requests serialize. Without the lock a
+          // role could be re-scoped to `platform` (widening every school) or deleted between this check
+          // and the insert, which used to surface as a foreign-key 500.
+          const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
+            SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
+          `;
+          const freshRole = lockedRole[0];
+          if (!freshRole) {
+            // Deleted while this request was being prepared: a 400, never an FK crash.
+            throw new BadRequestException(`Unknown role '${dto.role}'`);
+          }
+          if (freshRole.scope !== role.scope) {
+            // The role was re-scoped by a concurrent PATCH /roles/:id after this request had already judged
+            // it as a `role.scope` role. Finishing the insert would attach a user to a role whose meaning
+            // changed (a school role becoming `platform` grants every school), so refuse and let the caller
+            // retry against the new state.
+            throw new ConflictException(
+              `Role '${freshRole.name}' changed scope while the assignment was being created; retry the request`,
+            );
+          }
+          // A removed assignment (#49) does not block a new one in the same school.
+          const existing = await tx.userAssignment.findFirst({
+            where: { userId: target.id, schoolId: school.id, ...ACTIVE_ASSIGNMENT },
+            select: { role: { select: { name: true } } },
+          });
+          if (existing) {
+            throw new ConflictException(
+              `User already has the ${existing.role.name} role in this school; use PATCH /identity/users/:id/role to change it`,
+            );
+          }
+          const assignment = await tx.userAssignment.create({
+            data: { userId: target.id, schoolId: school.id, groupId: group?.id ?? null, roleId: role.id },
+          });
+          if (group) {
+            await tx.groupMember.upsert({
+              where: { groupId_userId: { groupId: group.id, userId: target.id } },
+              create: { groupId: group.id, userId: target.id },
+              update: {},
+            });
+          }
+          return assignment;
         });
+      } catch (error) {
+        // Last line of defence: the role row vanished after our lock (e.g. a delete that started earlier
+        // committed between the lock and the insert). Answer the same 400 as an unknown role.
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+          throw new BadRequestException(`Unknown role '${dto.role}'`);
+        }
+        throw error;
       }
-      return assignment;
-    });
+    })();
 
     await this.audit.record(
       AuditEvents.roleAssigned(

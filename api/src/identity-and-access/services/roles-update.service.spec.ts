@@ -80,9 +80,11 @@ describe('IdentityAndAccessService - update role (#45)', () => {
     const prisma = {
       role: {
         findFirst: vi.fn(),
+        findMany: vi.fn(),
         findUnique: vi.fn().mockResolvedValue(null),
         update,
         delete: remove,
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       rolePermission: { deleteMany, createMany },
       permission: {

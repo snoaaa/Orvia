@@ -1606,10 +1606,17 @@ export class IdentityAndAccessService {
    * Platform admins only: the guard checks system:manage and this also refuses a school-scoped role
    * holding it, so a school admin cannot remove a role of the platform. The six base roles are refused
    * (400): they are recreated by the seed and cannot be deleted. A role that still has active
-   * assignments is refused too (400), naming how many users hold it, so nobody loses their access by
-   * accident; reassign them first. Deleting a role also drops its `role_permissions` rows and any
-   * `document_access` rule that granted it (both cascade), which is why an unused role is the only
-   * kind worth deleting; the number of dropped rules is recorded in the audit event.
+   * assignments is refused too (400), naming how many **users** hold it, so nobody loses their access by
+   * accident; reassign them first. Deleting a role also drops its `role_permissions` rows, any
+   * `document_access` rule that granted it and any remaining `user_assignments` rows (all cascade), which
+   * is why an unused role is the only kind worth deleting; the counts of dropped rules and assignment
+   * records are recorded in the audit event.
+   *
+   * The lookup, the checks, the delete and the audit row all happen in **one transaction under a lock on
+   * the role row**: two concurrent deletes cannot both answer 200 with duplicate audit rows (the loser
+   * sees the row gone and answers 404), an assignment being created at the same time cannot slip in
+   * between the count and the delete (POST /assignments locks the same row), and a failed audit append
+   * rolls the deletion back instead of leaving it unaudited.
    */
   async deleteRole(
     id: string,
@@ -1622,48 +1629,70 @@ export class IdentityAndAccessService {
       throw new ForbiddenException('Only platform administrators may delete roles');
     }
 
-    const role = await this.prisma.role.findFirst({
-      where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
-    });
-    if (!role) {
-      throw new NotFoundException(`Role '${id}' not found`);
-    }
-    if (isBaseRoleName(role.name)) {
-      throw new BadRequestException('System base roles cannot be deleted');
-    }
+    const deleted = await this.prisma.$transaction(async (tx) => {
+      // Resolve and lock in one statement: a concurrent delete (or assignment) waits here.
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM roles WHERE id = ${id} OR name = ${id.trim().toUpperCase()} FOR UPDATE
+      `;
+      if (locked.length === 0) {
+        throw new NotFoundException(`Role '${id}' not found`);
+      }
 
-    const assignedCount = await this.prisma.userAssignment.count({
-      where: { roleId: role.id, ...ACTIVE_ASSIGNMENT },
-    });
-    if (assignedCount > 0) {
-      throw new BadRequestException(
-        `Cannot delete role '${role.name}': still assigned to ${assignedCount} user(s). Please reassign them before deleting.`,
+      const role = await tx.role.findFirst({ where: { id: locked[0].id } });
+      if (!role) {
+        throw new NotFoundException(`Role '${id}' not found`);
+      }
+      if (isBaseRoleName(role.name)) {
+        throw new BadRequestException('System base roles cannot be deleted');
+      }
+
+      // Under the lock, so an insert from POST /assignments cannot land between this count and the
+      // delete. Distinct users: the same person holding the role in two schools is one user.
+      const holders = await tx.userAssignment.findMany({
+        where: { roleId: role.id, ...ACTIVE_ASSIGNMENT },
+        select: { userId: true },
+        distinct: ['userId'],
+      });
+      if (holders.length > 0) {
+        throw new BadRequestException(
+          `Cannot delete role '${role.name}': still assigned to ${holders.length} user(s). Please reassign them before deleting.`,
+        );
+      }
+
+      // Counted before the delete, purely to report what the ON DELETE CASCADE is about to remove.
+      const documentAccessRules = await tx.documentAccess.count({ where: { roleId: role.id } });
+      // Soft-deleted assignments (#49) are kept for the mobile delta sync; deleting the role cascades
+      // them away too, so the trail says how many tombstones went with it.
+      const assignmentRecords = await tx.userAssignment.count({ where: { roleId: role.id } });
+
+      const { count } = await tx.role.deleteMany({ where: { id: role.id } });
+      if (count === 0) {
+        // A role deleted by a request that won the lock between our lookup and this statement.
+        throw new NotFoundException(`Role '${id}' not found`);
+      }
+
+      // Same transaction as the delete: if the audit row cannot be appended, everything rolls back.
+      await this.audit.record(
+        AuditEvents.roleDeleted(
+          {
+            roleId: role.id,
+            role: role.name,
+            scope: role.scope,
+            documentAccessRulesRemoved: documentAccessRules,
+            assignmentRecordsRemoved: assignmentRecords,
+            deletedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+        tx,
       );
-    }
 
-    // Counted before the delete, purely to report what the ON DELETE CASCADE is about to remove.
-    const documentAccessRules = await this.prisma.documentAccess.count({ where: { roleId: role.id } });
-
-    await this.prisma.role.delete({
-      where: { id: role.id },
+      return { name: role.name };
     });
-
-    await this.audit.record(
-      AuditEvents.roleDeleted(
-        {
-          roleId: role.id,
-          role: role.name,
-          scope: role.scope,
-          documentAccessRulesRemoved: documentAccessRules,
-          deletedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
-        },
-        auditContext,
-      ),
-    );
 
     return {
       success: true,
-      message: `Role '${role.name}' was successfully deleted`,
+      message: `Role '${deleted.name}' was successfully deleted`,
     };
   }
 

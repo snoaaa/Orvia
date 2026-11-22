@@ -187,7 +187,6 @@ describe('Role deletion (e2e)', () => {
       });
 
       const res = check(await remove(created.id, platformAdminId), 400);
-
       expect(res.body.message).toBe(
         `Cannot delete role '${roleName('ASSIGNED')}': still assigned to 2 user(s). Please reassign them before deleting.`,
       );
@@ -215,6 +214,69 @@ describe('Role deletion (e2e)', () => {
     it('answers 404 for an unknown role', async () => {
       check(await remove('00000000-0000-4000-8000-000000000000', platformAdminId), 404);
       check(await remove('NOT_A_ROLE', platformAdminId), 404);
+    });
+
+    it('counts distinct users, so one person in two schools is one user (#46 review)', async () => {
+      const created = check(await createRole('TWO_SCHOOLS'), 201).body;
+      const other = await prisma.school.create({ data: { name: `Test E2E RoleDelete School 2 ${stamp}` } });
+      const holder = await user('TwoSchools', 'STAFF');
+      await prisma.userAssignment.deleteMany({ where: { userId: holder } });
+      await prisma.userAssignment.createMany({
+        data: [
+          { userId: holder, schoolId, roleId: created.id },
+          { userId: holder, schoolId: other.id, roleId: created.id },
+        ],
+      });
+
+      const res = check(await remove(created.id, platformAdminId), 400);
+
+      // Two assignment rows, one user.
+      expect(res.body.message).toBe(
+        `Cannot delete role '${roleName('TWO_SCHOOLS')}': still assigned to 1 user(s). Please reassign them before deleting.`,
+      );
+      await prisma.school.deleteMany({ where: { id: other.id } });
+    });
+
+    it('answers one 200 and one 404 when two deletes run at the same time, with a single audit row (#46 review)', async () => {
+      const created = check(await createRole('CONCURRENT'), 201).body;
+      const auth = await bearer(platformAdminId);
+
+      const [first, second] = await Promise.all([
+        http().delete(`/roles/${created.id}`).set('Authorization', auth),
+        http().delete(`/roles/${created.id}`).set('Authorization', auth),
+      ]);
+
+      expect([first.status, second.status].sort((a, b) => a - b)).toEqual([200, 404]);
+      expect(await prisma.auditEvent.count({ where: { action: 'role_deleted', entityId: created.id } })).toBe(1);
+      expect(await roleExists(created.id)).toBe(false);
+    });
+
+    it('cannot be raced by an assignment being created against the role (#46 review)', async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const created = check(await createRole(`RACE_${attempt}`), 201).body;
+        const holder = await user(`RaceDelete${attempt}`, 'STAFF');
+        await prisma.userAssignment.deleteMany({ where: { userId: holder } });
+        const auth = await bearer(platformAdminId);
+
+        const [deleted, assigned] = await Promise.all([
+          http().delete(`/roles/${created.id}`).set('Authorization', auth),
+          http()
+            .post('/assignments')
+            .set('Authorization', auth)
+            .send({ userId: holder, schoolId, role: roleName(`RACE_${attempt}`) }),
+        ]);
+
+        // Neither request may 500: the loser gets 400/404/409 and the winner is clean.
+        expect([deleted.status, assigned.status].filter((status) => status >= 500)).toEqual([]);
+        expect([deleted.status, assigned.status].filter((status) => status < 300)).toHaveLength(1);
+
+        const roleGone = (await roleExists(created.id)) === false;
+        const activeAssignments = await prisma.userAssignment.count({
+          where: { roleId: created.id, deletedAt: null },
+        });
+        // Either the role went (and no assignment survived it) or the assignment won and the role stayed.
+        expect(roleGone ? activeAssignments : 0).toBe(0);
+      }
     });
   });
 
