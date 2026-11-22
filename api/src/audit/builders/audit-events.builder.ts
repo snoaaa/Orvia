@@ -179,6 +179,42 @@ export const AuditEvents = {
   },
 
   /**
+   * A custom role was edited through `PATCH /roles/:id` (#45): its name, scope and/or permission set.
+   *
+   * `addedPermissions` / `removedPermissions` carry the difference against the previous set, so a
+   * reader can tell a rename from a capability change without diffing two snapshots.
+   */
+  roleUpdated(
+    p: {
+      roleId: string;
+      role: string;
+      previousName: string;
+      scope: string;
+      permissions: string[];
+      addedPermissions: string[];
+      removedPermissions: string[];
+      updatedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ROLE_UPDATED,
+      actor: p.updatedBy ?? anonymous,
+      entity: { type: 'role', id: p.roleId },
+      details: {
+        role: p.role,
+        previousName: p.previousName,
+        scope: p.scope,
+        permissions: [...p.permissions].sort(),
+        addedPermissions: [...p.addedPermissions].sort(),
+        removedPermissions: [...p.removedPermissions].sort(),
+      },
+      context,
+    };
+  },
+
+  /**
    * Document-management or other fine-grained permission granted to a staff member in a school (§4.5, #88).
    */
   permissionGranted(

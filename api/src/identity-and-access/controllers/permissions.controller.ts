@@ -15,10 +15,11 @@ export class PermissionsController {
   @Get()
   @RequirePermission('system:manage')
   @ApiOperation({
-    summary: 'List every permission code with its description and category',
+    summary: 'List every permission with its id, code, description and category',
     description:
       'The permission codes roles are built from, as seeded, sorted by category then code. The category is the ' +
-      "part of the code before the colon (e.g. 'users' for 'users:invite'). Platform admins only.",
+      "part of the code before the colon (e.g. 'users' for 'users:invite'). `id` is the value PATCH /roles/{id} " +
+      'takes in `permissionIds`, so a role editor can send ids instead of codes. Platform admins only.',
   })
   @ApiResponse({ status: 200, description: 'All permissions', type: [PermissionEntity] })
   @ApiResponse({ status: 401, description: 'Missing, invalid or expired token' })

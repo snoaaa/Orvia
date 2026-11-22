@@ -425,7 +425,28 @@ not a member → 404 `User <id> is not a member of this group`. Deleted group �
 ## Roles
 
 `src/identity-and-access/controllers/roles.controller.ts`, under the **Roles** tag in Swagger (Section 4.5).
-Platform admins only: the route needs `system:manage`, and the service also refuses a school-scoped role holding it.
+Reading needs `users:assign_role` (platform and school admins); writing needs `system:manage`, and the
+service also refuses a school-scoped role holding it. The six base roles are **read-only** — the seed
+recreates them — so only a custom role can be edited.
+
+Two rules hold on every write (`POST` and `PATCH`):
+
+- **`system:manage` implies the platform scope.** A role that grants `system:manage` (or the `*` wildcard)
+  may only exist with `scope: 'platform'`; a `school` or `group` role holding it is 400
+  (`A role that grants system:manage must have the platform scope`), so no school role can administer the
+  platform.
+- **The scope of an assigned role is frozen.** `PATCH` refuses to change `scope` while
+  `assignedUsersCount > 0` (400, "still assigned to N user(s)"): `schoolsWithPermission()` treats a
+  platform-scoped assignment as **every** school, so re-scoping a role that people already hold would
+  silently widen (or narrow) their access. Reassign the holders first.
+
+### Read roles and their permissions: `GET /roles`, `GET /roles/{id}` (`users:assign_role`)
+
+`GET /roles` returns every role, sorted by name: `id`, `name`, `scope`, the sorted permission `permissions`
+(codes), the matching `permissionIds`, `assignedUsersCount` (active assignments) and `isBase`.
+`GET /roles/{id}` answers the same shape for one role, and takes either its UUID or its **name**
+(case-insensitive); an unknown role is 404. Both are what a role editor loads before a `PATCH`, and what
+answers "which permissions does this role grant?" — base roles included, e.g. `GET /roles/STUDENT`.
 
 ### Create a role: `POST /roles` (#44, `system:manage`)
 
@@ -435,12 +456,40 @@ Platform admins only: the route needs `system:manage`, and the service also refu
 
 - `name`: 2–50 letters, digits, `_` or `-`, stored in upper case. Unique ignoring case (409, enforced by the
   unique index, so two simultaneous requests cannot both succeed). The six base role names are reserved (400).
-- `scope`: the documentary scope, `platform`, `school` or `group`.
-- `permissions`: at least one permission **code**, as listed by `GET /permissions`, no repeats. An unknown code
-  is 400 and nothing is created. The role and its permissions are written in one transaction.
+- `scope`: the documentary scope, `platform`, `school` or `group` (see the two rules above).
+- `permissions`: at least one permission **code**, as listed by `GET /permissions`, no repeats, none blank
+  (400). An unknown code is 400 and nothing is created. The role and its permissions are written in one
+  transaction.
 
-Answer 201 with the role (`id`, `name`, `scope`, sorted `permissions`, `assignedUsersCount`, `isBase`). Other
-roles get 403. The older `POST /identity/roles`, used by the web role editor, runs the same code.
+Answer 201 with the role (`id`, `name`, `scope`, sorted `permissions`, `permissionIds`, `assignedUsersCount`,
+`isBase`). Other roles get 403. The older `POST /identity/roles`, used by the web role editor, runs the same code.
+
+### Edit a role and its permissions: `PATCH /roles/{id}` (#45, `system:manage`)
+
+```json
+{ "name": "TEACHING_ASSISTANT_2", "scope": "group", "permissionIds": ["<uuid>", "<uuid>"] }
+```
+
+Every field is optional — `name`, `scope`, and **one** of `permissions` (codes) or `permissionIds` (ids, as
+returned by `GET /permissions` and by `GET /roles`) — but at least one must be sent (400 otherwise), and the
+whole payload is validated before anything is written:
+
+- **Base roles cannot be edited** (400 `System base roles cannot be edited`). Renaming a custom role *to* a
+  base role name is 400 too, and a name already taken is 409.
+- The permission set is **replaced**, not merged: an empty array makes the role grant nothing, an unknown,
+  blank or over-long (100+ characters) code or id is 400, and sending both spellings is 400.
+- The two rules above apply: `system:manage` needs the platform scope, and the scope of an assigned role
+  cannot change.
+- A payload that changes nothing writes nothing and audits nothing.
+- The role row, its permission set and the **`updated_at` of its active assignments** are written in one
+  transaction, so the mobile delta sync (Section 4.7) picks the change up for every holder without touching
+  each user.
+- Permissions are read from the database on every request, so a user holding the role is allowed or refused
+  by the new set **on their very next request**; the change is audited as `identity_access/role_updated`
+  with the permission diff (`addedPermissions`, `removedPermissions`).
+
+Answer 200 with the updated role (same shape as `GET /roles/{id}`). The older
+`PATCH /identity/roles/{id}`, used by the web role editor, runs the same code.
 
 ## Assignments
 
@@ -718,6 +767,7 @@ Same permissions and target checks as `POST`. Both record `document_access_chang
 | `authentication` | `session_revoked` | A session is revoked (admin action, suspension, token reuse) | the admin, or anonymous if automatic | `session` | `ownerUserId`, `reason` |
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
+| `identity_access` | `role_updated` | A custom role is edited (`PATCH /roles/{id}`, #45); not recorded when nothing changes | the platform admin | `role` | `role`, `previousName`, `scope`, `permissions`, `addedPermissions`, `removedPermissions` |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `documents` | `document_published` | A document is published to new targets (`POST /documents/{id}/access`); not recorded when every target was already there | the admin or content manager | `document` | `spaceId`, `schoolId`, `rules` (the `type` and `targetId` of each target added) |

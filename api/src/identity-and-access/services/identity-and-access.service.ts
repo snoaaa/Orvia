@@ -9,7 +9,7 @@ import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/util
 import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
+import { isAdminRole, isBaseRoleName, PLATFORM_ADMIN_PERMISSION } from '../../auth/utils/admin-role.util.js';
 import { assertCanGrantRole } from '../../auth/utils/role-grant.util.js';
 import { highestRoleLevel, roleScopeLevel } from '../../auth/utils/role-level.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
@@ -1255,6 +1255,10 @@ export class IdentityAndAccessService {
           name: r.name,
           scope: r.scope,
           permissions: r.rolePermissions.map((rp) => rp.permission.code).sort(),
+          permissionIds: r.rolePermissions
+            .slice()
+            .sort((a, b) => a.permission.code.localeCompare(b.permission.code))
+            .map((rp) => rp.permission.id),
           assignedUsersCount: r._count.assignments,
           isBase: isBaseRoleName(r.name),
           createdAt: r.createdAt,
@@ -1283,11 +1287,31 @@ export class IdentityAndAccessService {
       name: role.name,
       scope: role.scope,
       permissions: role.rolePermissions.map((rp) => rp.permission.code).sort(),
+      permissionIds: role.rolePermissions
+        .slice()
+        .sort((a, b) => a.permission.code.localeCompare(b.permission.code))
+        .map((rp) => rp.permission.id),
       assignedUsersCount: role._count.assignments,
       isBase: isBaseRoleName(role.name),
       createdAt: role.createdAt,
       updatedAt: role.updatedAt,
     });
+  }
+
+  /**
+   * `system:manage` (or the `*` wildcard) is the platform-administration permission: a role holding
+   * it must be platform-scoped, otherwise a school-scoped role could administer the whole platform.
+   * Enforced on create and on edit.
+   */
+  private assertScopeAllowsPermissions(scope: string, codes: readonly string[]): void {
+    const grantsPlatformAdministration = codes.some(
+      (code) => code === PLATFORM_ADMIN_PERMISSION || code === '*',
+    );
+    if (grantsPlatformAdministration && scope !== 'platform') {
+      throw new BadRequestException(
+        `A role that grants ${PLATFORM_ADMIN_PERMISSION} must have the platform scope`,
+      );
+    }
   }
 
   /**
@@ -1309,6 +1333,7 @@ export class IdentityAndAccessService {
     }
 
     const codes = [...new Set(dto.permissions)];
+    this.assertScopeAllowsPermissions(dto.scope, codes);
     const permissions = await this.prisma.permission.findMany({ where: { code: { in: codes } }, select: { id: true, code: true } });
     const unknown = codes.filter((code) => !permissions.some((p) => p.code === code));
     if (unknown.length > 0) {
@@ -1333,20 +1358,96 @@ export class IdentityAndAccessService {
     }
   }
 
-  async updateRole(id: string, dto: UpdateRoleDto): Promise<RoleEntity> {
+  /**
+   * Resolves a replacement permission set given either codes or ids (never both), rejecting unknown
+   * entries with a 400 that names them. Codes are trimmed, deduplicated and blank-free.
+   */
+  private async resolvePermissions(input: { codes?: string[]; ids?: string[] }): Promise<{ id: string; code: string }[]> {
+    const byId = input.ids !== undefined;
+    const values = [
+      ...new Set((byId ? input.ids! : input.codes ?? []).map((value) => value.trim()).filter(Boolean)),
+    ];
+    if (values.length === 0) return [];
+
+    const found = await this.prisma.permission.findMany({
+      where: byId ? { id: { in: values } } : { code: { in: values } },
+      select: { id: true, code: true },
+    });
+    const known = new Set(found.map((permission) => (byId ? permission.id : permission.code)));
+    const unknown = values.filter((value) => !known.has(value));
+    if (unknown.length > 0) {
+      throw new BadRequestException(
+        byId ? `Unknown permission id(s): ${unknown.join(', ')}` : `Unknown permission code(s): ${unknown.join(', ')}`,
+      );
+    }
+    return found;
+  }
+
+  /**
+   * PATCH /roles/:id (#45), also behind the older PATCH /identity/roles/:id.
+   *
+   * Edits a custom role's name, scope and/or permission set. Base roles are immutable (400): they are
+   * the capability matrix the seed recreates, so a custom role is the only editable kind. The
+   * permission set is replaced as a whole, given either as codes (`GET /roles` returns them) or as
+   * ids (`GET /permissions` returns them), never both; an unknown entry is 400 and nothing is
+   * written. A payload that changes nothing writes nothing and audits nothing.
+   *
+   * The role row, its permissions and the `updated_at` of its active assignments move in one
+   * transaction: the mobile sync (Section 4.7) reads `user_assignments.updated_at`, so a role change
+   * reaches the devices of everyone holding it without touching each user. The permissions of a
+   * request are read live from the database (`AuthUserService`), so a holder is allowed or refused by
+   * the new set on their very next request; the change is recorded as
+   * `identity_access/role_updated` with the permission diff.
+   */
+  async updateRole(
+    id: string,
+    dto: UpdateRoleDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<RoleEntity> {
+    // Authorization first: a school-scoped `system:manage` holder must learn nothing about which role
+    // ids or names exist, so they get 403 rather than 404/400 for an unknown or base role.
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may edit roles');
+    }
+
     const role = await this.prisma.role.findFirst({
       where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
+      include: {
+        rolePermissions: { include: { permission: { select: { id: true, code: true } } } },
+        _count: { select: { assignments: { where: ACTIVE_ASSIGNMENT } } },
+      },
     });
     if (!role) {
       throw new NotFoundException(`Role '${id}' not found`);
     }
     if (isBaseRoleName(role.name)) {
-      throw new BadRequestException('System base roles cannot be modified');
+      throw new BadRequestException('System base roles cannot be edited');
+    }
+
+    const renames = dto.name !== undefined;
+    const rescopes = dto.scope !== undefined;
+    const replacesPermissions = dto.permissions !== undefined || dto.permissionIds !== undefined;
+    if (!renames && !rescopes && !replacesPermissions) {
+      throw new BadRequestException('Nothing to update: send name, scope, permissions or permissionIds');
+    }
+    if (dto.permissions !== undefined && dto.permissionIds !== undefined) {
+      throw new BadRequestException('Send either permissions (codes) or permissionIds (ids), not both');
+    }
+
+    const nextScope = rescopes ? dto.scope! : role.scope;
+    if (rescopes && nextScope !== role.scope && role._count.assignments > 0) {
+      // `schoolsWithPermission()` treats a platform-scoped assignment as "all schools", so moving an
+      // assigned role into (or out of) the platform scope would silently widen (or narrow) the access
+      // of everyone holding it, in schools they were never granted.
+      throw new BadRequestException(
+        `Cannot change the scope of role '${role.name}': still assigned to ${role._count.assignments} user(s). Please reassign them first.`,
+      );
     }
 
     let nextName = role.name;
-    if (dto.name && dto.name.trim()) {
-      nextName = dto.name.trim().toUpperCase();
+    if (renames) {
+      nextName = dto.name!.trim().toUpperCase();
       if (isBaseRoleName(nextName)) {
         throw new BadRequestException(`Role name '${nextName}' is reserved for system base roles`);
       }
@@ -1358,38 +1459,72 @@ export class IdentityAndAccessService {
       }
     }
 
-    await this.prisma.role.update({
-      where: { id: role.id },
-      data: {
-        name: nextName,
-        ...(dto.scope ? { scope: dto.scope } : {}),
-      },
-    });
+    const permissions = replacesPermissions
+      ? await this.resolvePermissions({ codes: dto.permissions, ids: dto.permissionIds })
+      : null;
+    const nextCodes = permissions ? permissions.map((permission) => permission.code).sort() : null;
+    const previousCodes = role.rolePermissions.map((rp) => rp.permission.code).sort();
+    const effectiveCodes = nextCodes ?? previousCodes;
+    if (replacesPermissions || rescopes) {
+      this.assertScopeAllowsPermissions(nextScope, effectiveCodes);
+    }
+    const permissionsChanged =
+      nextCodes !== null &&
+      (nextCodes.length !== previousCodes.length || nextCodes.some((code, index) => code !== previousCodes[index]));
+    const nothingChanges = nextName === role.name && nextScope === role.scope && !permissionsChanged;
+    if (nothingChanges) {
+      return this.findRoleById(role.id);
+    }
 
-    if (dto.permissions) {
-      await this.prisma.rolePermission.deleteMany({
-        where: { roleId: role.id },
+    const touchedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.role.update({
+        where: { id: role.id },
+        data: { name: nextName, ...(rescopes ? { scope: nextScope } : {}) },
       });
-      if (dto.permissions.length > 0) {
-        const perms = await this.prisma.permission.findMany({
-          where: { code: { in: dto.permissions } },
-        });
-        if (perms.length > 0) {
-          await this.prisma.rolePermission.createMany({
-            data: perms.map((p) => ({
-              roleId: role.id,
-              permissionId: p.id,
-            })),
-            skipDuplicates: true,
+
+      if (permissions) {
+        await tx.rolePermission.deleteMany({ where: { roleId: role.id } });
+        if (permissions.length > 0) {
+          await tx.rolePermission.createMany({
+            data: permissions.map((permission) => ({ roleId: role.id, permissionId: permission.id })),
           });
         }
       }
-    }
+
+      // Section 4.7: the mobile delta sync reads `user_assignments.updated_at`, so every active
+      // assignment of the role gets a fresh stamp and the change reaches the devices.
+      await tx.userAssignment.updateMany({
+        where: { roleId: role.id, ...ACTIVE_ASSIGNMENT },
+        data: { updatedAt: touchedAt },
+      });
+    });
+
+    const unionCodes = nextCodes ?? previousCodes;
+    await this.audit.record(
+      AuditEvents.roleUpdated(
+        {
+          roleId: role.id,
+          role: nextName,
+          previousName: role.name,
+          scope: nextScope,
+          permissions: unionCodes,
+          addedPermissions: nextCodes ? nextCodes.filter((code) => !previousCodes.includes(code)) : [],
+          removedPermissions: nextCodes ? previousCodes.filter((code) => !nextCodes.includes(code)) : [],
+          updatedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
 
     return this.findRoleById(role.id);
   }
 
-  async deleteRole(id: string): Promise<{ success: boolean; message: string }> {
+  /** DELETE /identity/roles/:id: removes an unassigned custom role. Platform admins only. */
+  async deleteRole(id: string, actor: AuthenticatedUser): Promise<{ success: boolean; message: string }> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may delete roles');
+    }
     const role = await this.prisma.role.findFirst({
       where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
     });
@@ -1427,9 +1562,17 @@ export class IdentityAndAccessService {
     if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
       throw new ForbiddenException('Only platform administrators may list permissions');
     }
-    const rows = await this.prisma.permission.findMany({ select: { code: true, description: true } });
+    const rows = await this.prisma.permission.findMany({ select: { id: true, code: true, description: true } });
     return rows
-      .map((p) => new PermissionEntity({ code: p.code, description: p.description, category: p.code.split(':')[0] }))
+      .map(
+        (p) =>
+          new PermissionEntity({
+            id: p.id,
+            code: p.code,
+            description: p.description,
+            category: p.code.split(':')[0],
+          }),
+      )
       .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
   }
 
