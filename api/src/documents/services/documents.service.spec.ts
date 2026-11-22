@@ -240,7 +240,7 @@ describe('DocumentsService', () => {
 
   describe('validateUploadedFile', () => {
     it('throws NotFoundException when space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       const mockFile = {
         buffer: Buffer.from('%PDF-1.4\nTest PDF'),
@@ -254,7 +254,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks documents:create permission in space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-school-2',
         schoolId: 'school-2', // Different school from schoolAdmin's school-1
       });
@@ -271,7 +271,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if no file or empty buffer provided', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -282,7 +282,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully validates an uploaded file and returns ValidatedFileEntity', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -418,7 +418,7 @@ describe('DocumentsService', () => {
 
   describe('findSpaceById (#89)', () => {
     it('throws NotFoundException if space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       await expect(service.findSpaceById('space-missing', platformAdmin)).rejects.toThrow(
         NotFoundException,
@@ -426,7 +426,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns space when school admin has access to the space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
         name: 'Computer Science',
@@ -444,7 +444,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns space for platform admin regardless of school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-2',
         schoolId: 'school-other',
         name: 'Biology',
@@ -461,7 +461,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns the stored language and privacy, not the defaults (#97)', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-3',
         schoolId: 'school-1',
         name: 'Droit',
@@ -478,7 +478,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException when caller accesses space of another school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-other',
         schoolId: 'school-other',
         name: 'Law',
@@ -634,8 +634,10 @@ describe('DocumentsService', () => {
     const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
 
     beforeEach(() => {
-      mockPrisma.space.findUnique.mockResolvedValue(stored);
-      mockPrisma.space.findFirst.mockResolvedValue(null);
+      // findFirst serves both the lookup by id and the name-conflict check (the only call filtering on `name`).
+      mockPrisma.space.findFirst.mockImplementation(async ({ where }: any) =>
+        where.name ? null : stored,
+      );
       mockPrisma.space.update.mockImplementation(async ({ data }: any) => ({ ...stored, ...data }));
     });
 
@@ -687,7 +689,7 @@ describe('DocumentsService', () => {
     });
 
     it('rejects updating a space of a deactivated school with 400', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, school: { status: 'deactivated' } });
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, school: { status: 'deactivated' } });
       await expect(service.updateSpace('space-1', { name: 'Maths' }, platformAdmin)).rejects.toThrow(
         BadRequestException,
       );
@@ -714,14 +716,14 @@ describe('DocumentsService', () => {
     });
 
     it('returns 404 for an unknown space', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
       await expect(service.updateSpace('space-404', { name: 'Maths' }, platformAdmin)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
 
     it('lets a platform admin update a space of any school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
       await service.updateSpace('space-1', { name: 'Maths' }, platformAdmin);
       expect(mockPrisma.space.update).toHaveBeenCalled();
     });
@@ -742,14 +744,15 @@ describe('DocumentsService', () => {
       ['a student', studentUser, 'school-1'],
       ['a holder of spaces:create only', schoolAdmin, 'school-1'],
     ])('rejects %s with 403', async (_label, actor, schoolId) => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId });
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, schoolId });
       await expect(service.updateSpace('space-1', { name: 'Maths' }, actor)).rejects.toBeInstanceOf(ForbiddenException);
       expect(mockPrisma.space.update).not.toHaveBeenCalled();
       expect(mockAudit.record).not.toHaveBeenCalled();
     });
 
     it('returns 409 when another space of the school already has the new name', async () => {
-      mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-2' });
+      // First call: the lookup of the space; second call: the name-conflict check.
+      mockPrisma.space.findFirst.mockResolvedValueOnce(stored).mockResolvedValueOnce({ id: 'space-2' });
       await expect(service.updateSpace('space-1', { name: 'Physics' }, updater)).rejects.toThrow(
         new ConflictException("A space named 'Physics' already exists in this school"),
       );
@@ -762,7 +765,7 @@ describe('DocumentsService', () => {
 
     it('does not look for a name conflict when the name is unchanged', async () => {
       await service.updateSpace('space-1', { privacy: 'restricted' }, updater);
-      expect(mockPrisma.space.findFirst).not.toHaveBeenCalled();
+      for (const [args] of mockPrisma.space.findFirst.mock.calls) expect(args.where).not.toHaveProperty('name');
     });
 
     it('maps the unique index violation (P2002) to the same 409 and records nothing', async () => {
@@ -802,15 +805,15 @@ describe('DocumentsService', () => {
     });
 
     it('returns 404 for a deleted space on get, and looks it up with the filter', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
       await expect(service.findSpaceById('space-1', platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
-      expect(mockPrisma.space.findUnique).toHaveBeenCalledWith({ where: { id: 'space-1', deletedAt: null } });
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({ where: { id: 'space-1', deletedAt: null } });
     });
 
     it('returns 404 for a deleted space on update', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
       await expect(service.updateSpace('space-1', { name: 'X' }, platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
-      expect(mockPrisma.space.findUnique).toHaveBeenCalledWith({ where: { id: 'space-1', deletedAt: null } });
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({ where: { id: 'space-1', deletedAt: null } });
     });
 
     it.each([
@@ -819,9 +822,9 @@ describe('DocumentsService', () => {
       ['uploadPdf', () => service.uploadPdf('space-1', file, {} as any, platformAdmin)],
       ['uploadImage', () => service.uploadImage('space-1', file, {} as any, platformAdmin)],
     ])('%s returns 404 for a deleted space', async (_name, call) => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
       await expect(call()).rejects.toBeInstanceOf(NotFoundException);
-      expect(mockPrisma.space.findUnique.mock.calls[0][0].where).toEqual({ id: 'space-1', deletedAt: null });
+      expect(mockPrisma.space.findFirst.mock.calls[0][0].where).toEqual({ id: 'space-1', deletedAt: null });
     });
 
     it.each([
@@ -848,7 +851,7 @@ describe('DocumentsService', () => {
     const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
 
     beforeEach(() => {
-      mockPrisma.space.findUnique.mockResolvedValue(stored);
+      mockPrisma.space.findFirst.mockResolvedValue(stored);
       mockPrisma.space.updateMany.mockResolvedValue({ count: 1 });
       mockPrisma.document.count.mockResolvedValue(3);
     });
@@ -856,7 +859,7 @@ describe('DocumentsService', () => {
     it('looks the space up with the active filter and soft-deletes it, renaming the row', async () => {
       await service.deleteSpace('space-1', deleter, context);
 
-      expect(mockPrisma.space.findUnique).toHaveBeenCalledWith({ where: { id: 'space-1', deletedAt: null } });
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({ where: { id: 'space-1', deletedAt: null } });
       const call = mockPrisma.space.updateMany.mock.calls[0][0];
       expect(call.where).toEqual({ id: 'space-1', deletedAt: null });
       expect(call.data.deletedAt).toBeInstanceOf(Date);
@@ -870,7 +873,7 @@ describe('DocumentsService', () => {
     });
 
     it('keeps the renamed value inside the column size for a very long name', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, name: 'é'.repeat(191) });
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, name: 'é'.repeat(191) });
       await service.deleteSpace('space-1', deleter);
       const { name } = mockPrisma.space.updateMany.mock.calls[0][0].data;
       expect(Array.from(name).length).toBeLessThanOrEqual(191);
@@ -892,7 +895,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns 404 for an unknown or already deleted space', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
       await expect(service.deleteSpace('space-404', platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
       expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
       expect(mockAudit.record).not.toHaveBeenCalled();
@@ -905,7 +908,7 @@ describe('DocumentsService', () => {
     });
 
     it('lets a platform admin delete a space of any school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
       await service.deleteSpace('space-1', platformAdmin);
       expect(mockPrisma.space.updateMany).toHaveBeenCalled();
     });
@@ -926,7 +929,7 @@ describe('DocumentsService', () => {
       ['a student', studentUser, 'school-1'],
       ['a holder of spaces:update only', { ...deleter, permissions: ['spaces:update'], assignments: [{ ...deleter.assignments[0], permissions: ['spaces:update'] }] }, 'school-1'],
     ])('rejects %s with 403', async (_label, actor, schoolId) => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, schoolId });
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, schoolId });
       await expect(service.deleteSpace('space-1', actor as AuthenticatedUser)).rejects.toBeInstanceOf(ForbiddenException);
       expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
       expect(mockAudit.record).not.toHaveBeenCalled();
@@ -1106,7 +1109,7 @@ describe('DocumentsService', () => {
     } as UploadedFile;
 
     it('throws NotFoundException if target space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.uploadPdf('space-missing', validPdfFile, {}, schoolAdmin),
@@ -1114,7 +1117,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks documents:create permission in space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-2',
         schoolId: 'school-2', // Out of scope for schoolAdmin (school-1)
       });
@@ -1125,7 +1128,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if file is missing or empty buffer', async () => {
-      mockPrisma.space.findUnique.mockResolvedValue({
+      mockPrisma.space.findFirst.mockResolvedValue({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1140,7 +1143,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if validated file is an image and directs to image endpoint', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1164,7 +1167,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads an enterprise Word document (.docx) and queues office_extraction', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1223,7 +1226,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads an enterprise PowerPoint (.pptx) and queues slide_extraction', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1257,7 +1260,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads an enterprise Excel (.xlsx) and queues tabular_extraction', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1291,7 +1294,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads a Markdown (.md) or Text document and queues text_chunking', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1325,7 +1328,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads a native PDF, stores file, creates version with status pending, and enqueues job', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1405,7 +1408,7 @@ describe('DocumentsService', () => {
     });
 
     it('uploads a scanned PDF and sanitizes title from originalname when title not provided', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1444,7 +1447,7 @@ describe('DocumentsService', () => {
     });
 
     it('cleans up written storage file if database transaction fails', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1478,7 +1481,7 @@ describe('DocumentsService', () => {
     } as UploadedFile;
 
     it('throws NotFoundException if space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.uploadImage('space-unknown', validJpegFile, {}, schoolAdmin),
@@ -1486,7 +1489,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks rights to space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-2',
         schoolId: 'school-2',
       });
@@ -1497,7 +1500,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if file is missing or empty buffer', async () => {
-      mockPrisma.space.findUnique.mockResolvedValue({
+      mockPrisma.space.findFirst.mockResolvedValue({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1512,7 +1515,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if file is not an image (e.g. PDF)', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1536,7 +1539,7 @@ describe('DocumentsService', () => {
     });
 
     it('uploads a JPEG image and queues it for OCR', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1609,7 +1612,7 @@ describe('DocumentsService', () => {
     });
 
     it('uploads a PNG image and queues it for OCR', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1656,7 +1659,7 @@ describe('DocumentsService', () => {
     });
 
     it('converts HEIC to JPEG for OCR and saves the converted format', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1708,7 +1711,7 @@ describe('DocumentsService', () => {
     });
 
     it('cleans up written storage file if database transaction fails', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });

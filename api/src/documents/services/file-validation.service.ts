@@ -88,7 +88,7 @@ export class FileValidationService {
 
     // 5. Detect duplicates in space if spaceId is provided
     if (spaceId) {
-      const space = await this.prisma.space.findUnique({
+      const space = await this.prisma.space.findFirst({
         where: { id: spaceId, ...ACTIVE_SPACE },
         select: { id: true, name: true },
       });

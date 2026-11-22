@@ -409,7 +409,7 @@ describe('Portal Endpoints Role and School Scoping (§4.5, §4.7, #89)', () => {
       it('throws 403 Forbidden when school admin or doc manager accesses space of another school', async () => {
         const mockPrisma = {
           space: {
-            findUnique: vi.fn().mockResolvedValue({
+            findFirst: vi.fn().mockResolvedValue({
               id: 'space-s2',
               schoolId: 'school-2',
               name: 'School 2 Space',
@@ -437,7 +437,7 @@ describe('Portal Endpoints Role and School Scoping (§4.5, §4.7, #89)', () => {
       it('allows platform admin to access space belonging to any school', async () => {
         const mockPrisma = {
           space: {
-            findUnique: vi.fn().mockResolvedValue({
+            findFirst: vi.fn().mockResolvedValue({
               id: 'space-s2',
               schoolId: 'school-2',
               name: 'School 2 Space',

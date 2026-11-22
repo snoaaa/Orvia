@@ -38,7 +38,7 @@ describe('FileValidationService', () => {
 
     mockPrisma = {
       space: {
-        findUnique: vi.fn(),
+        findFirst: vi.fn(),
       },
       documentVersion: {
         findFirst: vi.fn(),
@@ -253,7 +253,7 @@ describe('FileValidationService', () => {
   });
 
   it('throws NotFoundException when validating against a non-existent space', async () => {
-    mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
     await expect(
       service.validateFile({
@@ -264,7 +264,7 @@ describe('FileValidationService', () => {
   });
 
   it('detects duplicate checksum in the same space and throws ConflictException', async () => {
-    mockPrisma.space.findUnique.mockResolvedValueOnce({ id: 'space-1', name: 'Math Space' });
+    mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-1', name: 'Math Space' });
     mockPrisma.documentVersion.findFirst.mockResolvedValueOnce({
       id: 'version-1',
       versionNo: 1,
@@ -300,7 +300,7 @@ describe('FileValidationService', () => {
   });
 
   it('allows duplicate checksum when allowDuplicates is explicitly true', async () => {
-    mockPrisma.space.findUnique.mockResolvedValueOnce({ id: 'space-1', name: 'Math Space' });
+    mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-1', name: 'Math Space' });
 
     const result = await service.validateFile({
       buffer: validPdfBuffer,
@@ -313,7 +313,7 @@ describe('FileValidationService', () => {
   });
 
   it('passes when no duplicate exists in the target space', async () => {
-    mockPrisma.space.findUnique.mockResolvedValueOnce({ id: 'space-1', name: 'Math Space' });
+    mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-1', name: 'Math Space' });
     mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(null);
 
     const result = await service.validateFile({

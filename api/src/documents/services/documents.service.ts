@@ -198,7 +198,7 @@ export class DocumentsService {
   }
 
   async createDocument(dto: CreateDocumentDto, actor: AuthenticatedUser): Promise<DocumentEntity> {
-    const space = await this.prisma.space.findUnique({
+    const space = await this.prisma.space.findFirst({
       where: { id: dto.spaceId, ...ACTIVE_SPACE },
       select: { schoolId: true },
     });
@@ -663,7 +663,7 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<void> {
-    const space = await this.prisma.space.findUnique({ where: { id, ...ACTIVE_SPACE } });
+    const space = await this.prisma.space.findFirst({ where: { id, ...ACTIVE_SPACE } });
     if (!space) {
       throw new NotFoundException(`Space with ID ${id} not found`);
     }
@@ -725,7 +725,7 @@ export class DocumentsService {
 
   /** Get a single space by ID, scoped to caller's school access (§4.5, §4.7, #89). */
   async findSpaceById(id: string, actor: AuthenticatedUser): Promise<SpaceEntity> {
-    const space = await this.prisma.space.findUnique({
+    const space = await this.prisma.space.findFirst({
       where: { id, ...ACTIVE_SPACE },
     });
     if (!space) {
@@ -745,7 +745,7 @@ export class DocumentsService {
     file: UploadedFile,
     actor: AuthenticatedUser,
   ): Promise<ValidatedFileEntity> {
-    const space = await this.prisma.space.findUnique({
+    const space = await this.prisma.space.findFirst({
       where: { id: spaceId, ...ACTIVE_SPACE },
       select: { schoolId: true },
     });
@@ -791,7 +791,7 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
-    const space = await this.prisma.space.findUnique({
+    const space = await this.prisma.space.findFirst({
       where: { id: spaceId, ...ACTIVE_SPACE },
       select: { id: true, schoolId: true },
     });
@@ -942,7 +942,7 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
-    const space = await this.prisma.space.findUnique({
+    const space = await this.prisma.space.findFirst({
       where: { id: spaceId, ...ACTIVE_SPACE },
       select: { id: true, schoolId: true },
     });
