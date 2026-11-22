@@ -1,9 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
+import { GoeyToastService } from 'goey-toast-angular';
 import { of, throwError } from 'rxjs';
 import { PortalSessionService } from '../../services/portal-session.service';
 import { AssignmentService } from '../../assignments/services/assignment.service';
-import { ActiveSession, UserEntity } from '../models/user.model';
+import { ActiveSession, UserEntity, UserSchoolAssignment } from '../models/user.model';
 import { UserManagementService } from '../services/user-management.service';
 import { UserEditComponent } from './user-edit.component';
 
@@ -11,6 +12,7 @@ describe('UserEditComponent', () => {
   let component: UserEditComponent;
   let fixture: ComponentFixture<UserEditComponent>;
   let mockUserService: any;
+  let mockAssignmentService: any;
   let session: PortalSessionService;
 
   const mockUser: UserEntity = {
@@ -59,6 +61,15 @@ describe('UserEditComponent', () => {
       extractErrorMessage: vi.fn().mockImplementation((_err, fallback) => fallback || 'Error')
     };
 
+    mockAssignmentService = {
+      getGroups: vi.fn().mockImplementation((schoolId: string) =>
+        of([{ id: `g-${schoolId}`, schoolId, name: `Group of ${schoolId}`, type: 'class' }])
+      ),
+      createAssignment: vi.fn().mockReturnValue(of({})),
+      updateAssignment: vi.fn().mockReturnValue(of({})),
+      removeAssignment: vi.fn().mockReturnValue(of(undefined))
+    };
+
     localStorage.clear();
 
     await TestBed.configureTestingModule({
@@ -66,12 +77,7 @@ describe('UserEditComponent', () => {
       providers: [
         PortalSessionService,
         { provide: UserManagementService, useValue: mockUserService },
-        {
-          provide: AssignmentService,
-          useValue: {
-            getCurrentAdmin: vi.fn().mockReturnValue(of({ id: 'me', permissions: ['users:assign_role'], isPlatformAdmin: true }))
-          }
-        },
+        { provide: AssignmentService, useValue: mockAssignmentService },
         {
           provide: ActivatedRoute,
           useValue: {
@@ -105,11 +111,6 @@ describe('UserEditComponent', () => {
     component.refreshAssignments();
     expect(component.user()?.assignments).toEqual([assignment]);
     expect(component.user()?.fullName).toBe('Test User');
-  });
-
-  it('should show the assignments card for an admin who can assign roles', () => {
-    expect(fixture.nativeElement.querySelector('app-user-assignments')).not.toBeNull();
-    expect(fixture.nativeElement.textContent).toContain('Assignments');
   });
 
   it('should validate edit form fields correctly', () => {
@@ -248,5 +249,255 @@ describe('UserEditComponent', () => {
     component.toggleDocumentManagement(staffAssignment, true);
     expect(mockUserService.setDocumentManagement).toHaveBeenCalledWith('user-123', 'school-a', true);
     expect(component.user()?.assignments?.[0]?.role).toBe('CONTENT_MANAGER');
+  });
+
+  describe('assignment actions in the School Assignments section (#61)', () => {
+    const assignments: UserSchoolAssignment[] = [
+      { id: 'as-1', schoolId: 's1', schoolName: 'School A', role: 'STAFF', groupId: 'g1', groupName: 'ISI 4' },
+      { id: 'as-2', schoolId: 's2', schoolName: 'School B', role: 'STUDENT', groupId: null, groupName: null }
+    ];
+    let toast: GoeyToastService;
+
+    function signIn(permissions: string[], isPlatformAdmin = true, schoolIds: string[] = []): void {
+      session.setUser({
+        id: 'admin-1',
+        email: 'admin@demo.test',
+        fullName: 'Admin',
+        status: 'ACTIVE',
+        role: isPlatformAdmin ? 'PLATFORM_ADMIN' : 'SCHOOL_ADMIN',
+        permissions,
+        schoolIds,
+        schools: schoolIds.map((id) => ({ id, name: id })),
+        isPlatformAdmin,
+        assignments: []
+      });
+    }
+
+    beforeEach(() => {
+      toast = TestBed.inject(GoeyToastService);
+      vi.spyOn(toast, 'success').mockImplementation(() => undefined as never);
+      vi.spyOn(toast, 'error').mockImplementation(() => undefined as never);
+      mockUserService.getAssignableRoles.mockReturnValue(
+        of([
+          { id: 'r1', name: 'STAFF', scope: 'school', level: 2 },
+          { id: 'r2', name: 'PLATFORM_ADMIN', scope: 'platform', level: 3 }
+        ])
+      );
+      signIn(['*']);
+      component.schools.set([
+        { id: 's1', name: 'School A' },
+        { id: 's2', name: 'School B' },
+        { id: 's3', name: 'School C' }
+      ]);
+      component.user.set({ ...mockUser, assignments });
+      fixture.detectChanges();
+    });
+
+    it('shows the add button and the row actions to an admin who can assign roles', () => {
+      const el: HTMLElement = fixture.nativeElement;
+      expect(el.querySelector('#btn-add-assignment')).not.toBeNull();
+      expect(el.querySelectorAll('.btn-edit-assignment').length).toBe(2);
+      expect(el.querySelectorAll('.btn-remove-assignment').length).toBe(2);
+    });
+
+    it('hides the add button and the row actions without users:assign_role', () => {
+      signIn(['users:read'], false, ['s1']);
+      fixture.detectChanges();
+      const el: HTMLElement = fixture.nativeElement;
+      expect(el.querySelector('#btn-add-assignment')).toBeNull();
+      expect(el.querySelector('.btn-edit-assignment')).toBeNull();
+      expect(component.canManageAssignments()).toBe(false);
+    });
+
+    it('does not add a separate assignments card', () => {
+      expect(fixture.nativeElement.querySelector('app-user-assignments')).toBeNull();
+    });
+
+    describe('create form', () => {
+      beforeEach(() => component.openCreateAssignmentForm());
+
+      it('offers only schools where the user has no assignment yet', () => {
+        expect(component.assignmentMode()).toBe('create');
+        expect(component.availableSchools().map((s) => s.id)).toEqual(['s3']);
+      });
+
+      it('reloads groups and roles for the chosen school, and again when the school changes', () => {
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        expect(mockAssignmentService.getGroups).toHaveBeenCalledWith('s3');
+        expect(mockUserService.getAssignableRoles).toHaveBeenCalledWith('s3');
+        expect(component.groups().map((g) => g.id)).toEqual(['g-s3']);
+
+        component.assignmentForm.patchValue({ groupId: 'g-s3', role: 'STAFF' });
+        component.assignmentForm.controls.schoolId.setValue('s9');
+        expect(mockAssignmentService.getGroups).toHaveBeenLastCalledWith('s9');
+        expect(component.groups().map((g) => g.id)).toEqual(['g-s9']);
+        // the previous group and role no longer apply to the new school
+        expect(component.assignmentForm.controls.groupId.value).toBe('');
+        expect(component.assignmentForm.controls.role.value).toBe('');
+      });
+
+      it('creates the assignment with the selected school, group and role, then refreshes the list', () => {
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        component.assignmentForm.patchValue({ groupId: 'g-s3', role: 'STAFF' });
+        mockUserService.getUserById.mockClear();
+
+        component.saveAssignment();
+
+        expect(mockAssignmentService.createAssignment).toHaveBeenCalledWith({
+          userId: 'user-123',
+          schoolId: 's3',
+          role: 'STAFF',
+          groupId: 'g-s3'
+        });
+        expect(toast.success).toHaveBeenCalled();
+        expect(mockUserService.getUserById).toHaveBeenCalledWith('user-123');
+        expect(component.assignmentMode()).toBeNull();
+      });
+
+      it('omits the group when none is selected', () => {
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        component.assignmentForm.patchValue({ role: 'STAFF' });
+        component.saveAssignment();
+        expect(mockAssignmentService.createAssignment).toHaveBeenCalledWith({
+          userId: 'user-123',
+          schoolId: 's3',
+          role: 'STAFF'
+        });
+      });
+
+      it('does not submit an incomplete form', () => {
+        component.saveAssignment();
+        expect(mockAssignmentService.createAssignment).not.toHaveBeenCalled();
+      });
+
+      it('clears and locks the group for a platform role', () => {
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        component.assignmentForm.patchValue({ groupId: 'g-s3', role: 'PLATFORM_ADMIN' });
+        expect(component.groupDisabled).toBe(true);
+        component.onAssignmentRoleChange();
+        expect(component.assignmentForm.controls.groupId.value).toBe('');
+      });
+
+      it('shows the API message in a toast on a 409 and keeps the form open', () => {
+        mockAssignmentService.createAssignment.mockReturnValue(throwError(() => new Error('409')));
+        mockUserService.extractErrorMessage.mockReturnValue('The user already has an assignment in this school');
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        component.assignmentForm.patchValue({ role: 'STAFF' });
+
+        component.saveAssignment();
+
+        expect(toast.error).toHaveBeenCalledWith('Assignment Failed', {
+          description: 'The user already has an assignment in this school'
+        });
+        expect(component.assignmentMode()).toBe('create');
+        expect(component.isAssigningRole()).toBe(false);
+      });
+
+      it('toasts when the groups or the roles of the school cannot be loaded', () => {
+        mockAssignmentService.getGroups.mockReturnValue(throwError(() => new Error('403')));
+        mockUserService.extractErrorMessage.mockReturnValue('Forbidden');
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        expect(toast.error).toHaveBeenCalledWith('Could Not Load Groups', { description: 'Forbidden' });
+        expect(component.isLookupLoading()).toBe(false);
+      });
+
+      it('preselects the only school of a school admin', () => {
+        // a user without any assignment yet is in the scope of a school admin
+        component.user.set({ ...mockUser, assignments: [] });
+        signIn(['users:assign_role'], false, ['s3']);
+        component.openCreateAssignmentForm();
+        expect(component.assignmentForm.controls.schoolId.value).toBe('s3');
+        expect(mockAssignmentService.getGroups).toHaveBeenCalledWith('s3');
+        // no school select for a school admin: the school shows as a badge
+        fixture.detectChanges();
+        expect(fixture.nativeElement.querySelector('#assign-school-select')).toBeNull();
+        expect(fixture.nativeElement.querySelector('#fixed-assign-school')).not.toBeNull();
+      });
+    });
+
+    describe('edit form', () => {
+      beforeEach(() => component.openEditAssignmentForm(assignments[0]));
+
+      it('locks the school and prefills role and group', () => {
+        expect(component.assignmentMode()).toBe('edit');
+        expect(component.assignmentForm.controls.schoolId.disabled).toBe(true);
+        expect(component.assignmentForm.getRawValue()).toEqual({ schoolId: 's1', groupId: 'g1', role: 'STAFF' });
+        expect(mockUserService.getAssignableRoles).toHaveBeenCalledWith('s1');
+      });
+
+      it('needs a change before saving', () => {
+        expect(component.hasAssignmentChanges()).toBe(false);
+        component.saveAssignment();
+        expect(mockAssignmentService.updateAssignment).not.toHaveBeenCalled();
+      });
+
+      it('sends only the changed field', () => {
+        component.assignmentForm.patchValue({ groupId: '' });
+        component.saveAssignment();
+        expect(mockAssignmentService.updateAssignment).toHaveBeenCalledWith('as-1', { groupId: null });
+      });
+
+      it('sends the new role without touching the group', () => {
+        component.assignmentForm.patchValue({ role: 'PLATFORM_ADMIN' });
+        component.saveAssignment();
+        expect(mockAssignmentService.updateAssignment).toHaveBeenCalledWith('as-1', { role: 'PLATFORM_ADMIN' });
+      });
+
+      it('shows the API message in a toast when the update is refused (403)', () => {
+        mockAssignmentService.updateAssignment.mockReturnValue(throwError(() => new Error('403')));
+        mockUserService.extractErrorMessage.mockReturnValue('You cannot assign a role above your level');
+        component.assignmentForm.patchValue({ role: 'PLATFORM_ADMIN' });
+        component.saveAssignment();
+        expect(toast.error).toHaveBeenCalledWith('Update Failed', {
+          description: 'You cannot assign a role above your level'
+        });
+      });
+    });
+
+    describe('remove', () => {
+      it('asks for confirmation, removes the assignment and refreshes the list', () => {
+        mockUserService.getUserById.mockClear();
+        component.openRemoveAssignmentModal(assignments[0]);
+        expect(component.modalType()).toBe('remove-assignment');
+        expect(component.assignmentToRemove()).toEqual(assignments[0]);
+
+        component.handleModalConfirm();
+
+        expect(mockAssignmentService.removeAssignment).toHaveBeenCalledWith('as-1');
+        expect(toast.success).toHaveBeenCalled();
+        expect(mockUserService.getUserById).toHaveBeenCalledWith('user-123');
+        expect(component.modalType()).toBeNull();
+        expect(component.assignmentToRemove()).toBeNull();
+      });
+
+      it('shows the API message in a toast when removal fails (409 last school admin)', () => {
+        mockAssignmentService.removeAssignment.mockReturnValue(throwError(() => new Error('409')));
+        mockUserService.extractErrorMessage.mockReturnValue('The last school administrator cannot be removed');
+        mockUserService.getUserById.mockClear();
+
+        component.openRemoveAssignmentModal(assignments[0]);
+        component.handleModalConfirm();
+
+        expect(toast.error).toHaveBeenCalledWith('Removal Failed', {
+          description: 'The last school administrator cannot be removed'
+        });
+        expect(mockUserService.getUserById).not.toHaveBeenCalled();
+        expect(component.modalType()).toBeNull();
+      });
+
+      it('does not remove when the modal is cancelled', () => {
+        component.openRemoveAssignmentModal(assignments[0]);
+        component.closeModal();
+        expect(component.assignmentToRemove()).toBeNull();
+        expect(mockAssignmentService.removeAssignment).not.toHaveBeenCalled();
+      });
+
+      it('closes the edit form of the assignment that was removed', () => {
+        component.openEditAssignmentForm(assignments[0]);
+        component.openRemoveAssignmentModal(assignments[0]);
+        component.handleModalConfirm();
+        expect(component.assignmentMode()).toBeNull();
+      });
+    });
   });
 });

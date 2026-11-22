@@ -12,19 +12,6 @@ export interface AssignmentEntity {
   updatedAt: string;
 }
 
-/** Item of GET /assignments/assignable-roles. */
-export interface AssignableRole {
-  id: string;
-  name: string;
-  scope: string;
-  level: number;
-}
-
-export interface SchoolOption {
-  id: string;
-  name: string;
-}
-
 export interface GroupOption {
   id: string;
   schoolId: string;

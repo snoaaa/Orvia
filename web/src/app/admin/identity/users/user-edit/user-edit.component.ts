@@ -1,10 +1,13 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
-import { UserAssignmentsComponent } from '../../assignments/user-assignments/user-assignments.component';
 import { GoeyToastService } from 'goey-toast-angular';
+import { catchError, forkJoin, of, switchMap, tap } from 'rxjs';
 import { CardComponent } from '../../../theme/shared/components/card/card.component';
+import { GroupOption, UpdateAssignmentPayload } from '../../assignments/models/assignment.model';
+import { AssignmentService } from '../../assignments/services/assignment.service';
 import { PortalSessionService } from '../../services/portal-session.service';
 import { ConfirmationModalComponent } from '../components/confirmation-modal/confirmation-modal.component';
 import {
@@ -25,8 +28,7 @@ import { UserManagementService } from '../services/user-management.service';
     ReactiveFormsModule,
     RouterModule,
     CardComponent,
-    ConfirmationModalComponent,
-    UserAssignmentsComponent
+    ConfirmationModalComponent
   ],
   templateUrl: './user-edit.component.html',
   styleUrls: ['./user-edit.component.scss']
@@ -36,6 +38,7 @@ export class UserEditComponent implements OnInit {
   private readonly router = inject(Router);
   private readonly fb = inject(FormBuilder);
   private readonly userService = inject(UserManagementService);
+  private readonly assignmentService = inject(AssignmentService);
   private readonly toast = inject(GoeyToastService);
   readonly session = inject(PortalSessionService);
 
@@ -50,10 +53,24 @@ export class UserEditComponent implements OnInit {
   // Role assignment & document management state (#94)
   readonly rawRoles = signal<AssignableRoleOption[]>([]);
   readonly schools = signal<SchoolSummaryOption[]>([]);
-  readonly selectedAssignSchoolId = signal<string>('');
-  readonly selectedAssignRole = signal<string>('');
   readonly isAssigningRole = signal<boolean>(false);
   readonly isTogglingDocMgmt = signal<boolean>(false);
+
+  // Create, edit and remove an assignment (#61), inside the School Assignments section
+  readonly assignmentMode = signal<'create' | 'edit' | null>(null);
+  readonly editingAssignment = signal<UserSchoolAssignment | null>(null);
+  readonly assignmentToRemove = signal<UserSchoolAssignment | null>(null);
+  readonly groups = signal<GroupOption[]>([]);
+  readonly isLookupLoading = signal<boolean>(false);
+
+  readonly assignmentForm = this.fb.nonNullable.group({
+    schoolId: ['', Validators.required],
+    groupId: [''],
+    role: ['', Validators.required]
+  });
+
+  /** Values to apply once the groups and roles of the edited school have loaded. */
+  private pendingEdit: { role: string; groupId: string } | null = null;
 
   /**
    * Roles the signed-in admin may assign (#94):
@@ -76,12 +93,38 @@ export class UserEditComponent implements OnInit {
     return list.filter((a) => adminSchools.includes(a.schoolId));
   });
 
+  /** Schools the admin can assign in: every school for a platform admin, the active school otherwise. */
+  private readonly assignableSchools = computed<SchoolSummaryOption[]>(() => {
+    if (this.session.isPlatformAdmin()) return this.schools();
+    const id = this.session.activeSchoolId();
+    return id ? [{ id, name: this.session.activeSchoolName() ?? id }] : [];
+  });
+
+  /** A user has at most one assignment per school, so schools already used are not offered when adding. */
+  readonly availableSchools = computed<SchoolSummaryOption[]>(() => {
+    const used = new Set((this.user()?.assignments ?? []).map((a) => a.schoolId));
+    return this.assignableSchools().filter((s) => !used.has(s.id));
+  });
+
+  /** Options of the school select: the locked school of the assignment being edited, or the free schools. */
+  readonly schoolOptions = computed<SchoolSummaryOption[]>(() => {
+    const editing = this.editingAssignment();
+    if (!editing) return this.availableSchools();
+    return [{ id: editing.schoolId, name: this.getAssignmentSchoolName(editing) }];
+  });
+
+  /** Name of the school the form works on, shown as a badge when the school select is hidden. */
+  readonly formSchoolName = computed<string | null>(() => {
+    const editing = this.editingAssignment();
+    return editing ? this.getAssignmentSchoolName(editing) : this.session.activeSchoolName();
+  });
+
   readonly successMessage = signal<string>('');
   readonly errorMessage = signal<string>('');
   readonly sessionSuccessMessage = signal<string>('');
   readonly sessionErrorMessage = signal<string>('');
 
-  readonly modalType = signal<'suspend' | 'reactivate' | 'revoke-session' | 'revoke-all' | null>(null);
+  readonly modalType = signal<'suspend' | 'reactivate' | 'revoke-session' | 'revoke-all' | 'remove-assignment' | null>(null);
   readonly modalLoading = signal<boolean>(false);
   readonly selectedSessionToRevoke = signal<ActiveSession | null>(null);
 
@@ -89,6 +132,49 @@ export class UserEditComponent implements OnInit {
     fullName: ['', [Validators.required, Validators.minLength(2), Validators.maxLength(100)]],
     email: ['', [Validators.required, Validators.email, Validators.maxLength(150)]]
   });
+
+  constructor() {
+    // The groups and the assignable roles follow the school; switchMap drops stale answers when it changes quickly.
+    this.assignmentForm.controls.schoolId.valueChanges
+      .pipe(
+        takeUntilDestroyed(),
+        tap(() => {
+          this.groups.set([]);
+          this.rawRoles.set([]);
+          this.assignmentForm.patchValue({ groupId: '', role: '' }, { emitEvent: false });
+        }),
+        switchMap((schoolId) => {
+          if (!schoolId) {
+            return of({ groups: [] as GroupOption[], roles: [] as AssignableRoleOption[] });
+          }
+          this.isLookupLoading.set(true);
+          return forkJoin({
+            groups: this.assignmentService.getGroups(schoolId).pipe(
+              catchError((error) => {
+                this.notifyAssignmentError('Could Not Load Groups', error, 'Failed to load the groups of this school.');
+                return of([] as GroupOption[]);
+              })
+            ),
+            roles: this.userService.getAssignableRoles(schoolId).pipe(
+              catchError((error) => {
+                this.notifyAssignmentError('Could Not Load Roles', error, 'Failed to load the assignable roles.');
+                return of([] as AssignableRoleOption[]);
+              })
+            )
+          });
+        })
+      )
+      .subscribe(({ groups, roles }) => {
+        this.groups.set(groups);
+        this.rawRoles.set(roles);
+        this.isLookupLoading.set(false);
+        if (this.pendingEdit) {
+          this.assignmentForm.patchValue(this.pendingEdit);
+          this.assignmentForm.markAsPristine();
+          this.pendingEdit = null;
+        }
+      });
+  }
 
   ngOnInit(): void {
     const id = this.route.snapshot.paramMap.get('id');
@@ -107,18 +193,10 @@ export class UserEditComponent implements OnInit {
       ? undefined
       : (this.session.activeSchoolId() ?? undefined);
 
-    if (fixedSchool) {
-      this.selectedAssignSchoolId.set(fixedSchool);
-    }
-
     if (typeof this.userService.getAssignableRoles === 'function') {
       this.userService.getAssignableRoles(fixedSchool).subscribe({
         next: (roles) => {
           this.rawRoles.set(roles);
-          const filtered = this.assignableRoles();
-          if (filtered.length > 0 && !this.selectedAssignRole()) {
-            this.selectedAssignRole.set(filtered[0].name);
-          }
         },
         error: () => {}
       });
@@ -128,9 +206,6 @@ export class UserEditComponent implements OnInit {
       this.userService.getSchools().subscribe({
         next: (schools) => {
           this.schools.set(schools);
-          if (schools.length > 0 && !this.selectedAssignSchoolId()) {
-            this.selectedAssignSchoolId.set(schools[0].id);
-          }
         },
         error: () => {}
       });
@@ -275,34 +350,121 @@ export class UserEditComponent implements OnInit {
     });
   }
 
-  /**
-   * Assigns or updates the user's role in the selected (or fixed) school (#94).
-   */
-  assignRoleInSchool(): void {
-    if (this.isAssigningRole() || !this.canTouchCurrentUser()) return;
+  /** Detail line of the remove-assignment confirmation: role, school and group. */
+  removeAssignmentDetail(): string {
+    const a = this.assignmentToRemove();
+    if (!a) return '';
+    return [this.getAssignmentRoleName(a), this.getAssignmentSchoolName(a), a.groupName].filter(Boolean).join(' · ');
+  }
 
-    const schoolId = this.session.isPlatformAdmin()
-      ? this.selectedAssignSchoolId()
-      : (this.session.activeSchoolId() ?? this.selectedAssignSchoolId());
-    const role = this.selectedAssignRole();
+  /** True when the signed-in administrator may create, edit and remove this user's assignments. */
+  canManageAssignments(): boolean {
+    return this.canTouchCurrentUser() && this.session.hasPermission('users:assign_role');
+  }
 
-    if (!schoolId || !role) return;
+  /** The group of an assignment is not allowed on a platform role: the API rejects it. */
+  get groupDisabled(): boolean {
+    const selected = this.rawRoles().find((r) => r.name === this.assignmentForm.controls.role.value);
+    return selected?.scope === 'platform';
+  }
+
+  /** Edit mode: true when the role or the group differs from the saved assignment. */
+  hasAssignmentChanges(): boolean {
+    const current = this.editingAssignment();
+    if (!current) return true;
+    const { role, groupId } = this.assignmentForm.getRawValue();
+    return role !== this.getAssignmentRoleName(current) || (groupId || null) !== (current.groupId ?? null);
+  }
+
+  openCreateAssignmentForm(): void {
+    if (!this.canManageAssignments()) return;
+    this.editingAssignment.set(null);
+    this.pendingEdit = null;
+    this.assignmentForm.controls.schoolId.enable({ emitEvent: false });
+    this.assignmentForm.reset({ schoolId: '', groupId: '', role: '' }, { emitEvent: false });
+    this.groups.set([]);
+    this.assignmentMode.set('create');
+
+    // A school admin has a single school: preselect it so the groups and roles load right away.
+    const available = this.availableSchools();
+    if (!this.session.isPlatformAdmin() && available.length === 1) {
+      this.assignmentForm.controls.schoolId.setValue(available[0].id);
+    }
+  }
+
+  openEditAssignmentForm(assignment: UserSchoolAssignment): void {
+    if (!this.canManageAssignments()) return;
+    this.editingAssignment.set(assignment);
+    this.assignmentMode.set('edit');
+    this.pendingEdit = { role: this.getAssignmentRoleName(assignment), groupId: assignment.groupId ?? '' };
+    // The school of an assignment cannot change (PATCH rejects schoolId): show it, locked.
+    this.assignmentForm.controls.schoolId.enable({ emitEvent: false });
+    this.assignmentForm.controls.schoolId.setValue(assignment.schoolId);
+    this.assignmentForm.controls.schoolId.disable({ emitEvent: false });
+  }
+
+  closeAssignmentForm(): void {
+    if (this.isAssigningRole()) return;
+    this.assignmentMode.set(null);
+    this.editingAssignment.set(null);
+    this.pendingEdit = null;
+  }
+
+  onAssignmentRoleChange(): void {
+    if (this.groupDisabled) {
+      this.assignmentForm.controls.groupId.setValue('');
+    }
+  }
+
+  /** Creates the assignment, or in edit mode sends only the fields that changed (PATCH keeps what is left out). */
+  saveAssignment(): void {
+    if (this.assignmentForm.invalid || this.isAssigningRole() || !this.canManageAssignments()) return;
+    const { schoolId, groupId, role } = this.assignmentForm.getRawValue();
+
+    if (this.assignmentMode() === 'edit') {
+      const current = this.editingAssignment();
+      if (!current?.id || !this.hasAssignmentChanges()) return;
+      const payload: UpdateAssignmentPayload = {};
+      if (role !== this.getAssignmentRoleName(current)) payload.role = role;
+      if ((groupId || null) !== (current.groupId ?? null)) payload.groupId = groupId || null;
+
+      this.isAssigningRole.set(true);
+      this.assignmentService.updateAssignment(current.id, payload).subscribe({
+        next: () => this.onAssignmentSaved('Assignment Updated', 'The assignment has been updated.'),
+        error: (error) => this.onAssignmentSaveFailed('Update Failed', error, 'Failed to update the assignment.')
+      });
+      return;
+    }
 
     this.isAssigningRole.set(true);
-    this.userService.assignRole(this.userId(), schoolId, role).subscribe({
-      next: () => {
-        this.isAssigningRole.set(false);
-        this.toast.success('Role Assigned', {
-          description: `Assigned ${role} in the selected school.`
-        });
-        this.loadUserData(this.userId());
-      },
-      error: (error) => {
-        this.isAssigningRole.set(false);
-        const msg = this.userService.extractErrorMessage(error, 'Failed to assign role.');
-        this.toast.error('Role Assignment Failed', { description: msg });
-      }
-    });
+    this.assignmentService
+      .createAssignment({ userId: this.userId(), schoolId, role, ...(groupId ? { groupId } : {}) })
+      .subscribe({
+        next: () => this.onAssignmentSaved('Assignment Created', 'The user has been assigned.'),
+        error: (error) => this.onAssignmentSaveFailed('Assignment Failed', error, 'Failed to create the assignment.')
+      });
+  }
+
+  openRemoveAssignmentModal(assignment: UserSchoolAssignment): void {
+    this.assignmentToRemove.set(assignment);
+    this.modalType.set('remove-assignment');
+  }
+
+  private onAssignmentSaved(title: string, description: string): void {
+    this.isAssigningRole.set(false);
+    this.assignmentMode.set(null);
+    this.editingAssignment.set(null);
+    this.toast.success(title, { description });
+    this.refreshAssignments();
+  }
+
+  private onAssignmentSaveFailed(title: string, error: unknown, fallback: string): void {
+    this.isAssigningRole.set(false);
+    this.notifyAssignmentError(title, error, fallback);
+  }
+
+  private notifyAssignmentError(title: string, error: unknown, fallback: string): void {
+    this.toast.error(title, { description: this.userService.extractErrorMessage(error, fallback) });
   }
 
   /** Reloads the user after an assignment changed, without the full-page loader or touching the profile form. */
@@ -455,6 +617,7 @@ export class UserEditComponent implements OnInit {
     if (this.modalLoading()) return;
     this.modalType.set(null);
     this.selectedSessionToRevoke.set(null);
+    this.assignmentToRemove.set(null);
   }
 
   handleModalConfirm(): void {
@@ -480,7 +643,38 @@ export class UserEditComponent implements OnInit {
       case 'revoke-all':
         this.executeRevokeAllSessions();
         break;
+      case 'remove-assignment':
+        this.executeRemoveAssignment();
+        break;
     }
+  }
+
+  private executeRemoveAssignment(): void {
+    const target = this.assignmentToRemove();
+    if (!target?.id) {
+      this.modalLoading.set(false);
+      this.closeModal();
+      return;
+    }
+
+    this.assignmentService.removeAssignment(target.id).subscribe({
+      next: () => {
+        this.modalLoading.set(false);
+        this.closeModal();
+        if (this.editingAssignment()?.id === target.id) {
+          this.closeAssignmentForm();
+        }
+        this.toast.success('Assignment Removed', {
+          description: `${this.getAssignmentRoleName(target)} in ${this.getAssignmentSchoolName(target)} has been removed.`
+        });
+        this.refreshAssignments();
+      },
+      error: (error) => {
+        this.modalLoading.set(false);
+        this.closeModal();
+        this.notifyAssignmentError('Removal Failed', error, 'Failed to remove the assignment.');
+      }
+    });
   }
 
   private executeSuspend(): void {
