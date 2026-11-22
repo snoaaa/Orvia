@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { User, UserStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import argon2 from 'argon2';
-import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
+import { AuditEvents, type SchoolChanges, type SchoolSnapshot } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
 import { ActiveSessionEntity } from '../../auth/entities/index.js';
@@ -49,6 +49,53 @@ function roleGrantsAdmin(role: RoleWithPermissions): boolean {
     scope: role.scope,
     permissions: role.rolePermissions?.map((rp) => rp.permission.code) ?? [],
   });
+}
+
+/** JSON with sorted keys, so two objects with the same content but a different key order compare equal. */
+function stableJson(value: unknown): string {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+}
+
+/** The audited view of a school row (#5): its mutable fields, domains sorted. */
+function schoolSnapshot(school: {
+  name: string;
+  status: string;
+  allowedDomains?: string | null;
+  settings?: unknown;
+  domains?: Array<{ domain: string }>;
+}): SchoolSnapshot {
+  const domains = (
+    school.domains ? school.domains.map((d) => d.domain) : (school.allowedDomains ?? '').split(',')
+  )
+    .map((domain) => domain.trim())
+    .filter(Boolean)
+    .sort();
+  return {
+    name: school.name,
+    status: school.status,
+    domains,
+    ...(school.settings === null || school.settings === undefined ? {} : { settings: school.settings }),
+  };
+}
+
+/** Fields of two school snapshots that differ, as `{ before, after }`; empty when nothing moved. */
+function schoolChanges(before: SchoolSnapshot, after: SchoolSnapshot): SchoolChanges {
+  const changes: SchoolChanges = {};
+  if (before.name !== after.name) changes.name = { before: before.name, after: after.name };
+  if (before.status !== after.status) changes.status = { before: before.status, after: after.status };
+  if (stableJson(before.domains) !== stableJson(after.domains)) {
+    changes.domains = { before: before.domains, after: after.domains };
+  }
+  if (stableJson(before.settings) !== stableJson(after.settings)) {
+    changes.settings = { before: before.settings ?? null, after: after.settings ?? null };
+  }
+  return changes;
 }
 
 @Injectable()
@@ -1054,16 +1101,18 @@ export class IdentityAndAccessService {
     id: string,
     dto: UpdateSchoolDto,
     actor: AuthenticatedUser,
-    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolEntity> {
     assertSchoolAccess(actor, 'schools:update', id);
 
     const school = await this.prisma.school.findUnique({
       where: { id },
+      include: { domains: true },
     });
     if (!school) {
       throw new NotFoundException(`School with ID '${id}' not found`);
     }
+    const before = schoolSnapshot(school);
 
     if (dto.name !== undefined) {
       const trimmedName = dto.name.trim();
@@ -1107,6 +1156,22 @@ export class IdentityAndAccessService {
             return tx.school.update({ where: { id }, data, include: { domains: true } });
           });
 
+    // #5: one row per edit, with the fields that actually moved (nothing at all for a no-op payload).
+    const changes = schoolChanges(before, schoolSnapshot(updated));
+    if (Object.keys(changes).length > 0) {
+      await this.audit.record(
+        AuditEvents.schoolUpdated(
+          {
+            schoolId: updated.id,
+            school: updated.name,
+            changes,
+            updatedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+      );
+    }
+
     return SchoolMapper.toEntity(updated);
   }
 
@@ -1122,7 +1187,7 @@ export class IdentityAndAccessService {
   async deactivateSchool(
     id: string,
     actor?: AuthenticatedUser,
-    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolEntity> {
     if (actor && schoolsWithPermission(actor, 'schools:delete') !== 'all') {
       throw new ForbiddenException('Only platform administrators may deactivate schools');
@@ -1141,6 +1206,21 @@ export class IdentityAndAccessService {
       include: { domains: true },
     });
 
+    // #5: idempotent endpoint — audit the transition, not a second call that changes nothing.
+    if (school.status !== 'deactivated') {
+      await this.audit.record(
+        AuditEvents.schoolDeactivated(
+          {
+            schoolId: updated.id,
+            school: updated.name,
+            previousStatus: school.status,
+            deactivatedBy: actor ? { userId: actor.id, role: actor.role, schoolId: actor.schoolId } : null,
+          },
+          auditContext,
+        ),
+      );
+    }
+
     return SchoolMapper.toEntity(updated);
   }
 
@@ -1156,7 +1236,7 @@ export class IdentityAndAccessService {
   async reactivateSchool(
     id: string,
     actor?: AuthenticatedUser,
-    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolEntity> {
     if (actor && schoolsWithPermission(actor, 'schools:delete') !== 'all') {
       throw new ForbiddenException('Only platform administrators may reactivate schools');
@@ -1175,6 +1255,21 @@ export class IdentityAndAccessService {
       include: { domains: true },
     });
 
+    // #5: idempotent endpoint — audit the transition, not a second call that changes nothing.
+    if (school.status !== 'active') {
+      await this.audit.record(
+        AuditEvents.schoolReactivated(
+          {
+            schoolId: updated.id,
+            school: updated.name,
+            previousStatus: school.status,
+            reactivatedBy: actor ? { userId: actor.id, role: actor.role, schoolId: actor.schoolId } : null,
+          },
+          auditContext,
+        ),
+      );
+    }
+
     return SchoolMapper.toEntity(updated);
   }
 
@@ -1191,7 +1286,7 @@ export class IdentityAndAccessService {
   async createSchool(
     dto: CreateSchoolDto,
     actor?: AuthenticatedUser,
-    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolEntity> {
     if (actor && schoolsWithPermission(actor, 'schools:create') !== 'all') {
       throw new ForbiddenException('Only a platform administrator can create a school');
@@ -1232,6 +1327,18 @@ export class IdentityAndAccessService {
       },
       include: { domains: true },
     });
+
+    // #5: one row for the registration, with the snapshot the school started with.
+    await this.audit.record(
+      AuditEvents.schoolCreated(
+        {
+          schoolId: created.id,
+          snapshot: schoolSnapshot(created),
+          createdBy: actor ? { userId: actor.id, role: actor.role, schoolId: actor.schoolId } : null,
+        },
+        auditContext,
+      ),
+    );
 
     return SchoolMapper.toEntity(created);
   }

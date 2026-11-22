@@ -37,6 +37,20 @@ export type TokenRefreshFailureReason =
 
 export type SessionRevocationReason = 'admin_action' | 'user_suspended' | 'token_reuse' | 'user_request';
 
+/** The mutable fields of a school, as they were before a change or became after it (#5). */
+export interface SchoolSnapshot {
+  name: string;
+  status: string;
+  domains: string[];
+  settings?: unknown;
+}
+
+/** `{ before, after }` for one changed field. */
+export type FieldChange = { before: unknown; after: unknown };
+
+/** The fields a school or domain change actually touched, keyed by field name. */
+export type SchoolChanges = Record<string, FieldChange>;
+
 const anonymous: AuditActor = { userId: null, role: null, schoolId: null };
 
 export const AuditEvents = {
@@ -173,6 +187,133 @@ export const AuditEvents = {
         ...(p.groupId !== undefined ? { groupId: p.groupId } : {}),
         role: p.role,
         previousRole: p.previousRole ?? null,
+      },
+      context,
+    };
+  },
+
+  /**
+   * A school was registered (`POST /schools`, #5, §4.5). `before` is null: there was no school.
+   *
+   * The `after` snapshot carries the mutable fields the platform cares about; `settings` goes through
+   * `redactSecrets()` like every other detail, so a provider key stored there is stored as "[REDACTED]".
+   */
+  schoolCreated(
+    p: { schoolId: string; snapshot: SchoolSnapshot; createdBy?: AuditActor | null },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.SCHOOL_CREATED,
+      actor: p.createdBy ?? anonymous,
+      entity: { type: 'school', id: p.schoolId },
+      details: { school: p.snapshot.name, before: null, after: p.snapshot },
+      context,
+    };
+  },
+
+  /**
+   * A school's name, settings or allowed domains were edited (`PATCH /schools/:id`, #5).
+   *
+   * `changes` only holds the fields that really moved, each as `{ before, after }`; the caller records
+   * nothing at all when the payload changes nothing.
+   */
+  schoolUpdated(
+    p: { schoolId: string; school: string; changes: SchoolChanges; updatedBy?: AuditActor | null },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.SCHOOL_UPDATED,
+      actor: p.updatedBy ?? anonymous,
+      entity: { type: 'school', id: p.schoolId },
+      details: { school: p.school, changes: p.changes },
+      context,
+    };
+  },
+
+  /** A school was deactivated (`PATCH /schools/:id/deactivate`, #5, §4.5). */
+  schoolDeactivated(
+    p: { schoolId: string; school: string; previousStatus: string; deactivatedBy?: AuditActor | null },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.SCHOOL_DEACTIVATED,
+      actor: p.deactivatedBy ?? anonymous,
+      entity: { type: 'school', id: p.schoolId },
+      details: { school: p.school, changes: { status: { before: p.previousStatus, after: 'deactivated' } } },
+      context,
+    };
+  },
+
+  /** A school was reactivated (`PATCH /schools/:id/reactivate`, #5, §4.5). */
+  schoolReactivated(
+    p: { schoolId: string; school: string; previousStatus: string; reactivatedBy?: AuditActor | null },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.SCHOOL_REACTIVATED,
+      actor: p.reactivatedBy ?? anonymous,
+      entity: { type: 'school', id: p.schoolId },
+      details: { school: p.school, changes: { status: { before: p.previousStatus, after: 'active' } } },
+      context,
+    };
+  },
+
+  /**
+   * An email domain was allowed for a school (`POST /schools/:id/domains`, #5, §4.6).
+   *
+   * `changes.domains` holds the whole allowed-domain set before and after, so a reader sees the effect
+   * on the school's login and invitation rules rather than just the row that was inserted.
+   */
+  schoolDomainAdded(
+    p: {
+      schoolId: string;
+      school: string;
+      domain: string;
+      domainsBefore: string[];
+      domainsAfter: string[];
+      addedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.SCHOOL_DOMAIN_ADDED,
+      actor: p.addedBy ?? anonymous,
+      entity: { type: 'school', id: p.schoolId },
+      details: {
+        school: p.school,
+        domain: p.domain,
+        changes: { domains: { before: p.domainsBefore, after: p.domainsAfter } },
+      },
+      context,
+    };
+  },
+
+  /** An email domain was removed from a school (`DELETE /schools/:id/domains/:domainId`, #5, §4.6). */
+  schoolDomainRemoved(
+    p: {
+      schoolId: string;
+      school: string;
+      domain: string;
+      domainsBefore: string[];
+      domainsAfter: string[];
+      removedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.SCHOOL_DOMAIN_REMOVED,
+      actor: p.removedBy ?? anonymous,
+      entity: { type: 'school', id: p.schoolId },
+      details: {
+        school: p.school,
+        domain: p.domain,
+        changes: { domains: { before: p.domainsBefore, after: p.domainsAfter } },
       },
       context,
     };
