@@ -400,29 +400,6 @@ describe('IdentityAndAccessService - update role (#45)', () => {
     });
   });
 
-  describe('deleteRole', () => {
-    it('refuses an actor without platform-wide system:manage', async () => {
-      const { service, prisma, remove } = setup();
-
-      await expect(service.deleteRole('role-1', schoolScopedAdmin)).rejects.toThrow(
-        'Only platform administrators may delete roles',
-      );
-      expect(prisma.role.findFirst).not.toHaveBeenCalled();
-      expect(remove).not.toHaveBeenCalled();
-    });
-
-    it('deletes an unassigned custom role', async () => {
-      const { service, prisma, remove, count } = setup();
-      prisma.role.findFirst.mockResolvedValueOnce(roleRow());
-      count.mockResolvedValueOnce(0);
-
-      const result = await service.deleteRole('role-1', platformAdmin);
-
-      expect(remove).toHaveBeenCalledWith({ where: { id: 'role-1' } });
-      expect(result.success).toBe(true);
-    });
-  });
-
   describe('permission ids stay aligned with codes (#45 review)', () => {
     // `documents.access.manage` sorts before `documents:access.manage` under UTF-16 but after it under
     // `localeCompare`, which is how the two arrays used to drift apart.

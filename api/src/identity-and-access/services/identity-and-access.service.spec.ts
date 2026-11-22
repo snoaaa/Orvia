@@ -892,8 +892,10 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         mockPrisma.role.findFirst.mockResolvedValueOnce({
           id: 'custom-id',
           name: 'CUSTOM_TA',
+          scope: 'school',
         });
         mockPrisma.userAssignment.count.mockResolvedValueOnce(0);
+        mockPrisma.documentAccess = { count: vi.fn().mockResolvedValue(0) };
 
         const result = await service.deleteRole('custom-id', platformAdmin);
         expect(result.success).toBe(true);

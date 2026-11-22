@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
@@ -118,5 +118,36 @@ export class RolesController {
     @Req() req: Request,
   ): Promise<RoleEntity> {
     return this.identityService.updateRole(id, dto, actor, auditContextFromRequest(req));
+  }
+
+  @Delete(':id')
+  @RequirePermission('system:manage')
+  @ApiOperation({
+    summary: 'Delete an unused custom role (#46)',
+    description:
+      'Removes a custom role that nobody holds. `id` is a role UUID or its name (case-insensitive).\n\n' +
+      '- **Base roles cannot be deleted** (400 `System base roles cannot be deleted`): the seed recreates them.\n' +
+      '- **A role still assigned to users is refused** (400) with the exact count, e.g. ' +
+      "`Cannot delete role 'X': still assigned to 3 user(s). Please reassign them before deleting.` — " +
+      'reassign the holders first, then delete.\n' +
+      '- Deleting a role also drops its permission rows and any document-access rule that granted it ' +
+      '(both cascade); the count of dropped rules is recorded in the `identity_access/role_deleted` audit event.\n' +
+      '- Unknown role → 404; a school-scoped `system:manage` holder (not a platform admin) → 403.',
+  })
+  @ApiParam({ name: 'id', description: 'Role UUID or name' })
+  @ApiResponse({
+    status: 200,
+    description: 'The role was deleted',
+    schema: { example: { success: true, message: "Role 'TEACHING_ASSISTANT' was successfully deleted" } },
+  })
+  @ApiResponse({ status: 400, description: 'Base role, or a role still assigned to users (the message names the count)' })
+  @ApiResponse({ status: 403, description: 'Not a platform admin (missing platform-wide system:manage)' })
+  @ApiResponse({ status: 404, description: 'Role not found' })
+  async deleteRole(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.identityService.deleteRole(id, actor, auditContextFromRequest(req));
   }
 }
