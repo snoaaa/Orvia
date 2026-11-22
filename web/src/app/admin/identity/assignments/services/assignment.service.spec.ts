@@ -19,15 +19,6 @@ describe('AssignmentService', () => {
 
   afterEach(() => httpMock.verify());
 
-  it('loads the current admin from /auth/me', () => {
-    let permissions: string[] = [];
-    service.getCurrentAdmin().subscribe((me) => (permissions = me.permissions));
-    const req = httpMock.expectOne(`${api}/auth/me`);
-    expect(req.request.method).toBe('GET');
-    req.flush({ id: 'a', permissions: ['users:assign_role'], isPlatformAdmin: false });
-    expect(permissions).toContain('users:assign_role');
-  });
-
   it('loads the groups of one school', () => {
     let result: unknown;
     service.getGroups('s1').subscribe((g) => (result = g));

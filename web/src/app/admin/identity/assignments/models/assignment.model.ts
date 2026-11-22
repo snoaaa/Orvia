@@ -31,10 +31,3 @@ export interface UpdateAssignmentPayload {
   /** `null` removes the group. */
   groupId?: string | null;
 }
-
-/** Subset of GET /auth/me used to decide what the admin may do. */
-export interface CurrentAdmin {
-  id: string;
-  permissions: string[];
-  isPlatformAdmin: boolean;
-}

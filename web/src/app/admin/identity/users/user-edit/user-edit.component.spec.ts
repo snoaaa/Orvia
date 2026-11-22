@@ -2,6 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
 import { of, throwError } from 'rxjs';
+import { ADMIN_TYPE_STORAGE_KEY } from 'src/app/admin/theme/layouts/admin-layout/navigation/navigation';
 import { PortalSessionService } from '../../services/portal-session.service';
 import { AssignmentService } from '../../assignments/services/assignment.service';
 import { ActiveSession, UserEntity, UserSchoolAssignment } from '../models/user.model';
@@ -311,6 +312,50 @@ describe('UserEditComponent', () => {
 
     it('does not add a separate assignments card', () => {
       expect(fixture.nativeElement.querySelector('app-user-assignments')).toBeNull();
+    });
+
+    describe('canAssign, read from PortalSessionService', () => {
+      it('is true for a platform admin, even without the permission code', () => {
+        signIn([], true);
+        expect(component.canAssign()).toBe(true);
+      });
+
+      it('is true for the * wildcard', () => {
+        signIn(['*'], false, ['s1']);
+        expect(component.canAssign()).toBe(true);
+      });
+
+      it('is true for users:assign_role', () => {
+        signIn(['users:read', 'users:assign_role'], false, ['s1']);
+        expect(component.canAssign()).toBe(true);
+      });
+
+      it('is false for an admin who only reads users', () => {
+        signIn(['users:read', 'users:update'], false, ['s1']);
+        expect(component.canAssign()).toBe(false);
+      });
+
+      it('is false when nobody is signed in, whatever the browser storage says', () => {
+        session.clearSession();
+        localStorage.setItem(ADMIN_TYPE_STORAGE_KEY, 'platform');
+        expect(component.canAssign()).toBe(false);
+        expect(component.canManageAssignments()).toBe(false);
+      });
+
+      it('follows the session when the account changes, without a reload', () => {
+        signIn(['users:assign_role'], false, ['s1']);
+        fixture.detectChanges();
+        expect(fixture.nativeElement.querySelector('.btn-edit-assignment')).not.toBeNull();
+
+        signIn(['users:read'], false, ['s1']);
+        fixture.detectChanges();
+        expect(component.canAssign()).toBe(false);
+        expect(fixture.nativeElement.querySelector('.btn-edit-assignment')).toBeNull();
+      });
+
+      it('does not call GET /auth/me itself: the admin comes from the session', () => {
+        expect((mockAssignmentService as Record<string, unknown>)['getCurrentAdmin']).toBeUndefined();
+      });
     });
 
     describe('create form', () => {

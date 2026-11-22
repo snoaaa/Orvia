@@ -5,7 +5,6 @@ import { environment } from 'src/environments/environment';
 import {
   AssignmentEntity,
   CreateAssignmentPayload,
-  CurrentAdmin,
   GroupOption,
   UpdateAssignmentPayload
 } from '../models/assignment.model';
@@ -21,11 +20,6 @@ import {
 export class AssignmentService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
-
-  /** Current admin with permissions (GET /auth/me). */
-  getCurrentAdmin(): Observable<CurrentAdmin> {
-    return this.http.get<CurrentAdmin>(`${this.apiUrl}/auth/me`);
-  }
 
   /** Groups of one school. */
   getGroups(schoolId: string): Observable<GroupOption[]> {

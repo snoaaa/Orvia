@@ -113,6 +113,18 @@ export class UserEditComponent implements OnInit {
     return [{ id: editing.schoolId, name: this.getAssignmentSchoolName(editing) }];
   });
 
+  /**
+   * True when the signed-in admin may create, edit and remove assignments (#61): a platform admin, the `*`
+   * wildcard or the `users:assign_role` permission, read from PortalSessionService (GET /auth/me). Nobody
+   * signed in means no access, whatever the browser storage says.
+   */
+  readonly canAssign = computed<boolean>(() => {
+    if (!this.session.user()) return false;
+    if (this.session.isPlatformAdmin()) return true;
+    const permissions = this.session.activePermissions();
+    return permissions.includes('*') || permissions.includes('users:assign_role');
+  });
+
   /** Name of the school the form works on, shown as a badge when the school select is hidden. */
   readonly formSchoolName = computed<string | null>(() => {
     const editing = this.editingAssignment();
@@ -359,7 +371,7 @@ export class UserEditComponent implements OnInit {
 
   /** True when the signed-in administrator may create, edit and remove this user's assignments. */
   canManageAssignments(): boolean {
-    return this.canTouchCurrentUser() && this.session.hasPermission('users:assign_role');
+    return this.canTouchCurrentUser() && this.canAssign();
   }
 
   /** The group of an assignment is not allowed on a platform role: the API rejects it. */
