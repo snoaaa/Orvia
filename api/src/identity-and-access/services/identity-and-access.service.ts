@@ -1389,7 +1389,29 @@ export class IdentityAndAccessService {
     return this.findRoleById(role.id);
   }
 
-  async deleteRole(id: string): Promise<{ success: boolean; message: string }> {
+  /**
+   * DELETE /roles/:id (#46), also behind the older DELETE /identity/roles/:id: removes an unused custom
+   * role.
+   *
+   * Platform admins only — the guard checks system:manage and this also refuses a school-scoped role
+   * holding it, so a school admin cannot remove a role of the platform. The six base roles are
+   * refused (400): they are recreated by the seed and cannot be deleted. A role that still has active
+   * assignments is refused too (400), naming how many users hold it, so nobody loses their access by
+   * accident; reassign them first. Deleting a role also drops its `role_permissions` rows and any
+   * `document_access` rule that granted it (both cascade), which is why an unused role is the only
+   * kind worth deleting; the number of dropped rules is recorded in the audit event.
+   */
+  async deleteRole(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<{ success: boolean; message: string }> {
+    // Authorization first: a school-scoped `system:manage` holder must learn nothing about which role
+    // ids or names exist, so they get 403 even for an unknown or base role.
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may delete roles');
+    }
+
     const role = await this.prisma.role.findFirst({
       where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
     });
@@ -1409,9 +1431,25 @@ export class IdentityAndAccessService {
       );
     }
 
+    // Counted before the delete, purely to report what the ON DELETE CASCADE is about to remove.
+    const documentAccessRules = await this.prisma.documentAccess.count({ where: { roleId: role.id } });
+
     await this.prisma.role.delete({
       where: { id: role.id },
     });
+
+    await this.audit.record(
+      AuditEvents.roleDeleted(
+        {
+          roleId: role.id,
+          role: role.name,
+          scope: role.scope,
+          documentAccessRulesRemoved: documentAccessRules,
+          deletedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+        },
+        auditContext,
+      ),
+    );
 
     return {
       success: true,

@@ -179,6 +179,36 @@ export const AuditEvents = {
   },
 
   /**
+   * An unused custom role was deleted (`DELETE /roles/:id`, #46).
+   *
+   * `documentAccessRulesRemoved` counts the `document_access` rules that cascaded away with the role,
+   * so the audit trail says what the publish state of those documents lost.
+   */
+  roleDeleted(
+    p: {
+      roleId: string;
+      role: string;
+      scope: string;
+      documentAccessRulesRemoved: number;
+      deletedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ROLE_DELETED,
+      actor: p.deletedBy ?? anonymous,
+      entity: { type: 'role', id: p.roleId },
+      details: {
+        role: p.role,
+        scope: p.scope,
+        documentAccessRulesRemoved: p.documentAccessRulesRemoved,
+      },
+      context,
+    };
+  },
+
+  /**
    * Document-management or other fine-grained permission granted to a staff member in a school (§4.5, #88).
    */
   permissionGranted(

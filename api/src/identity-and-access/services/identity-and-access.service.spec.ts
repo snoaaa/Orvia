@@ -877,10 +877,12 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         mockPrisma.role.findFirst.mockResolvedValueOnce({
           id: 'custom-id',
           name: 'CUSTOM_TA',
+          scope: 'school',
         });
         mockPrisma.userAssignment.count.mockResolvedValueOnce(0);
+        mockPrisma.documentAccess = { count: vi.fn().mockResolvedValue(0) };
 
-        const result = await service.deleteRole('custom-id');
+        const result = await service.deleteRole('custom-id', platformAdmin);
         expect(result.success).toBe(true);
         expect(mockPrisma.role.delete).toHaveBeenCalledWith({ where: { id: 'custom-id' } });
       });
@@ -891,7 +893,7 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           name: 'CONTENT_MANAGER',
         });
 
-        await expect(service.deleteRole('base-id')).rejects.toBeInstanceOf(BadRequestException);
+        await expect(service.deleteRole('base-id', platformAdmin)).rejects.toBeInstanceOf(BadRequestException);
       });
 
       it('blocks deleting role assigned to users and reports user count', async () => {
@@ -901,9 +903,16 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         });
         mockPrisma.userAssignment.count.mockResolvedValueOnce(3);
 
-        await expect(service.deleteRole('in-use-id')).rejects.toThrow(
+        await expect(service.deleteRole('in-use-id', platformAdmin)).rejects.toThrow(
           "Cannot delete role 'ACTIVE_ROLE': still assigned to 3 user(s)",
         );
+      });
+
+      it('refuses a school-scoped system:manage holder before looking the role up', async () => {
+        await expect(service.deleteRole('any-role', schoolAdmin)).rejects.toThrow(
+          'Only platform administrators may delete roles',
+        );
+        expect(mockPrisma.role.findFirst).not.toHaveBeenCalled();
       });
     });
   });

@@ -442,6 +442,31 @@ Platform admins only: the route needs `system:manage`, and the service also refu
 Answer 201 with the role (`id`, `name`, `scope`, sorted `permissions`, `assignedUsersCount`, `isBase`). Other
 roles get 403. The older `POST /identity/roles`, used by the web role editor, runs the same code.
 
+### Delete a role: `DELETE /roles/{id}` (#46, `system:manage`)
+
+```http
+DELETE /roles/{id}
+```
+
+Removes a custom role nobody holds. `{id}` is the role UUID or its **name** (case-insensitive).
+
+- **Base roles cannot be deleted** (400 `System base roles cannot be deleted`): the six system roles are
+  recreated by the seed, so they are only ever edited in `schema`-seeded form, never removed.
+- **A role that is still assigned is refused** (400) with the exact count:
+  `Cannot delete role 'TEACHING_ASSISTANT': still assigned to 3 user(s). Please reassign them before deleting.`
+  Count only **active** assignments, so a soft-deleted assignment (`DELETE /assignments/{id}`) no longer
+  blocks the delete.
+- **Platform admins only**: the route needs `system:manage`, and the service also refuses a school-scoped
+  role holding it (403 `Only platform administrators may delete roles`), checked *before* the role lookup so
+  a non-platform admin cannot probe which role ids exist.
+- Deleting also drops the role's `role_permissions` rows and any `document_access` rule that granted it
+  (both `ON DELETE CASCADE`). The number of dropped access rules is recorded in the audit event, so it is
+  visible when a document's audience lost a role.
+- Unknown role → 404. Answer 200 `{ "success": true, "message": "Role 'X' was successfully deleted" }`, and
+  the deletion is audited as `identity_access/role_deleted`.
+
+The older `DELETE /identity/roles/{id}`, used by the web role editor, runs the same code.
+
 ## Assignments
 
 `src/identity-and-access/controllers/assignments.controller.ts`, under the **Assignments** tag in Swagger
@@ -718,6 +743,7 @@ Same permissions and target checks as `POST`. Both record `document_access_chang
 | `authentication` | `session_revoked` | A session is revoked (admin action, suspension, token reuse) | the admin, or anonymous if automatic | `session` | `ownerUserId`, `reason` |
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
+| `identity_access` | `role_deleted` | An unused custom role is deleted (`DELETE /roles/{id}`, #46) | the platform admin | `role` | `role`, `scope`, `documentAccessRulesRemoved` |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `documents` | `document_published` | A document is published to new targets (`POST /documents/{id}/access`); not recorded when every target was already there | the admin or content manager | `document` | `spaceId`, `schoolId`, `rules` (the `type` and `targetId` of each target added) |

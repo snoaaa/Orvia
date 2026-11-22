@@ -342,13 +342,24 @@ export class IdentityAndAccessController {
 
   @Delete('roles/:id')
   @RequirePermission('system:manage')
-  @ApiOperation({ summary: 'Delete a custom role (blocked if base role or still assigned to users)' })
+  @ApiOperation({
+    summary: 'Delete a custom role (blocked if base role or still assigned to users)',
+    description:
+      'Older path of DELETE /roles/:id (#46), same rules and answers: base roles refused, a role still assigned ' +
+      'to users refused with its count, platform admins only (a school-scoped system:manage holder gets 403), ' +
+      'audited as `identity_access/role_deleted`.',
+  })
   @ApiParam({ name: 'id', description: 'Role UUID or name' })
   @ApiResponse({ status: 200, description: 'Role deleted' })
   @ApiResponse({ status: 400, description: 'Cannot delete base role or role currently assigned to users' })
+  @ApiResponse({ status: 403, description: 'Not a platform admin (missing platform-wide system:manage)' })
   @ApiResponse({ status: 404, description: 'Role not found' })
-  async deleteRole(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
-    return this.identityService.deleteRole(id);
+  async deleteRole(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.identityService.deleteRole(id, actor, auditContextFromRequest(req));
   }
 
   @Get('permissions')
