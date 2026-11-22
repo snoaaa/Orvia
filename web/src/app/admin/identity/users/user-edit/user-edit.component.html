@@ -198,7 +198,6 @@
                   id="assign-group-select"
                   class="form-select form-select-sm"
                   formControlName="groupId"
-                  [attr.disabled]="!assignmentForm.controls.schoolId.value || isLookupLoading() || groupDisabled ? '' : null"
                 >
                   <option value="">No group</option>
                   @for (g of groups(); track g.id) {
@@ -301,6 +300,7 @@
                           <button
                             type="button"
                             class="btn btn-sm btn-light-primary d-inline-flex align-items-center gap-1 me-1 btn-edit-assignment"
+                            [disabled]="assignmentMode() !== null"
                             (click)="openEditAssignmentForm(assignment)"
                             title="Edit assignment"
                           >
@@ -310,6 +310,7 @@
                           <button
                             type="button"
                             class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1 btn-remove-assignment"
+                            [disabled]="assignmentMode() !== null"
                             (click)="openRemoveAssignmentModal(assignment)"
                             title="Remove assignment"
                           >

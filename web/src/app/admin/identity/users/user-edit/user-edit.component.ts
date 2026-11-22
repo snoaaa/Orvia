@@ -157,9 +157,12 @@ export class UserEditComponent implements OnInit {
         }),
         switchMap((schoolId) => {
           if (!schoolId) {
+            this.isLookupLoading.set(false);
+            this.syncLookupControls();
             return of({ groups: [] as GroupOption[], roles: [] as AssignableRoleOption[] });
           }
           this.isLookupLoading.set(true);
+          this.syncLookupControls();
           return forkJoin({
             groups: this.assignmentService.getGroups(schoolId).pipe(
               catchError((error) => {
@@ -185,6 +188,7 @@ export class UserEditComponent implements OnInit {
           this.assignmentForm.markAsPristine();
           this.pendingEdit = null;
         }
+        this.syncLookupControls();
       });
   }
 
@@ -380,6 +384,22 @@ export class UserEditComponent implements OnInit {
     return selected?.scope === 'platform';
   }
 
+  /**
+   * The group and role selects stay disabled until a school is selected and while its groups and roles load,
+   * and the group also for a platform role. Done on the form controls, not on the template, so the form
+   * state and the screen cannot disagree; getRawValue() still returns the disabled values on submit.
+   */
+  private syncLookupControls(): void {
+    const { schoolId, role, groupId } = this.assignmentForm.controls;
+    const lookupsBlocked = !schoolId.value || this.isLookupLoading();
+    const setEnabled = (control: typeof role | typeof groupId, enabled: boolean): void => {
+      if (enabled && control.disabled) control.enable({ emitEvent: false });
+      if (!enabled && control.enabled) control.disable({ emitEvent: false });
+    };
+    setEnabled(role, !lookupsBlocked);
+    setEnabled(groupId, !lookupsBlocked && !this.groupDisabled);
+  }
+
   /** Edit mode: true when the role or the group differs from the saved assignment. */
   hasAssignmentChanges(): boolean {
     const current = this.editingAssignment();
@@ -395,7 +415,9 @@ export class UserEditComponent implements OnInit {
     this.assignmentForm.controls.schoolId.enable({ emitEvent: false });
     this.assignmentForm.reset({ schoolId: '', groupId: '', role: '' }, { emitEvent: false });
     this.groups.set([]);
+    this.rawRoles.set([]);
     this.assignmentMode.set('create');
+    this.syncLookupControls();
 
     // A school admin has a single school: preselect it so the groups and roles load right away.
     const available = this.availableSchools();
@@ -405,7 +427,7 @@ export class UserEditComponent implements OnInit {
   }
 
   openEditAssignmentForm(assignment: UserSchoolAssignment): void {
-    if (!this.canManageAssignments()) return;
+    if (!this.canManageAssignments() || this.assignmentMode()) return;
     this.editingAssignment.set(assignment);
     this.assignmentMode.set('edit');
     this.pendingEdit = { role: this.getAssignmentRoleName(assignment), groupId: assignment.groupId ?? '' };
@@ -426,11 +448,12 @@ export class UserEditComponent implements OnInit {
     if (this.groupDisabled) {
       this.assignmentForm.controls.groupId.setValue('');
     }
+    this.syncLookupControls();
   }
 
   /** Creates the assignment, or in edit mode sends only the fields that changed (PATCH keeps what is left out). */
   saveAssignment(): void {
-    if (this.assignmentForm.invalid || this.isAssigningRole() || !this.canManageAssignments()) return;
+    if (this.assignmentForm.invalid || this.isAssigningRole() || this.isLookupLoading() || !this.canManageAssignments()) return;
     const { schoolId, groupId, role } = this.assignmentForm.getRawValue();
 
     if (this.assignmentMode() === 'edit') {
@@ -458,6 +481,7 @@ export class UserEditComponent implements OnInit {
   }
 
   openRemoveAssignmentModal(assignment: UserSchoolAssignment): void {
+    if (this.assignmentMode()) return;
     this.assignmentToRemove.set(assignment);
     this.modalType.set('remove-assignment');
   }
@@ -673,9 +697,6 @@ export class UserEditComponent implements OnInit {
       next: () => {
         this.modalLoading.set(false);
         this.closeModal();
-        if (this.editingAssignment()?.id === target.id) {
-          this.closeAssignmentForm();
-        }
         this.toast.success('Assignment Removed', {
           description: `${this.getAssignmentRoleName(target)} in ${this.getAssignmentSchoolName(target)} has been removed.`
         });

@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
-import { of, throwError } from 'rxjs';
+import { Subject, of, throwError } from 'rxjs';
 import { ADMIN_TYPE_STORAGE_KEY } from 'src/app/admin/theme/layouts/admin-layout/navigation/navigation';
 import { PortalSessionService } from '../../services/portal-session.service';
 import { AssignmentService } from '../../assignments/services/assignment.service';
@@ -499,6 +499,147 @@ describe('UserEditComponent', () => {
       });
     });
 
+    describe('selects and row actions while the form is open', () => {
+      const select = (id: string) => fixture.nativeElement.querySelector(`#${id}`) as HTMLSelectElement;
+      const rowButtons = () =>
+        Array.from<HTMLButtonElement>(
+          fixture.nativeElement.querySelectorAll('.btn-edit-assignment, .btn-remove-assignment')
+        );
+
+      it('keeps the group and role disabled until a school is selected', () => {
+        component.openCreateAssignmentForm();
+        fixture.detectChanges();
+        const { groupId, role } = component.assignmentForm.controls;
+        expect(groupId.disabled).toBe(true);
+        expect(role.disabled).toBe(true);
+        expect(select('assign-group-select').disabled).toBe(true);
+        expect(select('assign-role-select').disabled).toBe(true);
+
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        fixture.detectChanges();
+        expect(groupId.enabled).toBe(true);
+        expect(role.enabled).toBe(true);
+        expect(select('assign-group-select').disabled).toBe(false);
+        expect(select('assign-role-select').disabled).toBe(false);
+
+        // going back to no school locks them again
+        component.assignmentForm.controls.schoolId.setValue('');
+        fixture.detectChanges();
+        expect(groupId.disabled).toBe(true);
+        expect(role.disabled).toBe(true);
+      });
+
+      it('keeps them disabled while the groups and roles load, then enables them', () => {
+        const groups$ = new Subject<any[]>();
+        mockAssignmentService.getGroups.mockReturnValue(groups$);
+        component.openCreateAssignmentForm();
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        fixture.detectChanges();
+
+        const { groupId, role } = component.assignmentForm.controls;
+        expect(component.isLookupLoading()).toBe(true);
+        expect(groupId.disabled).toBe(true);
+        expect(role.disabled).toBe(true);
+        expect(select('assign-role-select').disabled).toBe(true);
+
+        groups$.next([{ id: 'g3', schoolId: 's3', name: 'G3', type: 'class' }]);
+        groups$.complete();
+        fixture.detectChanges();
+        expect(component.isLookupLoading()).toBe(false);
+        expect(groupId.enabled).toBe(true);
+        expect(role.enabled).toBe(true);
+        expect(select('assign-role-select').disabled).toBe(false);
+      });
+
+      it('shows on the select the state of its form control', () => {
+        component.openCreateAssignmentForm();
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        component.assignmentForm.controls.groupId.disable({ emitEvent: false });
+        fixture.detectChanges();
+        expect(select('assign-group-select').disabled).toBe(true);
+        component.assignmentForm.controls.groupId.enable({ emitEvent: false });
+        fixture.detectChanges();
+        expect(select('assign-group-select').disabled).toBe(false);
+      });
+
+      it('locks the group for a platform role and unlocks it again for another role', () => {
+        component.openCreateAssignmentForm();
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        component.assignmentForm.patchValue({ groupId: 'g-s3', role: 'PLATFORM_ADMIN' });
+        component.onAssignmentRoleChange();
+        expect(component.assignmentForm.controls.groupId.disabled).toBe(true);
+        expect(component.assignmentForm.controls.groupId.value).toBe('');
+
+        component.assignmentForm.patchValue({ role: 'STAFF' });
+        component.onAssignmentRoleChange();
+        expect(component.assignmentForm.controls.groupId.enabled).toBe(true);
+      });
+
+      it('submits the raw values, including those of disabled controls', () => {
+        component.openCreateAssignmentForm();
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        component.assignmentForm.patchValue({ groupId: 'g-s3', role: 'PLATFORM_ADMIN' });
+        component.onAssignmentRoleChange();
+        const rawValue = vi.spyOn(component.assignmentForm, 'getRawValue');
+
+        component.saveAssignment();
+
+        expect(rawValue).toHaveBeenCalled();
+        // the group is disabled (and emptied) for a platform role, the school and role still go through
+        expect(mockAssignmentService.createAssignment).toHaveBeenCalledWith({
+          userId: 'user-123',
+          schoolId: 's3',
+          role: 'PLATFORM_ADMIN'
+        });
+      });
+
+      it('edit mode sends the changes although the school control is disabled', () => {
+        component.openEditAssignmentForm(assignments[0]);
+        expect(component.assignmentForm.controls.schoolId.disabled).toBe(true);
+        component.assignmentForm.patchValue({ role: 'PLATFORM_ADMIN' });
+        component.saveAssignment();
+        expect(mockAssignmentService.updateAssignment).toHaveBeenCalledWith('as-1', { role: 'PLATFORM_ADMIN' });
+      });
+
+      it('does not save while the groups and roles are still loading', () => {
+        mockAssignmentService.getGroups.mockReturnValue(new Subject<any[]>());
+        component.openCreateAssignmentForm();
+        component.assignmentForm.controls.schoolId.setValue('s3');
+        component.assignmentForm.patchValue({ role: 'STAFF' });
+        component.saveAssignment();
+        expect(mockAssignmentService.createAssignment).not.toHaveBeenCalled();
+      });
+
+      it('enables the Edit and Remove buttons when no form is open', () => {
+        const buttons = rowButtons();
+        expect(buttons.length).toBe(4);
+        expect(buttons.every((b) => !b.disabled)).toBe(true);
+      });
+
+      it('disables the Edit and Remove buttons while the create form is open, and enables them on cancel', () => {
+        component.openCreateAssignmentForm();
+        fixture.detectChanges();
+        expect(rowButtons().every((b) => b.disabled)).toBe(true);
+
+        component.closeAssignmentForm();
+        fixture.detectChanges();
+        expect(rowButtons().every((b) => !b.disabled)).toBe(true);
+      });
+
+      it('disables the Edit and Remove buttons while the edit form is open', () => {
+        component.openEditAssignmentForm(assignments[0]);
+        fixture.detectChanges();
+        expect(rowButtons().every((b) => b.disabled)).toBe(true);
+      });
+
+      it('ignores an edit request while a form is already open', () => {
+        component.openCreateAssignmentForm();
+        component.openEditAssignmentForm(assignments[0]);
+        expect(component.assignmentMode()).toBe('create');
+        expect(component.editingAssignment()).toBeNull();
+      });
+    });
+
     describe('remove', () => {
       it('asks for confirmation, removes the assignment and refreshes the list', () => {
         mockUserService.getUserById.mockClear();
@@ -537,11 +678,11 @@ describe('UserEditComponent', () => {
         expect(mockAssignmentService.removeAssignment).not.toHaveBeenCalled();
       });
 
-      it('closes the edit form of the assignment that was removed', () => {
+      it('cannot be started while the create or edit form is open', () => {
         component.openEditAssignmentForm(assignments[0]);
-        component.openRemoveAssignmentModal(assignments[0]);
-        component.handleModalConfirm();
-        expect(component.assignmentMode()).toBeNull();
+        component.openRemoveAssignmentModal(assignments[1]);
+        expect(component.modalType()).toBeNull();
+        expect(component.assignmentToRemove()).toBeNull();
       });
     });
   });
