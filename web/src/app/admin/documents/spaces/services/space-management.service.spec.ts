@@ -76,6 +76,39 @@ describe('SpaceManagementService', () => {
     });
   });
 
+  describe('getAllSchools', () => {
+    const schoolsUrl = `${environment.apiUrl}/schools`;
+    const schools = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ id: `s${from + i}`, name: `School ${from + i}` }));
+
+    it('reads every page of schools, 100 at a time', () => {
+      let result: { id: string }[] = [];
+      service.getAllSchools().subscribe((s) => (result = s));
+
+      const first = http.expectOne((r) => r.url === schoolsUrl && r.params.get('page') === '1');
+      expect(first.request.params.get('limit')).toBe('100');
+      first.flush({ data: schools(1, 100), total: 230, page: 1, limit: 100, totalPages: 3 });
+      http
+        .expectOne((r) => r.url === schoolsUrl && r.params.get('page') === '2')
+        .flush({ data: schools(101, 100), total: 230, page: 2, limit: 100, totalPages: 3 });
+      http
+        .expectOne((r) => r.url === schoolsUrl && r.params.get('page') === '3')
+        .flush({ data: schools(201, 30), total: 230, page: 3, limit: 100, totalPages: 3 });
+
+      expect(result.length).toBe(230);
+      expect(result.at(-1)?.id).toBe('s230');
+    });
+
+    it('stops after the first page when it holds every school', () => {
+      let result: { id: string }[] = [];
+      service.getAllSchools().subscribe((s) => (result = s));
+      http
+        .expectOne((r) => r.url === schoolsUrl)
+        .flush({ data: schools(1, 2), total: 2, page: 1, limit: 100, totalPages: 1 });
+      expect(result.length).toBe(2);
+    });
+  });
+
   describe('formErrors', () => {
     it('puts a duplicate name (409) on the name field', () => {
       const errors = service.formErrors(

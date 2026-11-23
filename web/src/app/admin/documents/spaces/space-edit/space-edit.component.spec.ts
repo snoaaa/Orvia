@@ -8,7 +8,6 @@ import {
   PortalSessionService,
   PortalSessionUser
 } from '../../../identity/services/portal-session.service';
-import { UserManagementService } from '../../../identity/users/services/user-management.service';
 import { SpaceEntity, SpaceFormErrors } from '../models/space.model';
 import { SpaceManagementService } from '../services/space-management.service';
 import { SpaceEditComponent } from './space-edit.component';
@@ -84,8 +83,8 @@ describe('SpaceEditComponent', () => {
     updateSpace: ReturnType<typeof vi.fn>;
     formErrors: ReturnType<typeof vi.fn>;
     errorMessage: ReturnType<typeof vi.fn>;
+    getAllSchools: ReturnType<typeof vi.fn>;
   };
-  let userService: { getSchools: ReturnType<typeof vi.fn> };
   let toast: { success: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
   let routeId: string | null;
 
@@ -114,16 +113,15 @@ describe('SpaceEditComponent', () => {
         .mockImplementation((payload) => of({ ...STORED, ...payload, id: 'new' })),
       updateSpace: vi.fn().mockReturnValue(of(STORED)),
       formErrors: vi.fn(),
-      errorMessage: vi.fn().mockReturnValue('Something went wrong.')
+      errorMessage: vi.fn().mockReturnValue('Something went wrong.'),
+      getAllSchools: vi.fn()
     };
-    userService = {
-      getSchools: vi.fn().mockReturnValue(
-        of([
-          { id: 'school-a', name: 'School A' },
-          { id: 'school-b', name: 'School B' }
-        ])
-      )
-    };
+    spaceService.getAllSchools = vi.fn().mockReturnValue(
+      of([
+        { id: 'school-a', name: 'School A' },
+        { id: 'school-b', name: 'School B' }
+      ])
+    );
     toast = { success: vi.fn(), error: vi.fn() };
 
     await TestBed.configureTestingModule({
@@ -133,7 +131,6 @@ describe('SpaceEditComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: SpaceManagementService, useValue: spaceService },
-        { provide: UserManagementService, useValue: userService },
         { provide: GoeyToastService, useValue: toast },
         {
           provide: ActivatedRoute,
@@ -169,7 +166,7 @@ describe('SpaceEditComponent', () => {
       create(SCHOOL_ADMIN);
       expect(element().querySelector('#space-school')).toBeNull();
       expect(component.form.controls.schoolId.value).toBe('school-a');
-      expect(userService.getSchools).not.toHaveBeenCalled();
+      expect(spaceService.getAllSchools).not.toHaveBeenCalled();
     });
 
     it('offers only the schools where the staff member manages documents, starting on the active one', () => {
@@ -256,7 +253,7 @@ describe('SpaceEditComponent', () => {
       fill({ name: 'Maths' });
       component.onSubmit();
       expect(spaceService.createSpace).not.toHaveBeenCalled();
-      expect(component.generalError()).toContain('do not manage documents in any school');
+      expect(component.generalError()).toContain('may not create spaces in any of your schools');
     });
   });
 
@@ -319,6 +316,59 @@ describe('SpaceEditComponent', () => {
       expect(element().querySelector('#space-form-error')?.textContent).toContain(
         'Something went wrong.'
       );
+    });
+  });
+
+  describe('review fixes', () => {
+    it('offers only the schools where the user may create spaces', () => {
+      session.selectSchool('school-a');
+      create(
+        user({
+          permissions: ['spaces:update', 'spaces:create'],
+          schoolIds: ['school-a', 'school-b'],
+          assignments: [
+            assignment('school-a', 'School A', ['spaces:update']),
+            assignment('school-b', 'School B', ['spaces:create'])
+          ]
+        })
+      );
+      expect(component.schoolOptions().map((s) => s.id)).toEqual(['school-b']);
+      expect(component.form.controls.schoolId.value).toBe('school-b');
+    });
+
+    it('a duplicate name in one school does not block saving in another', () => {
+      spaceService.formErrors.mockReturnValue({
+        fields: { name: "A space named 'Maths' already exists in this school" },
+        general: null
+      });
+      spaceService.createSpace.mockReturnValueOnce(
+        throwError(() => new HttpErrorResponse({ status: 409 }))
+      );
+      create(PLATFORM_ADMIN);
+      fill({ schoolId: 'school-a', name: 'Maths' });
+      component.onSubmit();
+      expect(component.fieldError('name')).toContain('already exists');
+
+      fill({ schoolId: 'school-b' });
+      expect(component.fieldError('name')).toBeNull();
+      component.onSubmit();
+      expect(spaceService.createSpace).toHaveBeenCalledTimes(2);
+      expect(spaceService.createSpace.mock.calls[1][0]).toMatchObject({
+        schoolId: 'school-b',
+        name: 'Maths'
+      });
+    });
+
+    it('an API error never blocks the next try with the same values', () => {
+      spaceService.formErrors.mockReturnValue({ fields: { name: 'Name is taken' }, general: null });
+      spaceService.createSpace.mockReturnValueOnce(
+        throwError(() => new HttpErrorResponse({ status: 409 }))
+      );
+      create(SCHOOL_ADMIN);
+      fill({ name: 'Maths' });
+      component.onSubmit();
+      component.onSubmit();
+      expect(spaceService.createSpace).toHaveBeenCalledTimes(2);
     });
   });
 });

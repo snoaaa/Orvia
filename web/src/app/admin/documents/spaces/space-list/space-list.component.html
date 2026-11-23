@@ -30,7 +30,7 @@
           placeholder="Search spaces by name..."
           aria-label="Search spaces by name"
           [maxlength]="searchMaxLength"
-          [ngModel]="searchTerm()"
+          [ngModel]="searchInput()"
           (ngModelChange)="onSearchChange($event)"
         />
         @if (canCreate()) {

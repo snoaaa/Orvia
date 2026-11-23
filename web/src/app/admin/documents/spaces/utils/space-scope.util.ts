@@ -1,19 +1,21 @@
-import { DOCUMENT_MANAGEMENT_PERMISSIONS } from 'src/app/admin/theme/layouts/admin-layout/navigation/navigation';
 import { PortalSchool, PortalSessionUser } from '../../../identity/services/portal-session.service';
+import { grantsApiPermission } from '../../shared/api-permissions.util';
 
 /**
- * The schools where a (non platform) user may create, edit and delete spaces: those where one of their
- * assignments grants a document-management permission, which the API accepts for `spaces:*` (#88, #97).
+ * The schools where a (non platform) user may use `permission` on spaces (`spaces:create` for the create
+ * form), with the API's rules for each assignment: a user with `spaces:update` in school A and
+ * `spaces:create` in school B may only create spaces in school B.
  */
-export function schoolsManagingSpaces(
+export function schoolsGranting(
   user: PortalSessionUser | null,
-  schools: readonly PortalSchool[]
+  schools: readonly PortalSchool[],
+  permission: string
 ): PortalSchool[] {
   if (!user) return [];
-  const managed = new Set(
+  const granted = new Set(
     (user.assignments ?? [])
-      .filter((a) => (a.permissions ?? []).some((p) => DOCUMENT_MANAGEMENT_PERMISSIONS.has(p)))
+      .filter((a) => grantsApiPermission(a.permissions ?? [], permission))
       .map((a) => a.schoolId)
   );
-  return schools.filter((s) => managed.has(s.id));
+  return schools.filter((s) => granted.has(s.id));
 }

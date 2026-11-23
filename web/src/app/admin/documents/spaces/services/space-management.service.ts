@@ -1,9 +1,10 @@
 import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable } from 'rxjs';
+import { Observable, forkJoin, map, of, switchMap } from 'rxjs';
 import { environment } from 'src/environments/environment';
 import {
   CreateSpacePayload,
+  SchoolOption,
   PaginatedSpaces,
   SpaceEntity,
   SpaceFormErrors,
@@ -19,6 +20,9 @@ const FORM_FIELDS: readonly SpaceFormField[] = [
   'language',
   'privacy'
 ];
+
+/** Largest page `GET /schools` accepts. */
+const SCHOOLS_PAGE_SIZE = 100;
 
 /** Calls the document spaces API (#97, #98, #99) for the portal screens (#113). */
 @Injectable({
@@ -49,6 +53,26 @@ export class SpaceManagementService {
 
   updateSpace(id: string, payload: UpdateSpacePayload): Observable<SpaceEntity> {
     return this.http.patch<SpaceEntity>(`${this.baseUrl}/${encodeURIComponent(id)}`, payload);
+  }
+
+  /**
+   * Every school, for the platform admin's school filter and field: `GET /schools` returns at most 100 per
+   * page, so the other pages are read too (in parallel).
+   */
+  getAllSchools(): Observable<SchoolOption[]> {
+    const page = (n: number) =>
+      this.http.get<{ data: SchoolOption[]; total: number; limit: number; totalPages?: number }>(
+        `${environment.apiUrl}/schools`,
+        { params: new HttpParams().set('page', String(n)).set('limit', String(SCHOOLS_PAGE_SIZE)) }
+      );
+    return page(1).pipe(
+      switchMap((first) => {
+        const pages = first.totalPages || Math.ceil(first.total / first.limit) || 1;
+        if (pages <= 1) return of(first.data);
+        const rest = Array.from({ length: pages - 1 }, (_, i) => page(i + 2));
+        return forkJoin(rest).pipe(map((others) => [first, ...others].flatMap((p) => p.data)));
+      })
+    );
   }
 
   /** Soft delete: the API answers 204 and hides the documents of the space with it. */
