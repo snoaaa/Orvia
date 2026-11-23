@@ -1,15 +1,15 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { assertSchoolAccess, canInSchool, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
+import { assertSchoolAccess, canInSchool, schoolIdFilter } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { buildDocumentStorageKey } from '../../storage/utils/storage-key.util.js';
-import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UploadDocumentDto } from '../dto/index.js';
+import type { CreateDocumentDto, CreateSpaceDto, ListDocumentsQueryDto, ListSpacesQueryDto, UpdateDocumentDto, UpdateSpaceDto, UploadDocumentDto } from '../dto/index.js';
 import {
   DocumentEntity,
   DocumentProcessingStatusEntity,
@@ -37,6 +37,8 @@ import { ProcessingQueueService } from './processing-queue.service.js';
 
 /** 403 message when a document of the reader's school is not published to them (#109). */
 const NOT_PUBLISHED_TO_YOU = 'This document is not published to your school, role, class, group or account';
+
+const spaceNameTakenMessage = (name: string) => `A space named '${name}' already exists in this school`;
 
 @Injectable()
 export class DocumentsService {
@@ -512,36 +514,158 @@ export class DocumentsService {
     });
   }
 
-  /** School-scoped users must create the space in one of their schools. */
-  async createSpace(dto: CreateSpaceDto, actor: AuthenticatedUser): Promise<SpaceEntity> {
-    if (dto.schoolId) {
-      assertSchoolAccess(actor, 'documents:manage', dto.schoolId);
-    } else if (schoolsWithPermission(actor, 'documents:manage') !== 'all') {
-      throw new BadRequestException('schoolId is required: you can only create spaces in your own school');
+  /**
+   * POST /documents/spaces (§4.1, #97): the school is always explicit. 403 outside the schools where
+   * the caller holds `spaces:create` (or `documents:manage`), 404 for an unknown school, 409 if the
+   * school already has a space with this name. Records `space_created`.
+   */
+  async createSpace(
+    dto: CreateSpaceDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SpaceEntity> {
+    assertSchoolAccess(actor, 'spaces:create', dto.schoolId);
+
+    const school = await this.prisma.school.findUnique({
+      where: { id: dto.schoolId },
+      select: { id: true, status: true },
+    });
+    if (!school) {
+      throw new NotFoundException(`School with ID ${dto.schoolId} not found`);
     }
-    const id = randomUUID();
-    let schoolId = dto.schoolId;
-    if (!schoolId) {
-      const existingSchool = await this.prisma.school.findFirst();
-      if (existingSchool) {
-        schoolId = existingSchool.id;
-      } else {
-        const defaultSchool = await this.prisma.school.create({
-          data: {
-            id: randomUUID(),
-            name: 'Default Institution',
-            allowedDomains: '*',
-          },
-        });
-        schoolId = defaultSchool.id;
-      }
+    if (school.status?.toLowerCase() === 'deactivated') {
+      throw new BadRequestException('Cannot create a space in a deactivated school');
+    }
+    await this.assertSpaceNameIsFree(dto.schoolId, dto.name);
+
+    const data = SpaceMapper.fromDtoToCreateInput(dto, randomUUID(), dto.schoolId);
+    let created;
+    try {
+      created = await this.prisma.$transaction(async (tx) => {
+        const inserted = await tx.space.create({ data });
+        await this.audit.record(
+          AuditEvents.spaceCreated(
+            {
+              spaceId: inserted.id,
+              schoolId: inserted.schoolId,
+              name: inserted.name,
+              language: inserted.language,
+              privacy: inserted.privacy,
+              actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+            },
+            auditContext,
+          ),
+          tx,
+        );
+        return inserted;
+      });
+    } catch (error) {
+      throw this.spaceNameConflictOr(error, dto.name);
     }
 
-    const data = SpaceMapper.fromDtoToCreateInput(dto, id, schoolId);
-    const created = await this.prisma.space.create({
-      data,
-    });
     return SpaceMapper.toEntity(created);
+  }
+
+  /**
+   * PATCH /documents/spaces/:id (§4.1, #97): edits the name, description, main language and privacy.
+   * The school of a space never changes. 404 for an unknown space, 403 outside the schools where the
+   * caller holds `spaces:update` (or `documents:manage`), 400 for an empty body or deactivated school,
+   * 409 on a name already used in the school. Records `space_updated` inside the transaction with the
+   * changed fields; a request that changes nothing writes nothing and records nothing.
+   */
+  async updateSpace(
+    id: string,
+    dto: UpdateSpaceDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<SpaceEntity> {
+    const next = {
+      name: dto.name,
+      // null and '' both clear the description.
+      description: dto.description === undefined ? undefined : dto.description || null,
+      language: dto.language,
+      privacy: dto.privacy,
+    };
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM spaces WHERE id = ${id} FOR UPDATE`;
+        const space = await tx.space.findUnique({
+          where: { id },
+          include: { school: { select: { status: true } } },
+        });
+        if (!space) {
+          throw new NotFoundException(`Space with ID ${id} not found`);
+        }
+        assertSchoolAccess(actor, 'spaces:update', space.schoolId);
+        if (space.school?.status?.toLowerCase() === 'deactivated') {
+          throw new BadRequestException('Cannot update a space of a deactivated school');
+        }
+
+        if (Object.values(next).every((value) => value === undefined)) {
+          throw new BadRequestException('Provide at least one field to update: name, description, language or privacy');
+        }
+
+        const changes: Record<string, { from: unknown; to: unknown }> = {};
+        for (const field of ['name', 'description', 'language', 'privacy'] as const) {
+          if (next[field] !== undefined && next[field] !== space[field]) {
+            changes[field] = { from: space[field], to: next[field] };
+          }
+        }
+        if (Object.keys(changes).length === 0) {
+          return SpaceMapper.toEntity(space);
+        }
+
+        if (changes.name) {
+          await this.assertSpaceNameIsFree(space.schoolId, changes.name.to as string, id, tx);
+        }
+
+        const updated = await tx.space.update({
+          where: { id },
+          data: Object.fromEntries(Object.entries(changes).map(([field, change]) => [field, change.to])),
+        });
+
+        await this.audit.record(
+          AuditEvents.spaceUpdated(
+            {
+              spaceId: id,
+              schoolId: space.schoolId,
+              actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+              changes,
+            },
+            auditContext,
+          ),
+          tx,
+        );
+        return SpaceMapper.toEntity(updated);
+      });
+    } catch (error) {
+      throw this.spaceNameConflictOr(error, dto.name ?? id);
+    }
+  }
+
+  /** Clear 409 in the normal case; the unique index (school_id, name) still decides under concurrency. */
+  private async assertSpaceNameIsFree(
+    schoolId: string,
+    name: string,
+    exceptSpaceId?: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<void> {
+    const taken = await tx.space.findFirst({
+      where: { schoolId, name, ...(exceptSpaceId ? { id: { not: exceptSpaceId } } : {}) },
+      select: { id: true },
+    });
+    if (taken) {
+      throw new ConflictException(spaceNameTakenMessage(name));
+    }
+  }
+
+  /** Maps the unique-index violation (two simultaneous requests) to the same 409; returns other errors as is. */
+  private spaceNameConflictOr(error: unknown, name: string): unknown {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return new ConflictException(spaceNameTakenMessage(name));
+    }
+    return error;
   }
 
   /** Get a single space by ID, scoped to caller's school access (§4.5, §4.7, #89). */

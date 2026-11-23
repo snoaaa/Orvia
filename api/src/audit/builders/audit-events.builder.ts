@@ -589,4 +589,67 @@ export const AuditEvents = {
       context,
     };
   },
+
+  /** A document space was created in a school (POST /documents/spaces, #97). */
+  spaceCreated(
+    p: {
+      spaceId: string;
+      schoolId: string;
+      name: string;
+      language: string;
+      privacy: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.SPACE_CREATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        // Stamp the target space's school rather than actor.schoolId so platform/multi-school edits
+        // stay visible to that school's admins and never leak to another school's audit trail.
+        schoolId: p.schoolId,
+      },
+      entity: { type: 'space', id: p.spaceId },
+      details: {
+        schoolId: p.schoolId,
+        name: p.name,
+        language: p.language,
+        privacy: p.privacy,
+      },
+      context,
+    };
+  },
+
+  /**
+   * Name, description, language and/or privacy of a space changed (PATCH /documents/spaces/:id, #97).
+   * `changes` only holds the fields whose value really changed. The school of a space never changes.
+   */
+  spaceUpdated(
+    p: {
+      spaceId: string;
+      schoolId: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+      changes: Record<string, { from: unknown; to: unknown }>;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.SPACE_UPDATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.schoolId,
+      },
+      entity: { type: 'space', id: p.spaceId },
+      details: {
+        schoolId: p.schoolId,
+        changes: p.changes,
+      },
+      context,
+    };
+  },
 };
