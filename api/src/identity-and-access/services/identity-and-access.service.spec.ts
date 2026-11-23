@@ -147,7 +147,7 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             ...data,
             id: data.id || 'generated-role-id',
             rolePermissions: [],
-            _count: { assignments: 0 },
+            assignments: [],
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
@@ -157,12 +157,14 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             id: where.id,
             ...data,
             rolePermissions: [],
-            _count: { assignments: 0 },
+            assignments: [],
             createdAt: new Date(),
             updatedAt: new Date(),
           }),
         ),
         delete: vi.fn().mockResolvedValue({ id: 'deleted-role-id' }),
+        // deleteRole deletes through deleteMany so a lost race is a count of 0, not a P2025 crash.
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       rolePermission: {
         createMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -174,13 +176,18 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       userAssignment: {
         create: vi.fn().mockResolvedValue({}),
         update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
         count: vi.fn().mockResolvedValue(0),
+        // The holders check uses findMany with `distinct: ['userId']` (#46 review).
+        findMany: vi.fn().mockResolvedValue([]),
       },
       passwordSetupToken: {
         create: vi.fn().mockResolvedValue({}),
       },
       $transaction: vi.fn().mockImplementation(async (callback: any) => {
         const tx = {
+          // `updateRole` resolves and locks the role row in one statement (#45 review).
+          $queryRaw: vi.fn().mockResolvedValue([{ id: 'custom-id' }]),
           user: {
             create: vi.fn().mockImplementation(({ data }: { data: any }) =>
               Promise.resolve({
@@ -191,9 +198,13 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
               }),
             ),
           },
-          userAssignment: {
-            create: vi.fn().mockResolvedValue({}),
-          },
+          // Role edits and invitations both write through these collections; reusing the same
+          // doubles keeps `expect(mockPrisma.role.update)` style assertions working.
+          userAssignment: mockPrisma.userAssignment,
+          role: mockPrisma.role,
+          rolePermission: mockPrisma.rolePermission,
+          // `deleteRole` counts the `document_access` rules the cascade removes, inside the transaction.
+          documentAccess: mockPrisma.documentAccess ?? { count: vi.fn().mockResolvedValue(0) },
           passwordSetupToken: {
             create: vi.fn().mockResolvedValue({}),
           },
@@ -765,8 +776,8 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             id: 'role-1',
             name: 'PLATFORM_ADMIN',
             scope: 'platform',
-            rolePermissions: [{ permission: { code: 'system:manage' } }],
-            _count: { assignments: 1 },
+            rolePermissions: [{ permission: { id: 'p-sys', code: 'system:manage' } }],
+            assignments: [{ userId: 'u-1' }],
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -774,8 +785,8 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
             id: 'role-2',
             name: 'TA',
             scope: 'school',
-            rolePermissions: [{ permission: { code: 'documents:read' } }],
-            _count: { assignments: 4 },
+            rolePermissions: [{ permission: { id: 'p-doc', code: 'documents:read' } }],
+            assignments: [{ userId: 'u-1' }, { userId: 'u-2' }, { userId: 'u-3' }, { userId: 'u-4' }],
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -801,8 +812,8 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           id: 'role-custom-id',
           name: 'CUSTOM_ROLE',
           scope: 'school',
-          rolePermissions: [{ permission: { code: 'users:read' } }],
-          _count: { assignments: 2 },
+          rolePermissions: [{ permission: { id: 'p-ur', code: 'users:read' } }],
+          assignments: [{ userId: 'u-1' }, { userId: 'u-2' }],
           createdAt: new Date(),
           updatedAt: new Date(),
         });
@@ -828,6 +839,8 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           id: 'custom-id',
           name: 'OLD_NAME',
           scope: 'school',
+          rolePermissions: [],
+          assignments: [],
         });
         mockPrisma.role.findUnique.mockResolvedValueOnce(null);
         mockPrisma.permission.findMany.mockResolvedValueOnce([{ id: 'p2', code: 'spaces:read' }]);
@@ -835,17 +848,21 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           id: 'custom-id',
           name: 'NEW_NAME',
           scope: 'group',
-          rolePermissions: [{ permission: { code: 'spaces:read' } }],
-          _count: { assignments: 0 },
+          rolePermissions: [{ permission: { id: 'p2', code: 'spaces:read' } }],
+          assignments: [],
           createdAt: new Date(),
           updatedAt: new Date(),
         });
 
-        const result = await service.updateRole('custom-id', {
-          name: 'new_name',
-          scope: 'group',
-          permissions: ['spaces:read'],
-        });
+        const result = await service.updateRole(
+          'custom-id',
+          {
+            name: 'new_name',
+            scope: 'group',
+            permissions: ['spaces:read'],
+          },
+          platformAdmin,
+        );
 
         expect(mockPrisma.role.update).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -865,9 +882,13 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         });
 
         await expect(
-          service.updateRole('base-id', {
-            name: 'RENAMED_SCHOOL_ADMIN',
-          }),
+          service.updateRole(
+            'base-id',
+            {
+              name: 'RENAMED_SCHOOL_ADMIN',
+            },
+            platformAdmin,
+          ),
         ).rejects.toBeInstanceOf(BadRequestException);
       });
     });
@@ -877,12 +898,15 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
         mockPrisma.role.findFirst.mockResolvedValueOnce({
           id: 'custom-id',
           name: 'CUSTOM_TA',
+          scope: 'school',
         });
+        mockPrisma.userAssignment.findMany.mockResolvedValueOnce([]);
         mockPrisma.userAssignment.count.mockResolvedValueOnce(0);
+        mockPrisma.documentAccess = { count: vi.fn().mockResolvedValue(0) };
 
-        const result = await service.deleteRole('custom-id');
+        const result = await service.deleteRole('custom-id', platformAdmin);
         expect(result.success).toBe(true);
-        expect(mockPrisma.role.delete).toHaveBeenCalledWith({ where: { id: 'custom-id' } });
+        expect(mockPrisma.role.deleteMany).toHaveBeenCalledWith({ where: { id: 'custom-id' } });
       });
 
       it('rejects deleting system base roles', async () => {
@@ -891,7 +915,7 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           name: 'CONTENT_MANAGER',
         });
 
-        await expect(service.deleteRole('base-id')).rejects.toBeInstanceOf(BadRequestException);
+        await expect(service.deleteRole('base-id', platformAdmin)).rejects.toBeInstanceOf(BadRequestException);
       });
 
       it('blocks deleting role assigned to users and reports user count', async () => {
@@ -899,11 +923,22 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
           id: 'in-use-id',
           name: 'ACTIVE_ROLE',
         });
-        mockPrisma.userAssignment.count.mockResolvedValueOnce(3);
+        mockPrisma.userAssignment.findMany.mockResolvedValueOnce([
+          { userId: 'u1' },
+          { userId: 'u2' },
+          { userId: 'u3' },
+        ]);
 
-        await expect(service.deleteRole('in-use-id')).rejects.toThrow(
+        await expect(service.deleteRole('in-use-id', platformAdmin)).rejects.toThrow(
           "Cannot delete role 'ACTIVE_ROLE': still assigned to 3 user(s)",
         );
+      });
+
+      it('refuses a school-scoped system:manage holder before looking the role up', async () => {
+        await expect(service.deleteRole('any-role', schoolAdmin)).rejects.toThrow(
+          'Only platform administrators may delete roles',
+        );
+        expect(mockPrisma.role.findFirst).not.toHaveBeenCalled();
       });
     });
   });

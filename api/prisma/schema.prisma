@@ -377,6 +377,8 @@ model Message {
   modelUsed      String    @default("default") @map("model_used")
   parameters     Json?
   status         String    @default("completed")
+  /// The answer says the documents do not contain enough evidence (#119): no citations, no invented answer.
+  notEnoughEvidence Boolean  @default(false) @map("not_enough_evidence")
   authSnapshot   Json?     @map("auth_snapshot")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
@@ -397,8 +399,11 @@ model MessageReference {
   id                String   @id @default(uuid())
   messageId         String   @map("message_id")
   documentVersionId String   @map("document_version_id")
+  /// Number of the citation in the answer text: `[1]` refers to the reference with marker 1 (#119).
+  marker            Int
   pageOrImageId     String   @map("page_or_image_id")
   excerpt           String   @db.Text
+  /// Zone on the page as JSON `{"x","y","width","height"}`, fractions of the page from 0 to 1 (#119).
   coordinates       String?
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
@@ -406,6 +411,7 @@ model MessageReference {
   message           Message         @relation(fields: [messageId], references: [id], onDelete: Cascade)
   documentVersion   DocumentVersion @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
 
+  @@unique([messageId, marker])
   @@index([messageId])
   @@index([documentVersionId])
   @@map("message_references")

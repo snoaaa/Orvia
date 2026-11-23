@@ -179,6 +179,82 @@ export const AuditEvents = {
   },
 
   /**
+   * A custom role was edited through `PATCH /roles/:id` (#45): its name, scope and/or permission set.
+   *
+   * `previousName` / `previousScope` keep the before-values of the fields that can move, so a
+   * scope-only edit (`school` → `group`) is still readable in the trail; `addedPermissions` /
+   * `removedPermissions` carry the difference against the previous set, so a reader can tell a rename
+   * from a capability change without diffing two snapshots.
+   */
+  roleUpdated(
+    p: {
+      roleId: string;
+      role: string;
+      previousName: string;
+      previousScope: string;
+      scope: string;
+      permissions: string[];
+      addedPermissions: string[];
+      removedPermissions: string[];
+      updatedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ROLE_UPDATED,
+      actor: p.updatedBy ?? anonymous,
+      entity: { type: 'role', id: p.roleId },
+      details: {
+        role: p.role,
+        previousName: p.previousName,
+        previousScope: p.previousScope,
+        scope: p.scope,
+        permissions: [...p.permissions].sort(),
+        addedPermissions: [...p.addedPermissions].sort(),
+        removedPermissions: [...p.removedPermissions].sort(),
+      },
+      context,
+    };
+  },
+
+  /**
+   * An unused custom role was deleted (`DELETE /roles/:id`, #46).
+   *
+   * `documentAccessRulesRemoved` counts the `document_access` rules that cascaded away with the role, so
+   * the audit trail says what the publish state of those documents lost.
+   *
+   * `assignmentRecordsRemoved` counts the `user_assignments` rows the cascade removed: normally only
+   * soft-deleted tombstones (a role with an active assignment is refused), kept for the mobile delta sync
+   * (#49), so the trail does not lose them silently.
+   */
+  roleDeleted(
+    p: {
+      roleId: string;
+      role: string;
+      scope: string;
+      documentAccessRulesRemoved: number;
+      assignmentRecordsRemoved: number;
+      deletedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ROLE_DELETED,
+      actor: p.deletedBy ?? anonymous,
+      entity: { type: 'role', id: p.roleId },
+      details: {
+        role: p.role,
+        scope: p.scope,
+        documentAccessRulesRemoved: p.documentAccessRulesRemoved,
+        assignmentRecordsRemoved: p.assignmentRecordsRemoved,
+      },
+      context,
+    };
+  },
+
+  /**
    * Document-management or other fine-grained permission granted to a staff member in a school (§4.5, #88).
    */
   permissionGranted(

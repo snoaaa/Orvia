@@ -425,7 +425,28 @@ not a member → 404 `User <id> is not a member of this group`. Deleted group �
 ## Roles
 
 `src/identity-and-access/controllers/roles.controller.ts`, under the **Roles** tag in Swagger (Section 4.5).
-Platform admins only: the route needs `system:manage`, and the service also refuses a school-scoped role holding it.
+Reading needs `users:assign_role` (platform and school admins); writing needs `system:manage`, and the
+service also refuses a school-scoped role holding it. The six base roles are **read-only** — the seed
+recreates them — so only a custom role can be edited.
+
+Two rules hold on every write (`POST` and `PATCH`):
+
+- **`system:manage` implies the platform scope.** A role that grants `system:manage` (or the `*` wildcard)
+  may only exist with `scope: 'platform'`; a `school` or `group` role holding it is 400
+  (`A role that grants system:manage must have the platform scope`), so no school role can administer the
+  platform.
+- **The scope of an assigned role is frozen.** `PATCH` refuses to change `scope` while
+  `assignedUsersCount > 0` (400, "still assigned to N user(s)"): `schoolsWithPermission()` treats a
+  platform-scoped assignment as **every** school, so re-scoping a role that people already hold would
+  silently widen (or narrow) their access. Reassign the holders first.
+
+### Read roles and their permissions: `GET /roles`, `GET /roles/{id}` (`users:assign_role`)
+
+`GET /roles` returns every role, sorted by name: `id`, `name`, `scope`, the sorted permission `permissions`
+(codes), the matching `permissionIds`, `assignedUsersCount` (active assignments) and `isBase`.
+`GET /roles/{id}` answers the same shape for one role, and takes either its UUID or its **name**
+(case-insensitive); an unknown role is 404. Both are what a role editor loads before a `PATCH`, and what
+answers "which permissions does this role grant?" — base roles included, e.g. `GET /roles/STUDENT`.
 
 ### Create a role: `POST /roles` (#44, `system:manage`)
 
@@ -435,12 +456,87 @@ Platform admins only: the route needs `system:manage`, and the service also refu
 
 - `name`: 2–50 letters, digits, `_` or `-`, stored in upper case. Unique ignoring case (409, enforced by the
   unique index, so two simultaneous requests cannot both succeed). The six base role names are reserved (400).
-- `scope`: the documentary scope, `platform`, `school` or `group`.
-- `permissions`: at least one permission **code**, as listed by `GET /permissions`, no repeats. An unknown code
-  is 400 and nothing is created. The role and its permissions are written in one transaction.
+- `scope`: the documentary scope, `platform`, `school` or `group` (see the two rules above).
+- `permissions`: at least one permission **code**, as listed by `GET /permissions`, no repeats, none blank
+  (400). An unknown code is 400 and nothing is created. The role and its permissions are written in one
+  transaction.
 
-Answer 201 with the role (`id`, `name`, `scope`, sorted `permissions`, `assignedUsersCount`, `isBase`). Other
-roles get 403. The older `POST /identity/roles`, used by the web role editor, runs the same code.
+Answer 201 with the role (`id`, `name`, `scope`, sorted `permissions`, `permissionIds`, `assignedUsersCount`,
+`isBase`). Other roles get 403. The older `POST /identity/roles`, used by the web role editor, runs the same code.
+
+### Edit a role and its permissions: `PATCH /roles/{id}` (#45, `system:manage`)
+
+```json
+{ "name": "TEACHING_ASSISTANT_2", "scope": "group", "permissionIds": ["<uuid>", "<uuid>"] }
+```
+
+Every field is optional — `name`, `scope`, and **one** of `permissions` (codes) or `permissionIds` (ids, as
+returned by `GET /permissions` and by `GET /roles`) — but at least one must be sent (400 otherwise), and the
+whole payload is validated before anything is written:
+
+- **Base roles cannot be edited** (400 `System base roles cannot be edited`). Renaming a custom role *to* a
+  base role name is 400 too, and a name already taken is 409 (also when two concurrent renames race: the
+  unique index answers 409, not 500).
+- The permission set is **replaced**, not merged: an empty array makes the role grant nothing, an unknown,
+  blank or over-long (100+ characters) code or id is 400, and sending both spellings is 400. Codes are
+  trimmed before they are deduplicated, so `["documents:read", " documents:read "]` is the same 400 as the
+  unpadded duplicate; `permissionIds` are matched case-insensitively (an upper-case UUID is accepted).
+- **A field sent as `null` is a 400**, never a crash or a silent wipe: `name`, `scope`, `permissions` and
+  `permissionIds` accept *absent* (`undefined`) or a valid value, nothing else.
+- The two rules above apply: `system:manage` needs the platform scope, and the scope of an assigned role
+  cannot change.
+- **The role row is locked (`SELECT ... FOR UPDATE`) before any of this is decided**, so the
+  assigned-role rule cannot be raced: `POST /assignments` locks the same row, so a re-scope and an
+  assignment cannot both go through (the loser gets 400, or 409 `changed scope while the assignment was
+  being created`), and a role can never end up platform-scoped with a school assignment created against it.
+- A payload that changes nothing writes nothing and audits nothing.
+- The role row, its permission set, the **`updated_at` of its active assignments** *and* the audit row are
+  written in **one transaction**, so a failed audit append rolls the edit back instead of leaving an
+  unaudited change (Section 4.7's mobile sync included).
+- Permissions are read from the database on every request, so a user holding the role is allowed or refused
+  by the new set **on their very next request**; the change is audited as `identity_access/role_updated`
+  with `previousName`, `previousScope`, `scope`, and the permission diff (`addedPermissions`,
+  `removedPermissions`) — a scope-only edit is therefore readable in the trail.
+
+Answer 200 with the updated role (same shape as `GET /roles/{id}`). The older
+`PATCH /identity/roles/{id}`, used by the web role editor, runs the same code.
+
+`permissions` and `permissionIds` are parallel arrays: both are built from one list sorted by code, so
+`permissionIds[i]` always belongs to `permissions[i]` (this matters for the dotted codes, where UTF-16
+order and `localeCompare` disagree).
+
+### Delete a role: `DELETE /roles/{id}` (#46, `system:manage`)
+
+```http
+DELETE /roles/{id}
+```
+
+Removes a custom role nobody holds. `{id}` is the role UUID or its **name** (case-insensitive).
+
+- **Base roles cannot be deleted** (400 `System base roles cannot be deleted`): the six system roles are
+  recreated by the seed, so they are never removed.
+- **A role that is still assigned is refused** (400) with the exact count:
+  `Cannot delete role 'TEACHING_ASSISTANT': still assigned to 3 user(s). Please reassign them before deleting.`
+  The count is of **distinct users** (one person holding the role in two schools is one user), and only
+  **active** assignments count, so a soft-deleted assignment (`DELETE /assignments/{id}`) no longer blocks
+  the delete.
+- **Platform admins only**: the route needs `system:manage`, and the service also refuses a school-scoped
+  role holding it (403 `Only platform administrators may delete roles`), checked *before* the role lookup so
+  a non-platform admin cannot probe which role ids exist.
+- **One transaction, one lock.** The lookup, the checks, the counts, the delete and the audit row all run in
+  a single `$transaction` that starts by locking the role row (`SELECT ... FOR UPDATE`), and the delete goes
+  through `deleteMany` so a role removed in the meantime answers **404** instead of a Prisma `P2025` 500.
+  Two concurrent deletes therefore answer `200` + `404` with **one** audit row, an assignment being created
+  at the same time cannot slip between the count and the delete (both lock the same row; the assignment gets
+  a clean 400/409, never a foreign-key 500), and a failed audit append rolls the deletion back.
+- Deleting also drops the role's `role_permissions` rows, any `document_access` rule that granted it and any
+  remaining `user_assignments` rows (all `ON DELETE CASCADE`). The audit event records both counts:
+  `documentAccessRulesRemoved` (so a document's audience change is visible) and `assignmentRecordsRemoved`
+  (soft-deleted tombstones kept for the mobile delta sync, #49, which the cascade wipes otherwise).
+- Unknown role → 404. Answer 200 `{ "success": true, "message": "Role 'X' was successfully deleted" }`, and
+  the deletion is audited as `identity_access/role_deleted`.
+
+The older `DELETE /identity/roles/{id}`, used by the web role editor, runs the same code.
 
 ## Assignments
 
@@ -761,6 +857,8 @@ SELECT school_id, name, COUNT(*) FROM spaces GROUP BY school_id, name HAVING COU
 | `authentication` | `session_revoked` | A session is revoked (admin action, suspension, token reuse) | the admin, or anonymous if automatic | `session` | `ownerUserId`, `reason` |
 | `identity_access` | `user_invited` | A user is created/invited (`POST /identity/users`) | the inviting admin | `user` | `email`, `schoolId` |
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
+| `identity_access` | `role_updated` | A custom role is edited (`PATCH /roles/{id}`, #45); not recorded when nothing changes | the platform admin | `role` | `role`, `previousName`, `previousScope`, `scope`, `permissions`, `addedPermissions`, `removedPermissions` |
+| `identity_access` | `role_deleted` | An unused custom role is deleted (`DELETE /roles/{id}`, #46) | the platform admin | `role` | `role`, `scope`, `documentAccessRulesRemoved`, `assignmentRecordsRemoved` |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `documents` | `document_published` | A document is published to new targets (`POST /documents/{id}/access`); not recorded when every target was already there | the admin or content manager | `document` | `spaceId`, `schoolId`, `rules` (the `type` and `targetId` of each target added) |
@@ -809,7 +907,7 @@ Otherwise these routes answer 404. Remove them once the real auth endpoints exis
 Requires `conversations:read`. Every user (including platform and school admins) only reads **their own** conversations here; monitoring uses dedicated routes. Soft-deleted conversations and soft-deleted messages are never returned, and requesting another user's conversation returns `404`.
 
 - `GET /conversations`: paginated (`page`, `limit` capped at `100`), ordered newest first (`updatedAt DESC, createdAt DESC, id DESC`). Optional filters: `spaceId` (UUID) and `q` (title search, trimmed).
-- `GET /conversations/:id`: returns the conversation with chronological messages (`createdAt ASC`) and citations (`documentId`, `versionId`, `documentName`, `versionNumber`, `pageOrImageId`, `excerpt`, `coordinates`, `available`).
+- `GET /conversations/:id`: returns the conversation with chronological messages (`createdAt ASC`), each in the format of the chat contract below.
 - `GET /conversations/:id/messages`: returns the chronological messages and citations for the conversation.
 - `GET /conversations/:id/messages/:messageId/status` (`conversations:read`, #122): polling endpoint returning `{ messageId, conversationId, status, ready, modelUsed, errorCode, updatedAt, answer }` where `status` is `pending | generating | done | failed` and `answer` is populated once `done`.
 - `PATCH /conversations/:id` (`conversations:update`, #124): renames a conversation owned by the caller (`title` trimmed, 1–191 characters).
@@ -817,3 +915,66 @@ Requires `conversations:read`. Every user (including platform and school admins)
 - `POST /conversations/saved-answers` & `GET /conversations/saved-answers` & `DELETE /conversations/saved-answers/:id` (#125): bookmark, list (newest first, paginated), and unbookmark completed assistant answers (`answers:save` / `conversations:read`).
 - `POST /conversations/:id/messages/:messageId/share` & `GET /conversations/shared/:token` (#125): generate a signed share link/text and resolve it for a receiver, stripping any citations whose source documents are not visible to the receiver (`redactedCitationsCount`).
 - `POST /conversations/reports` (`answers:report`, #125) & `GET /conversations/reports` (`metrics:view`, #125): report an assistant answer (`hallucination`, `toxic`, `incorrect_citation`, `irrelevant`, `incomplete`, `other`) and list reports scoped to the admin's school(s) (or all schools for platform admins).
+
+### Chat contract (#119)
+
+The format shared by the mobile app, the portal and the chat backend (spec §4.2, §4.3). It is fixed in Swagger
+(`AskQuestionDto`, `MessageEntity`, `MessageCitationEntity`, `CitationZoneEntity`) and checked by
+`test/conversations-ask.e2e-spec.ts`; change it only with the mobile and web developers.
+
+**Asking: `POST /conversations/{id}/messages`** (`messages:send`). The conversation is `{id}`; the body is:
+
+| Field | Rules |
+|---|---|
+| `question` | Required, trimmed, 1 to 4000 characters |
+| `spaceIds` | Optional, up to 10 different space UUIDs to search; left out: the conversation's space. Spaces the caller may not see never contribute |
+
+Any other field (`role`, `content`, `modelUsed`, `parameters`...) is a **400**: the client never chooses the role or
+the model. Someone else's conversation, or a deleted one, is a **404**. The answer is `201` with the **pending answer**;
+poll `GET /conversations/{id}/messages/{messageId}/status` with its `id` until `status` is `done` or `failed`.
+Storing the question and generating the answer are #120 and #121: until then the pending answer is not stored.
+
+**A message (question or answer)**, as returned by every chat route:
+
+| Field | Meaning |
+|---|---|
+| `role` | `user` (question) or `assistant` (answer) |
+| `content` | The question, or the answer text with citation markers `[1]`, `[2]`... (empty while pending) |
+| `status` | `pending`, `generating`, `done` or `failed`; questions are `done`. Older stored values (`completed`) are given as `done`; a missing or unknown one as `pending`, on every route |
+| `notEnoughEvidence` | `true` when the documents do not contain the answer: `citations` is empty and `content` says so |
+| `citations` | The sources, ordered by `marker`; empty for questions |
+| `modelUsed`, `createdAt` | The model that answered and when |
+
+A "not enough evidence" answer never shows or counts citations, shared answers included (`redactedCitationsCount` is 0).
+
+**A citation:** `marker` (the `n` of `[n]` in the text), `documentId`, `versionId`, `documentName`, `versionNumber`,
+`pageOrImageId` (`page_<n>` or an image id), `excerpt`, `zone` and `available` (false once the document is deleted or
+the cited version is no longer available; the citation stays so the answer keeps making sense).
+
+`zone` is where the excerpt is on the page: `{ x, y, width, height }` as fractions of the page (0 to 1, from the
+top-left corner), or `null` when unknown. It is stored as that JSON in `message_references.coordinates`; anything else
+there (such as older pixel coordinates) is given as `null`, so a client never draws a zone it cannot place.
+
+```json
+{
+  "id": "3f6c...", "conversationId": "9a1b...", "role": "assistant",
+  "content": "Backpropagation applies the chain rule layer by layer [1], starting from the loss [2].",
+  "modelUsed": "mock-rag-v1", "parameters": null, "status": "done", "notEnoughEvidence": false,
+  "citations": [
+    { "id": "c1...", "marker": 1, "documentId": "d1...", "versionId": "v1...", "documentName": "Neural Networks Lecture 4",
+      "versionNumber": 2, "pageOrImageId": "page_14", "excerpt": "The chain rule applied to...",
+      "zone": { "x": 0.1, "y": 0.42, "width": 0.8, "height": 0.12 }, "available": true },
+    { "id": "c2...", "marker": 2, "documentId": "d2...", "versionId": "v2...", "documentName": "Course notes",
+      "versionNumber": 1, "pageOrImageId": "page_3", "excerpt": "The loss function measures...",
+      "zone": null, "available": true }
+  ],
+  "createdAt": "2026-11-21T10:00:05.000Z", "updatedAt": "2026-11-21T10:00:05.000Z"
+}
+```
+
+A "not enough evidence" answer: `{ ..., "content": "The documents available to you do not contain this information.",
+"status": "done", "notEnoughEvidence": true, "citations": [] }`.
+
+**Storage** (migration `13_chat_answer_contract`): `messages.not_enough_evidence` (false by default) and
+`message_references.marker` (unique per message). Existing references were numbered 1, 2, 3... per message in the
+order they were listed so far. Whoever stores an answer (#121) writes the markers that its text uses.
