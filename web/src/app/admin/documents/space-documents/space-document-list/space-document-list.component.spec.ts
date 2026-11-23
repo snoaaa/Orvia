@@ -379,7 +379,7 @@ describe('SpaceDocumentListComponent', () => {
       expect(window.open).toHaveBeenCalledWith('', '_blank');
       expect(documentService.getCurrentFile).toHaveBeenCalledWith('d1');
       expect(tab.location.href).toBe('blob:file');
-      expect(component.openingId()).toBeNull();
+      expect(component.isOpening('d1')).toBe(false);
     });
 
     it('closes the new tab and explains when the file cannot be loaded', () => {
@@ -462,6 +462,157 @@ describe('SpaceDocumentListComponent', () => {
         description: 'Something went wrong.'
       });
       expect(component.isDeleting()).toBe(false);
+    });
+  });
+
+  describe('review fixes', () => {
+    it('keeps the space error when the documents load, and retries the space', () => {
+      spaceService.getSpace.mockReturnValueOnce(
+        throwError(() => new HttpErrorResponse({ status: 500 }))
+      );
+      documentService.getDocuments.mockReturnValue(of(page([])));
+      create();
+      expect(component.spaceError()).toBe('Space error.');
+      expect(element().querySelector('#document-list-error')?.textContent).toContain(
+        'Space error.'
+      );
+      expect(element().querySelector('#document-list-empty')).toBeNull();
+
+      component.retry();
+      fixture.detectChanges();
+      expect(spaceService.getSpace).toHaveBeenCalledTimes(2);
+      expect(component.spaceError()).toBe('');
+      expect(element().querySelector('#space-documents-title')?.textContent).toContain(
+        'Mathematics'
+      );
+    });
+
+    it("goes back to the spaces for another school's space (403)", () => {
+      spaceService.getSpace.mockReturnValue(
+        throwError(() => new HttpErrorResponse({ status: 403 }))
+      );
+      create();
+      expect(router.navigate).toHaveBeenCalledWith(['/admin/spaces']);
+    });
+
+    it('keeps refreshing statuses after a failed automatic refresh, without an error message', () => {
+      vi.useFakeTimers();
+      documentService.getDocuments.mockReturnValue(of(page([doc('d1', 'ocr')])));
+      create();
+      const before = loads();
+
+      documentService.getDocuments.mockReturnValueOnce(
+        throwError(() => new HttpErrorResponse({ status: 0 }))
+      );
+      vi.advanceTimersByTime(DOCUMENT_STATUS_REFRESH_MS);
+      expect(loads()).toBe(before + 1);
+      expect(component.errorMessage()).toBe('');
+      expect(toast.error).not.toHaveBeenCalled();
+
+      documentService.getDocuments.mockReturnValue(of(page([doc('d1', 'available')])));
+      vi.advanceTimersByTime(DOCUMENT_STATUS_REFRESH_MS);
+      expect(loads()).toBe(before + 2);
+      expect(component.documents()[0].currentVersion?.status).toBe('available');
+    });
+
+    it('a page change while typing sends the typed text once, from the first page', () => {
+      documentService.getDocuments.mockReturnValue(of(page([doc('d1', 'available')], 30, 1, 10)));
+      create();
+      vi.useFakeTimers();
+      const before = loads();
+      component.onSearchChange('alg');
+      component.goToPage(2);
+      expect(loads()).toBe(before + 1);
+      expect(lastQuery()).toMatchObject({ page: 1, q: 'alg' });
+      vi.advanceTimersByTime(DOCUMENT_FILTER_DEBOUNCE_MS * 3);
+      expect(loads()).toBe(before + 1);
+    });
+
+    it('an automatic refresh while typing keeps the filters the list shows', () => {
+      vi.useFakeTimers();
+      documentService.getDocuments.mockReturnValue(of(page([doc('d1', 'pending')])));
+      create();
+      component.onSearchChange('alg');
+      vi.advanceTimersByTime(DOCUMENT_FILTER_DEBOUNCE_MS - 1);
+      // Not yet: the refresh only fires after DOCUMENT_STATUS_REFRESH_MS; force one now.
+      component.loadDocuments(true);
+      expect(lastQuery()).toMatchObject({ q: '' });
+      vi.advanceTimersByTime(1);
+      expect(lastQuery()).toMatchObject({ q: 'alg', page: 1 });
+    });
+
+    it('does not send more tags than the API accepts, and says so', () => {
+      create();
+      vi.useFakeTimers();
+      const before = loads();
+      component.onTagFilterChange('a,b,c,d,e,f,g,h,i,j,k');
+      fixture.detectChanges();
+      expect(component.tooManyTags()).toBe(true);
+      expect(element().querySelector('#document-tag-filter-error')?.textContent).toContain(
+        'At most 10 tags'
+      );
+      vi.advanceTimersByTime(DOCUMENT_FILTER_DEBOUNCE_MS);
+      expect(loads()).toBe(before);
+
+      component.onTagFilterChange('a,b');
+      vi.advanceTimersByTime(DOCUMENT_FILTER_DEBOUNCE_MS);
+      expect(lastQuery()).toMatchObject({ tags: 'a,b' });
+    });
+
+    it('shows the last page when the page asked for no longer exists', () => {
+      documentService.getDocuments
+        .mockReturnValueOnce(of({ data: [], total: 10, page: 2, limit: 10, totalPages: 1 }))
+        .mockReturnValue(of(page([doc('d1', 'available')], 10, 1, 10)));
+      create();
+      expect(lastQuery()).toMatchObject({ page: 1 });
+      expect(component.documents().map((d) => d.id)).toEqual(['d1']);
+    });
+
+    it('opens several documents at once, each row on its own', () => {
+      create();
+      const tabs = [
+        { location: { href: '' }, close: vi.fn() },
+        { location: { href: '' }, close: vi.fn() }
+      ];
+      vi.spyOn(window, 'open')
+        .mockReturnValueOnce(tabs[0] as unknown as Window)
+        .mockReturnValueOnce(tabs[1] as unknown as Window);
+      const first = new Subject<Blob>();
+      documentService.getCurrentFile
+        .mockReturnValueOnce(first)
+        .mockReturnValueOnce(of(new Blob(['x'])));
+      URL.createObjectURL = vi.fn().mockReturnValue('blob:file');
+      URL.revokeObjectURL = vi.fn();
+
+      component.openDocument(doc('d1', 'available'));
+      fixture.detectChanges();
+      const rows = element().querySelectorAll('tbody tr');
+      expect((rows[0].querySelector('.document-open-action') as HTMLButtonElement).disabled).toBe(
+        true
+      );
+      expect((rows[1].querySelector('.document-open-action') as HTMLButtonElement).disabled).toBe(
+        false
+      );
+
+      component.openDocument(doc('d2', 'error'));
+      expect(tabs[1].location.href).toBe('blob:file');
+      expect(component.isOpening('d1')).toBe(true);
+      expect(component.isOpening('d2')).toBe(false);
+    });
+
+    it('closes the empty tab when the page is left before the file arrives', () => {
+      create();
+      const tab = { location: { href: '' }, close: vi.fn() };
+      vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
+      documentService.getCurrentFile.mockReturnValue(new Subject<Blob>());
+      component.openDocument(doc('d1', 'available'));
+      fixture.destroy();
+      expect(tab.close).toHaveBeenCalled();
+    });
+
+    it('offers the document actions exactly when the API accepts them', () => {
+      create(user(['documents:publish', 'spaces:read']));
+      expect(component.canManage()).toBe(true);
     });
   });
 });

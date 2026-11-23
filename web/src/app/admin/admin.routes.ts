@@ -104,7 +104,8 @@ export const adminRoutes: Routes = [
       },
       {
         path: 'spaces/:spaceId/documents',
-        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['documents'])],
+        // Readers open documents; managers also edit and delete them (same rules as the API).
+        canActivate: [apiPermissionGuard('documents:read', 'documents:manage')],
         loadComponent: () =>
           import('./documents/space-documents/space-document-list/space-document-list.component').then(
             (c) => c.SpaceDocumentListComponent

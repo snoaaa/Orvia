@@ -4,11 +4,12 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
-import { EMPTY, Subject, catchError, switchMap } from 'rxjs';
+import { EMPTY, Subject, catchError, finalize, switchMap } from 'rxjs';
 import { PortalSessionService } from '../../../identity/services/portal-session.service';
 import { ConfirmationModalComponent } from '../../../identity/users/components/confirmation-modal/confirmation-modal.component';
 import { SpaceEntity } from '../../spaces/models/space.model';
 import { SpaceManagementService } from '../../spaces/services/space-management.service';
+import { sessionGrants } from '../../shared/api-permissions.util';
 import { DocumentMetadataModalComponent } from '../document-metadata-modal/document-metadata-modal.component';
 import {
   DOCUMENT_SEARCH_MAX_LENGTH,
@@ -21,6 +22,7 @@ import {
   SpaceDocument,
   documentStatusOption,
   documentTypeLabel,
+  DOCUMENT_MAX_TAGS,
   tagList
 } from '../models/document.model';
 import { SpaceDocumentService } from '../services/space-document.service';
@@ -69,6 +71,8 @@ export class SpaceDocumentListComponent {
 
   readonly spaceId = this.route.snapshot.paramMap.get('spaceId') ?? '';
   readonly space = signal<SpaceEntity | null>(null);
+  /** Why the space could not be loaded (kept apart from the documents' error, which a page load clears). */
+  readonly spaceError = signal('');
 
   readonly documents = signal<SpaceDocument[]>([]);
   readonly total = signal(0);
@@ -79,18 +83,31 @@ export class SpaceDocumentListComponent {
   readonly isUpdating = signal(false);
   readonly errorMessage = signal('');
 
+  /** What is typed in the search and tag boxes. */
+  readonly searchInput = signal('');
+  readonly tagInput = signal('');
+  /** The search and tags the list shows: the typed text once typing pauses (or another action needs a page). */
   readonly searchTerm = signal('');
   readonly tagFilter = signal('');
+  readonly maxTags = DOCUMENT_MAX_TAGS;
+  /** More tags typed than the API accepts: the list keeps the last valid tags until they are fixed. */
+  readonly tooManyTags = computed(
+    () => new Set(tagList(this.tagInput().toLowerCase())).size > DOCUMENT_MAX_TAGS
+  );
   readonly statusFilter = signal<DocumentStatus | ''>('');
   readonly typeFilter = signal<DocumentType | ''>('');
 
   readonly editTarget = signal<SpaceDocument | null>(null);
   readonly deleteTarget = signal<SpaceDocument | null>(null);
   readonly isDeleting = signal(false);
-  readonly openingId = signal<string | null>(null);
+  /** Documents whose file is being downloaded to open it (each row on its own). */
+  readonly openingIds = signal<ReadonlySet<string>>(new Set());
 
-  /** Edit, versions, access and delete need document-management rights, like the API. */
-  readonly canManage = computed(() => this.session.hasPermission('documents:manage'));
+  /**
+   * Edit, versions, access and delete need `documents:manage` with the API's rules (any document or space
+   * management permission grants it there), so the buttons shown always work.
+   */
+  readonly canManage = computed(() => sessionGrants(this.session, 'documents:manage'));
   readonly hasFilters = computed(
     () =>
       this.searchTerm().trim() !== '' ||
@@ -106,6 +123,8 @@ export class SpaceDocumentListComponent {
   private readonly reload$ = new Subject<void>();
   private filterTimer?: ReturnType<typeof setTimeout>;
   private refreshTimer?: ReturnType<typeof setTimeout>;
+  /** Whether the request in flight is an automatic status refresh. */
+  private quietLoad = false;
 
   constructor() {
     // switchMap keeps only the answer of the latest request; errors are handled per request.
@@ -147,22 +166,35 @@ export class SpaceDocumentListComponent {
     });
   }
 
-  /** Fetches the page again; `quiet` skips the loading indicator (automatic status refresh). */
+  /**
+   * Fetches the page again. `quiet` is the automatic status refresh: no loading indicator, no error message
+   * (it simply tries again later), and it keeps the filters the list shows instead of applying half-typed text.
+   */
   loadDocuments(quiet = false): void {
     clearTimeout(this.refreshTimer);
-    if (!quiet && this.documents().length > 0) this.isUpdating.set(true);
-    if (!quiet) this.errorMessage.set('');
+    if (!quiet) {
+      this.applyTypedFilters();
+      if (this.documents().length > 0) this.isUpdating.set(true);
+      this.errorMessage.set('');
+    }
+    this.quietLoad = quiet;
     this.reload$.next();
   }
 
   onSearchChange(term: string): void {
-    this.searchTerm.set(term);
+    this.searchInput.set(term);
     this.reloadAfterTyping();
   }
 
   onTagFilterChange(tags: string): void {
-    this.tagFilter.set(tags);
+    this.tagInput.set(tags);
     this.reloadAfterTyping();
+  }
+
+  /** Retries what failed: the space, the documents, or both. */
+  retry(): void {
+    if (!this.space()) this.loadSpace();
+    this.loadDocuments();
   }
 
   onStatusFilterChange(status: DocumentStatus | ''): void {
@@ -177,6 +209,9 @@ export class SpaceDocumentListComponent {
 
   clearFilters(): void {
     clearTimeout(this.filterTimer);
+    this.filterTimer = undefined;
+    this.searchInput.set('');
+    this.tagInput.set('');
     this.searchTerm.set('');
     this.tagFilter.set('');
     this.statusFilter.set('');
@@ -200,7 +235,7 @@ export class SpaceDocumentListComponent {
    * blockers allow it) and receives the file once it is downloaded with the session's token.
    */
   openDocument(doc: SpaceDocument): void {
-    if (this.openingId()) return;
+    if (this.isOpening(doc.id)) return;
     const tab = this.browserDocument.defaultView?.open('', '_blank');
     if (!tab) {
       this.toast?.error('Could not open the document', {
@@ -208,22 +243,34 @@ export class SpaceDocumentListComponent {
       });
       return;
     }
-    this.openingId.set(doc.id);
-    this.documentService.getCurrentFile(doc.id).subscribe({
-      next: (file) => {
-        this.openingId.set(null);
-        const url = URL.createObjectURL(file);
-        tab.location.href = url;
-        setTimeout(() => URL.revokeObjectURL(url), OPENED_FILE_URL_LIFETIME_MS);
-      },
-      error: (error) => {
-        this.openingId.set(null);
-        tab.close();
-        this.toast?.error('Could not open the document', {
-          description: this.documentService.errorMessage(error, 'The file could not be loaded.')
-        });
-      }
-    });
+    this.setOpening(doc.id, true);
+    let shown = false;
+    this.documentService
+      .getCurrentFile(doc.id)
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        finalize(() => {
+          this.setOpening(doc.id, false);
+          // Failed, or the page was left before the file arrived: do not leave an empty tab behind.
+          if (!shown) tab.close();
+        })
+      )
+      .subscribe({
+        next: (file) => {
+          const url = URL.createObjectURL(file);
+          tab.location.href = url;
+          shown = true;
+          setTimeout(() => URL.revokeObjectURL(url), OPENED_FILE_URL_LIFETIME_MS);
+        },
+        error: (error) =>
+          this.toast?.error('Could not open the document', {
+            description: this.documentService.errorMessage(error, 'The file could not be loaded.')
+          })
+      });
+  }
+
+  isOpening(id: string): boolean {
+    return this.openingIds().has(id);
   }
 
   openEditModal(doc: SpaceDocument): void {
@@ -291,7 +338,44 @@ export class SpaceDocumentListComponent {
 
   private reloadAfterTyping(): void {
     clearTimeout(this.filterTimer);
-    this.filterTimer = setTimeout(() => this.firstPage(), DOCUMENT_FILTER_DEBOUNCE_MS);
+    this.filterTimer = setTimeout(() => {
+      this.filterTimer = undefined;
+      // Nothing to send while the typed tags are over the limit and the search is unchanged.
+      if (this.typedFiltersChanged()) this.loadDocuments();
+    }, DOCUMENT_FILTER_DEBOUNCE_MS);
+  }
+
+  /**
+   * Applies what was typed in the search and tag boxes before a request, and cancels the pending one: a
+   * page, filter or size change made while typing never sends the old text, and the timer never sends a
+   * second request afterwards. New text starts from the first page. Too many tags are not sent (the API
+   * would refuse them); the box shows why.
+   */
+  private applyTypedFilters(): void {
+    clearTimeout(this.filterTimer);
+    this.filterTimer = undefined;
+    if (this.typedFiltersChanged()) {
+      this.searchTerm.set(this.searchInput());
+      if (!this.tooManyTags()) this.tagFilter.set(this.tagInput());
+      this.currentPage.set(1);
+    }
+  }
+
+  /** Whether the typed search or (valid) tags differ from those the list shows. */
+  private typedFiltersChanged(): boolean {
+    return (
+      this.searchInput() !== this.searchTerm() ||
+      (!this.tooManyTags() && this.tagInput() !== this.tagFilter())
+    );
+  }
+
+  private setOpening(id: string, opening: boolean): void {
+    this.openingIds.update((ids) => {
+      const next = new Set(ids);
+      if (opening) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   }
 
   private firstPage(): void {
@@ -300,6 +384,7 @@ export class SpaceDocumentListComponent {
   }
 
   private loadSpace(): void {
+    this.spaceError.set('');
     this.spaceService
       .getSpace(this.spaceId)
       .pipe(takeUntilDestroyed(this.destroyRef))
@@ -307,23 +392,31 @@ export class SpaceDocumentListComponent {
         next: (space) => this.space.set(space),
         error: (error) => {
           const message = this.spaceService.errorMessage(error, 'The space could not be loaded.');
-          // 400 is an invalid id in the address: there is no such space either.
-          if (error?.status === 404 || error?.status === 400) {
+          // 400 is an invalid id in the address and 403 a space of another school: none of them is
+          // a space this user can open.
+          if ([400, 403, 404].includes(error?.status)) {
             this.toast?.error('Space not found', { description: message });
             void this.router.navigate(['/admin/spaces']);
             return;
           }
-          this.errorMessage.set(message);
+          this.spaceError.set(message);
         }
       });
   }
 
   private showPage(res: PaginatedDocuments): void {
+    const totalPages = res.totalPages || Math.ceil(res.total / res.limit) || 1;
+    // A page past the end (documents deleted meanwhile, by someone else too): show the last page instead.
+    if (res.data.length === 0 && res.total > 0 && res.page > totalPages) {
+      this.currentPage.set(totalPages);
+      this.loadDocuments(this.quietLoad);
+      return;
+    }
     this.documents.set(res.data);
     this.total.set(res.total);
     this.currentPage.set(res.page);
     this.pageSize.set(res.limit);
-    this.totalPages.set(res.totalPages || Math.ceil(res.total / res.limit) || 1);
+    this.totalPages.set(totalPages);
     this.isInitialLoading.set(false);
     this.isUpdating.set(false);
     this.errorMessage.set('');
@@ -333,6 +426,11 @@ export class SpaceDocumentListComponent {
   private showLoadError(error: unknown): void {
     this.isInitialLoading.set(false);
     this.isUpdating.set(false);
+    if (this.quietLoad) {
+      // A failed automatic refresh (network blip...) is tried again later, without bothering the user.
+      this.scheduleStatusRefresh();
+      return;
+    }
     const message = this.documentService.errorMessage(error, 'Failed to load the documents.');
     this.errorMessage.set(message);
     this.toast?.error('Failed to load documents', { description: message });

@@ -125,4 +125,13 @@ describe('DocumentMetadataModalComponent', () => {
     component.cancel();
     expect(cancelled).toHaveBeenCalledTimes(2);
   });
+
+  it('refuses tags longer than the database column in total', () => {
+    open();
+    const long = Array.from({ length: 5 }, (_, i) => `${i}${'x'.repeat(39)}`).join(', ');
+    component.form.patchValue({ tags: long });
+    component.save();
+    expect(documentService.updateDocument).not.toHaveBeenCalled();
+    expect(component.fieldError('tags')).toBe('Tags cannot exceed 191 characters in total.');
+  });
 });

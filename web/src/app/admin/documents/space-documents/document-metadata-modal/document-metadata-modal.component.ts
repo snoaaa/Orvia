@@ -12,7 +12,13 @@ import {
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
-import { maxTags, notBlank, trimmedMaxLength } from '../../shared/form-validators';
+import {
+  maxTags,
+  normalizeTagList,
+  notBlank,
+  tagsMaxLength,
+  trimmedMaxLength
+} from '../../shared/form-validators';
 import {
   DOCUMENT_MAX_TAGS,
   DOCUMENT_TEXT_MAX_LENGTH,
@@ -28,19 +34,6 @@ const FIELD_LABELS: Record<DocumentFormField, string> = {
   author: 'Author',
   tags: 'Tags'
 };
-
-/** Normalizes a tag list the way the API stores it: trimmed, no empty ones, each kept once. */
-function normalizeTags(raw: string): string {
-  const seen = new Set<string>();
-  return tagList(raw)
-    .filter((tag) => {
-      const key = tag.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .join(',');
-}
 
 /**
  * Dialog to edit the title, author and tags of a document (#114, `PATCH /documents/{id}`).
@@ -70,7 +63,7 @@ export class DocumentMetadataModalComponent implements OnChanges {
   readonly form = this.fb.nonNullable.group({
     title: ['', [notBlank, trimmedMaxLength(DOCUMENT_TEXT_MAX_LENGTH)]],
     author: ['', trimmedMaxLength(DOCUMENT_TEXT_MAX_LENGTH)],
-    tags: ['', maxTags(DOCUMENT_MAX_TAGS)]
+    tags: ['', [maxTags(DOCUMENT_MAX_TAGS), tagsMaxLength(DOCUMENT_TEXT_MAX_LENGTH)]]
   });
 
   private readonly formValue = toSignal(this.form.valueChanges, { initialValue: this.form.value });
@@ -83,10 +76,10 @@ export class DocumentMetadataModalComponent implements OnChanges {
     const changes: UpdateDocumentPayload = {};
     const title = (value.title ?? '').trim();
     const author = (value.author ?? '').trim();
-    const tags = normalizeTags(value.tags ?? '');
+    const tags = normalizeTagList(value.tags ?? '');
     if (title !== doc.title) changes.title = title;
     if (author !== (doc.author ?? '')) changes.author = author;
-    if (tags !== normalizeTags(doc.tags ?? '')) changes.tags = tags;
+    if (tags !== normalizeTagList(doc.tags ?? '')) changes.tags = tags;
     return changes;
   });
 
@@ -116,6 +109,9 @@ export class DocumentMetadataModalComponent implements OnChanges {
       return `${FIELD_LABELS[field]} cannot exceed ${errors['maxlength'].requiredLength} characters.`;
     }
     if (errors['maxTags']) return `At most ${errors['maxTags'].max} tags.`;
+    if (errors['tagsMaxLength']) {
+      return `Tags cannot exceed ${errors['tagsMaxLength'].max} characters in total.`;
+    }
     return `${FIELD_LABELS[field]} is not valid.`;
   }
 

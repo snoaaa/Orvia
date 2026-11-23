@@ -12,6 +12,33 @@ export function trimmedMaxLength(max: number): ValidatorFn {
   };
 }
 
+/** A tag list the way the API stores it: trimmed, no empty ones, each kept once (first spelling). */
+export function normalizeTagList(raw: string): string {
+  const seen = new Set<string>();
+  return raw
+    .split(',')
+    .map((t) => t.trim())
+    .filter((tag) => {
+      const key = tag.toLowerCase();
+      if (!tag || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(',');
+}
+
+/**
+ * The tags as stored (`normalizeTagList`) fit in `max` characters: `documents.tags` is VARCHAR(191) and
+ * longer values make the API fail.
+ */
+export function tagsMaxLength(max: number): ValidatorFn {
+  return (control: AbstractControl): ValidationErrors | null => {
+    if (typeof control.value !== 'string') return null;
+    const length = normalizeTagList(control.value).length;
+    return length > max ? { tagsMaxLength: { max, actual: length } } : null;
+  };
+}
+
 /** At most `max` comma-separated tags (empty ones and repeats ignored, like the API). */
 export function maxTags(max: number): ValidatorFn {
   return (control: AbstractControl): ValidationErrors | null => {
