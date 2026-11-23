@@ -3,7 +3,7 @@ import { ActivatedRouteSnapshot, Router, RouterStateSnapshot } from '@angular/ro
 import { GoeyToastService } from 'goey-toast-angular';
 import { Observable, firstValueFrom, of } from 'rxjs';
 import { PortalSessionService } from '../../identity/services/portal-session.service';
-import { apiPermissionGuard, grantsApiPermission } from './api-permissions.util';
+import { apiPermissionGuard, grantsApiPermission, sessionGrantsInSchool } from './api-permissions.util';
 
 describe('grantsApiPermission (same rules as the API)', () => {
   it.each([
@@ -70,5 +70,40 @@ describe('apiPermissionGuard', () => {
       queryParams: { blocked: '/admin/spaces/new' }
     });
     expect(toast.error).toHaveBeenCalled();
+  });
+});
+
+describe('sessionGrantsInSchool', () => {
+  const makeSession = (
+    overrides: Partial<{
+      isPlatformAdmin: boolean;
+      activePermissions: string[];
+      assignments: Array<{ schoolId: string; scope?: string; permissions?: string[] }>;
+    }>
+  ) =>
+    ({
+      isPlatformAdmin: () => overrides.isPlatformAdmin ?? false,
+      activePermissions: () => overrides.activePermissions ?? [],
+      user: () => ({
+        assignments: overrides.assignments ?? []
+      })
+    }) as unknown as PortalSessionService;
+
+  it('scopes checks to the target school assignments without leaking from other schools', () => {
+    const sess = makeSession({
+      activePermissions: ['documents:manage', 'documents:read', 'spaces:create'],
+      assignments: [
+        { schoolId: 'school-a', scope: 'school', permissions: ['documents:manage', 'spaces:create'] },
+        { schoolId: 'school-b', scope: 'school', permissions: ['documents:read'] }
+      ]
+    });
+    expect(sessionGrantsInSchool(sess, 'school-a', 'spaces:create')).toBe(true);
+    expect(sessionGrantsInSchool(sess, 'school-b', 'documents:manage')).toBe(false);
+    expect(sessionGrantsInSchool(sess, 'school-b', 'documents:read')).toBe(true);
+  });
+
+  it('allows platform admins in any school', () => {
+    const sess = makeSession({ isPlatformAdmin: true });
+    expect(sessionGrantsInSchool(sess, 'school-x', 'documents:manage')).toBe(true);
   });
 });

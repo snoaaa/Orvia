@@ -453,5 +453,25 @@ describe('SpaceListComponent', () => {
       expect(element().querySelector('.space-edit-action')).toBeNull();
       expect(element().querySelectorAll('.space-delete-action').length).toBe(1);
     });
+
+    it('links a space name to documents only when the user can read or manage documents in that school', () => {
+      const spaceOnlyUser = user({
+        permissions: ['spaces:read'],
+        schoolIds: ['school-a'],
+        assignments: [assignment('school-a', 'School A', ['spaces:read'])]
+      });
+      spaceService.getSpaces.mockReturnValue(of(page([space('s1', { schoolId: 'school-a' })])));
+      create(spaceOnlyUser);
+      expect(element().querySelector('a.space-documents-link')).toBeNull();
+      expect(element().querySelector('.name-cell')?.textContent).toContain('Space s1');
+
+      const docReaderUser = user({
+        permissions: ['spaces:read', 'documents:read'],
+        schoolIds: ['school-a'],
+        assignments: [assignment('school-a', 'School A', ['spaces:read', 'documents:read'])]
+      });
+      create(docReaderUser);
+      expect(element().querySelectorAll('a.space-documents-link').length).toBe(1);
+    });
   });
 });

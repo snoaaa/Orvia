@@ -1,14 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
-import {
-  AbstractControl,
-  FormBuilder,
-  ReactiveFormsModule,
-  ValidationErrors,
-  ValidatorFn,
-  Validators
-} from '@angular/forms';
+import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
 import { Observable } from 'rxjs';
@@ -17,6 +10,7 @@ import {
   PortalSchool,
   PortalSessionService
 } from '../../../identity/services/portal-session.service';
+import { notBlank, trimmedMaxLength } from '../../shared/form-validators';
 import {
   CreateSpacePayload,
   DEFAULT_SPACE_LANGUAGE,
@@ -41,18 +35,6 @@ const FIELD_LABELS: Record<SpaceFormField, string> = {
   language: 'Main language',
   privacy: 'Privacy'
 };
-
-/** Required, ignoring spaces around the value (the API trims it). */
-const notBlank: ValidatorFn = (control: AbstractControl): ValidationErrors | null =>
-  typeof control.value === 'string' && control.value.trim() === '' ? { required: true } : null;
-
-/** Maximum length of the trimmed value, like the API. */
-function trimmedMaxLength(max: number): ValidatorFn {
-  return (control: AbstractControl): ValidationErrors | null => {
-    const length = typeof control.value === 'string' ? control.value.trim().length : 0;
-    return length > max ? { maxlength: { requiredLength: max, actualLength: length } } : null;
-  };
-}
 
 /**
  * Create (`/admin/spaces/new`) or edit (`/admin/spaces/:id/edit`) a space (#113).
