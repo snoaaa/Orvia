@@ -89,6 +89,12 @@ describe('DocumentVersionsComponent', () => {
     expect(component.heading()).toBe('Version history - Notes');
   });
 
+  it('links to the access editor of the document (#117)', () => {
+    create();
+    const link = el().querySelector('#versions-access-link') as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('/admin/documents/doc-1/access');
+  });
+
   it('shows a retry when the list cannot be loaded', () => {
     service.list.mockReturnValueOnce(throwError(() => ({ message: 'boom' })));
     create();

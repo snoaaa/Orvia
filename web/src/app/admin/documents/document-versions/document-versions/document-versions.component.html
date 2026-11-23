@@ -25,13 +25,22 @@
               Replacing the file adds a new version; earlier versions are kept.
             </span>
           </div>
-          <label
-            class="btn btn-sm btn-primary mb-0"
-            [class.disabled]="replacing()"
-            for="replace-file-input"
-          >
-            <i class="ti ti-file-upload me-1"></i>Replace file
-          </label>
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <a
+              class="btn btn-sm btn-light-secondary mb-0"
+              id="versions-access-link"
+              [routerLink]="['/admin/documents', documentId(), 'access']"
+            >
+              <i class="ti ti-users me-1"></i>Access
+            </a>
+            <label
+              class="btn btn-sm btn-primary mb-0"
+              [class.disabled]="replacing()"
+              for="replace-file-input"
+            >
+              <i class="ti ti-file-upload me-1"></i>Replace file
+            </label>
+          </div>
           <input
             id="replace-file-input"
             type="file"
