@@ -23,6 +23,7 @@ import {
 } from '../entities/index.js';
 import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
+import { ACTIVE_DOCUMENT, ACTIVE_SPACE } from '../utils/active-space.util.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
 import { normalizeTags, tagWhere } from '../utils/document-filters.util.js';
 import { isDocumentVisibleTo, versionFiltersWhere, visibleDocumentsWhere } from '../utils/document-visibility.util.js';
@@ -37,6 +38,9 @@ import { ProcessingQueueService } from './processing-queue.service.js';
 
 /** 403 message when a document of the reader's school is not published to them (#109). */
 const NOT_PUBLISHED_TO_YOU = 'This document is not published to your school, role, class, group or account';
+
+/** Column size of `spaces.name` (VARCHAR(191)); the API limit for new names is lower (SPACE_NAME_MAX_LENGTH). */
+const SPACE_NAME_COLUMN_LENGTH = 191;
 
 const spaceNameTakenMessage = (name: string) => `A space named '${name}' already exists in this school`;
 
@@ -71,8 +75,8 @@ export class DocumentsService {
     const visible = visibleDocumentsWhere(actor);
     const versionFilters = versionFiltersWhere(actor, query?.status, query?.type);
     const conditions: Prisma.DocumentWhereInput[] = [
-      { deletedAt: null },
-      ...(schoolId ? [{ space: { schoolId } }] : []),
+      ACTIVE_DOCUMENT,
+      ...(schoolId ? [{ space: { ...ACTIVE_SPACE, schoolId } }] : []),
       ...(visible ? [visible] : []),
       ...(query?.spaceId ? [{ spaceId: query.spaceId }] : []),
       ...(query?.q ? [{ title: { contains: query.q } }] : []),
@@ -182,11 +186,11 @@ export class DocumentsService {
 
   /** Loads a document and throws 403 unless `actor` has `permission` in the school of its space. */
   private async findDocumentInScope(id: string, actor: AuthenticatedUser, permission: string) {
-    const doc = await this.prisma.document.findUnique({
-      where: { id },
+    const doc = await this.prisma.document.findFirst({
+      where: { id, ...ACTIVE_DOCUMENT },
       include: { space: { select: { schoolId: true } } },
     });
-    if (!doc || doc.deletedAt) {
+    if (!doc) {
       throw new NotFoundException(`Document with ID ${id} not found`);
     }
     assertSchoolAccess(actor, permission, doc.space.schoolId);
@@ -194,15 +198,21 @@ export class DocumentsService {
   }
 
   async createDocument(dto: CreateDocumentDto, actor: AuthenticatedUser): Promise<DocumentEntity> {
-    const space = await this.prisma.space.findUnique({ where: { id: dto.spaceId }, select: { schoolId: true } });
-    if (!space) {
-      throw new NotFoundException(`Space with ID ${dto.spaceId} not found`);
-    }
-    assertSchoolAccess(actor, 'documents:manage', space.schoolId);
     const id = randomUUID();
     const data = DocumentMapper.fromDtoToCreateInput(dto, id);
-    const created = await this.prisma.document.create({
-      data,
+    const created = await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
+        SELECT id, deleted_at AS deletedAt FROM spaces WHERE id = ${dto.spaceId} FOR UPDATE
+      `;
+      const space = await tx.space.findFirst({
+        where: { id: dto.spaceId, ...ACTIVE_SPACE },
+        select: { schoolId: true },
+      });
+      if (!space || (locked[0] && locked[0].deletedAt !== null)) {
+        throw new NotFoundException(`Space with ID ${dto.spaceId} not found`);
+      }
+      assertSchoolAccess(actor, 'documents:manage', space.schoolId);
+      return tx.document.create({ data });
     });
     return DocumentMapper.toEntity(created);
   }
@@ -491,7 +501,7 @@ export class DocumentsService {
     const skip = (page - 1) * limit;
 
     const schoolId = schoolIdFilter(actor, 'spaces:read');
-    const where: Prisma.SpaceWhereInput = schoolId ? { schoolId } : {};
+    const where: Prisma.SpaceWhereInput = { ...ACTIVE_SPACE, ...(schoolId ? { schoolId } : {}) };
 
     const [total, spaces] = await Promise.all([
       this.prisma.space.count({ where }),
@@ -590,8 +600,8 @@ export class DocumentsService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM spaces WHERE id = ${id} FOR UPDATE`;
-        const space = await tx.space.findUnique({
-          where: { id },
+        const space = await tx.space.findFirst({
+          where: { id, ...ACTIVE_SPACE },
           include: { school: { select: { status: true } } },
         });
         if (!space) {
@@ -644,6 +654,64 @@ export class DocumentsService {
     }
   }
 
+  /**
+   * DELETE /documents/spaces/:id (§4.1, #98): soft delete. 404 for an unknown or already deleted space, 403
+   * outside the schools where the caller holds `spaces:delete` (or `documents:manage`). One write sets
+   * `deleted_at` and renames the row (`<name> [deleted <date>]`) so the name can be reused in the school
+   * despite the unique index (school_id, name). The documents are not modified: they are hidden through the
+   * space (ACTIVE_DOCUMENT). Records `space_deleted` with the original name.
+   */
+  async deleteSpace(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM spaces WHERE id = ${id} FOR UPDATE`;
+      const space = await tx.space.findFirst({
+        where: { id, ...ACTIVE_SPACE },
+        include: { school: { select: { status: true } } },
+      });
+      if (!space) {
+        throw new NotFoundException(`Space with ID ${id} not found`);
+      }
+      assertSchoolAccess(actor, 'spaces:delete', space.schoolId);
+      if (space.school?.status?.toLowerCase() === 'deactivated') {
+        throw new BadRequestException('Cannot delete a space of a deactivated school');
+      }
+
+      const documentsCount = await tx.document.count({ where: { spaceId: id, deletedAt: null } });
+
+      const deletedAt = new Date();
+      const suffix = ` [deleted ${deletedAt.toISOString()}]`;
+      // Array.from keeps multi-byte characters whole when an old, long name has to be shortened.
+      const name = Array.from(space.name).slice(0, SPACE_NAME_COLUMN_LENGTH - suffix.length).join('') + suffix;
+
+      // Conditional on deleted_at: of two simultaneous deletes, only one goes through.
+      const { count } = await tx.space.updateMany({
+        where: { id, ...ACTIVE_SPACE },
+        data: { deletedAt, name, updatedAt: deletedAt },
+      });
+      if (count === 0) {
+        throw new NotFoundException(`Space with ID ${id} not found`);
+      }
+
+      await this.audit.record(
+        AuditEvents.spaceDeleted(
+          {
+            spaceId: id,
+            schoolId: space.schoolId,
+            name: space.name,
+            documentsCount,
+            actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+        tx,
+      );
+    });
+  }
+
   /** Clear 409 in the normal case; the unique index (school_id, name) still decides under concurrency. */
   private async assertSpaceNameIsFree(
     schoolId: string,
@@ -652,7 +720,7 @@ export class DocumentsService {
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<void> {
     const taken = await tx.space.findFirst({
-      where: { schoolId, name, ...(exceptSpaceId ? { id: { not: exceptSpaceId } } : {}) },
+      where: { ...ACTIVE_SPACE, schoolId, name, ...(exceptSpaceId ? { id: { not: exceptSpaceId } } : {}) },
       select: { id: true },
     });
     if (taken) {
@@ -670,8 +738,8 @@ export class DocumentsService {
 
   /** Get a single space by ID, scoped to caller's school access (§4.5, §4.7, #89). */
   async findSpaceById(id: string, actor: AuthenticatedUser): Promise<SpaceEntity> {
-    const space = await this.prisma.space.findUnique({
-      where: { id },
+    const space = await this.prisma.space.findFirst({
+      where: { id, ...ACTIVE_SPACE },
     });
     if (!space) {
       throw new NotFoundException(`Space with ID ${id} not found`);
@@ -690,8 +758,8 @@ export class DocumentsService {
     file: UploadedFile,
     actor: AuthenticatedUser,
   ): Promise<ValidatedFileEntity> {
-    const space = await this.prisma.space.findUnique({
-      where: { id: spaceId },
+    const space = await this.prisma.space.findFirst({
+      where: { id: spaceId, ...ACTIVE_SPACE },
       select: { schoolId: true },
     });
     if (!space) {
@@ -736,8 +804,8 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
-    const space = await this.prisma.space.findUnique({
-      where: { id: spaceId },
+    const space = await this.prisma.space.findFirst({
+      where: { id: spaceId, ...ACTIVE_SPACE },
       select: { id: true, schoolId: true },
     });
     if (!space) {
@@ -791,6 +859,13 @@ export class DocumentsService {
       const tags = normalizeTags(dto?.tags);
 
       const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
+        const lockedSpace = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
+          SELECT id, deleted_at AS deletedAt FROM spaces WHERE id = ${spaceId} FOR UPDATE
+        `;
+        if (lockedSpace.length === 0 || lockedSpace[0].deletedAt !== null) {
+          throw new NotFoundException(`Space with ID ${spaceId} not found`);
+        }
+
         const doc = await tx.document.create({
           data: {
             id: documentId,
@@ -887,8 +962,8 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext?: AuditRequestContext,
   ): Promise<DocumentEntity> {
-    const space = await this.prisma.space.findUnique({
-      where: { id: spaceId },
+    const space = await this.prisma.space.findFirst({
+      where: { id: spaceId, ...ACTIVE_SPACE },
       select: { id: true, schoolId: true },
     });
     if (!space) {
@@ -945,6 +1020,13 @@ export class DocumentsService {
       const tags = normalizeTags(dto?.tags);
 
       const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
+        const lockedSpace = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
+          SELECT id, deleted_at AS deletedAt FROM spaces WHERE id = ${spaceId} FOR UPDATE
+        `;
+        if (lockedSpace.length === 0 || lockedSpace[0].deletedAt !== null) {
+          throw new NotFoundException(`Space with ID ${spaceId} not found`);
+        }
+
         const doc = await tx.document.create({
           data: {
             id: documentId,
@@ -1125,14 +1207,14 @@ export class DocumentsService {
   }> {
     const { documentId, versionRef, actor, rangeHeader, disposition = 'attachment' } = options;
 
-    const document = await this.prisma.document.findUnique({
-      where: { id: documentId },
+    const document = await this.prisma.document.findFirst({
+      where: { id: documentId, ...ACTIVE_DOCUMENT },
       include: {
         space: { select: { id: true, schoolId: true, privacy: true } },
       },
     });
 
-    if (!document || document.deletedAt) {
+    if (!document) {
       throw new NotFoundException(`Document with ID ${documentId} not found`);
     }
 
