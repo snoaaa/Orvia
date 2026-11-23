@@ -1,0 +1,234 @@
+<div class="row">
+  <div class="col-12">
+    <app-card cardTitle="Upload Documents">
+      @if (!canUpload()) {
+        <div class="alert alert-warning mb-0" id="upload-no-access" role="alert">
+          <i class="ti ti-lock me-1"></i>You do not have permission to upload documents.
+        </div>
+      } @else {
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+          <span class="text-muted text-sm">
+            PDF, Office, OpenDocument, text and image files (JPEG, PNG, HEIC). Each file is sent
+            separately; the API refuses files that are too large, unsupported, infected or
+            already in the space.
+          </span>
+          @if (session.activeSchoolName()) {
+            <span class="badge bg-light-primary border border-primary">
+              Scope: {{ session.activeSchoolName() }}
+            </span>
+          }
+        </div>
+
+        @if (showPicker()) {
+          <div class="mb-3">
+            <label for="upload-space" class="form-label">Space</label>
+            @if (spacesError()) {
+              <div class="alert alert-danger d-flex align-items-center justify-content-between" id="upload-spaces-error" role="alert">
+                <span>{{ spacesError() }}</span>
+                <button type="button" class="btn btn-sm btn-light-danger" (click)="loadSpaces()">
+                  Retry
+                </button>
+              </div>
+            } @else {
+              <select
+                id="upload-space"
+                class="form-select"
+                [disabled]="spacesLoading() || isBusy()"
+                [value]="pickedSpaceId() ?? ''"
+                (change)="onSpaceChange($event)"
+              >
+                <option value="">
+                  {{ spacesLoading() ? 'Loading spaces…' : 'Select a space' }}
+                </option>
+                @for (space of spaces(); track space.id) {
+                  <option [value]="space.id" [selected]="space.id === pickedSpaceId()">
+                    {{ space.name }}
+                  </option>
+                }
+              </select>
+              @if (!spacesLoading() && spaces().length === 0) {
+                <div class="form-text" id="upload-no-spaces">
+                  No space available. Create a space first.
+                </div>
+              }
+              @if (spacesTotal() > spaceLimit) {
+                <div class="form-text">
+                  Showing the first {{ spaceLimit }} of {{ spacesTotal() }} spaces.
+                </div>
+              }
+            }
+          </div>
+        }
+
+        <div
+          id="upload-dropzone"
+          class="upload-dropzone text-center rounded p-4 mb-3"
+          [class.is-dragging]="isDragging()"
+          (dragover)="onDragOver($event)"
+          (dragleave)="onDragLeave($event)"
+          (drop)="onDrop($event)"
+        >
+          <i class="ti ti-cloud-upload upload-dropzone-icon"></i>
+          <p class="mb-2">Drag and drop files here, or</p>
+          <label class="btn btn-sm btn-outline-primary mb-0" for="upload-file-input">
+            <i class="ti ti-folder-open me-1"></i>Choose files
+          </label>
+          <input
+            id="upload-file-input"
+            type="file"
+            class="visually-hidden"
+            multiple
+            [accept]="accept"
+            (change)="onFilesPicked($event)"
+          />
+        </div>
+
+        @if (items().length > 0) {
+          <div class="table-responsive">
+            <table class="table align-middle mb-3" id="upload-list">
+              <thead>
+                <tr>
+                  <th>FILE</th>
+                  <th>TITLE / TAGS</th>
+                  <th class="upload-status-column">STATUS</th>
+                  <th class="text-end">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (item of items(); track item.id) {
+                  <tr [attr.data-status]="item.status">
+                    <td>
+                      <div class="fw-medium text-break">{{ item.file.name }}</div>
+                      <small class="text-muted">{{ formatFileSize(item.file.size) }}</small>
+                    </td>
+                    <td>
+                      @if (item.status === 'ready' || item.status === 'error') {
+                        <input
+                          type="text"
+                          class="form-control form-control-sm mb-1"
+                          placeholder="Title (default: {{ defaultTitle(item.file.name) }})"
+                          aria-label="Title"
+                          [maxLength]="titleMax"
+                          [value]="item.title"
+                          (input)="setMetadata(item.id, 'title', $event)"
+                        />
+                        <input
+                          type="text"
+                          class="form-control form-control-sm mb-1"
+                          placeholder="Tags, comma-separated"
+                          aria-label="Tags"
+                          [maxLength]="tagsMax"
+                          [value]="item.tags"
+                          (input)="setMetadata(item.id, 'tags', $event)"
+                        />
+                        <input
+                          type="text"
+                          class="form-control form-control-sm"
+                          placeholder="Author (optional)"
+                          aria-label="Author"
+                          [maxLength]="authorMax"
+                          [value]="item.author"
+                          (input)="setMetadata(item.id, 'author', $event)"
+                        />
+                      } @else {
+                        <div class="text-break">{{ item.title || defaultTitle(item.file.name) }}</div>
+                        @if (item.tags) {
+                          <small class="text-muted">{{ item.tags }}</small>
+                        }
+                      }
+                    </td>
+                    <td>
+                      @switch (item.status) {
+                        @case ('ready') {
+                          <span class="badge bg-light-secondary text-secondary">Ready</span>
+                        }
+                        @case ('queued') {
+                          <span class="badge bg-light-secondary text-secondary">Waiting…</span>
+                        }
+                        @case ('uploading') {
+                          <div
+                            class="progress"
+                            role="progressbar"
+                            [attr.aria-valuenow]="item.progress"
+                            aria-valuemin="0"
+                            aria-valuemax="100"
+                          >
+                            <div class="progress-bar" [style.width.%]="item.progress">
+                              {{ item.progress }}%
+                            </div>
+                          </div>
+                        }
+                        @case ('done') {
+                          <span class="badge bg-light-success text-success">
+                            <i class="ti ti-check me-1"></i>Uploaded
+                          </span>
+                        }
+                        @case ('error') {
+                          <span class="badge bg-light-danger text-danger">
+                            <i class="ti ti-alert-circle me-1"></i>Refused
+                          </span>
+                          <div class="text-danger text-sm mt-1 upload-error">{{ item.error }}</div>
+                        }
+                      }
+                    </td>
+                    <td class="text-end text-nowrap">
+                      @if (item.status === 'error') {
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-light-primary me-1 upload-retry"
+                          [disabled]="targetSpaceId() === null"
+                          (click)="retry(item.id)"
+                        >
+                          <i class="ti ti-refresh me-1"></i>Retry
+                        </button>
+                      }
+                      @if (item.status !== 'done') {
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-light-danger upload-remove"
+                          [attr.aria-label]="'Remove ' + item.file.name"
+                          (click)="remove(item.id)"
+                        >
+                          <i class="ti ti-x"></i>
+                        </button>
+                      }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <small class="text-muted" id="upload-summary">
+              {{ finishedCount() }} of {{ items().length }} processed
+              @if (failedCount() > 0) {
+                · {{ failedCount() }} refused
+              }
+            </small>
+            <div class="d-flex gap-2">
+              @if (finishedCount() > failedCount()) {
+                <button type="button" class="btn btn-sm btn-light-secondary" (click)="clearFinished()">
+                  Clear uploaded
+                </button>
+              }
+              <button
+                type="button"
+                id="btn-start-upload"
+                class="btn btn-sm btn-primary"
+                [disabled]="!canStart()"
+                (click)="startUpload()"
+              >
+                <i class="ti ti-upload me-1"></i>Upload {{ readyCount() }}
+                {{ readyCount() === 1 ? 'file' : 'files' }}
+              </button>
+            </div>
+          </div>
+          @if (readyCount() > 0 && targetSpaceId() === null) {
+            <div class="form-text text-end">Select a space to start the upload.</div>
+          }
+        }
+      }
+    </app-card>
+  </div>
+</div>

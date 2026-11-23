@@ -37,7 +37,8 @@ export const UPLOAD_TAGS_MAX_LENGTH = 500;
 /** Number of files sent at the same time. */
 export const UPLOAD_CONCURRENCY = 3;
 
-export type UploadStatus = 'queued' | 'uploading' | 'done' | 'error';
+/** `ready`: added and still editable; `queued`: waiting for a free slot; then `uploading`, `done` or `error`. */
+export type UploadStatus = 'ready' | 'queued' | 'uploading' | 'done' | 'error';
 
 /** Optional metadata sent with a file. */
 export interface UploadMetadata {
