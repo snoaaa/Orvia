@@ -39,9 +39,13 @@ import { PortalSessionService } from 'src/app/admin/identity/services/portal-ses
                 </button>
               }
               @if (sectionId === 'documents' && session.hasPermission('documents:manage')) {
-                <button type="button" id="btn-upload-document" class="btn btn-sm btn-primary">
+                <a
+                  id="btn-upload-document"
+                  class="btn btn-sm btn-primary"
+                  routerLink="/admin/documents/upload"
+                >
                   <i class="ti ti-upload me-1"></i>Upload Document
-                </button>
+                </a>
               }
             </div>
           </div>
