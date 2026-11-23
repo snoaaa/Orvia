@@ -373,6 +373,56 @@ describe('Create and update a space (e2e)', () => {
         const res = check(await update(ids.AdminA, target.id, { name }), 200);
         expect(res.body.name).toBe(name);
       });
+
+      it('rejects creating or updating a space in a deactivated school with 400', async () => {
+        const off = await prisma.school.create({
+          data: { name: `Test E2E Spaces School Off ${stamp}`, status: 'deactivated' },
+        });
+        const existingSpace = await prisma.space.create({
+          data: { schoolId: off.id, name: uniqueName('Frozen') },
+        });
+
+        check(await create(platformAdminId, { schoolId: off.id, name: uniqueName('NewOff') }), 400);
+        check(await update(platformAdminId, existingSpace.id, { privacy: 'private' }), 400);
+      });
+
+      it('stamps audit_events.schoolId with the target school even for platform/multi-school admins', async () => {
+        const created = check(
+          await create(platformAdminId, { schoolId: schools.A, name: uniqueName('PA_Audited') }),
+          201,
+        ).body;
+        check(await update(ids.ManagerAStaffB, created.id, { privacy: 'private' }), 200);
+
+        const events = await prisma.auditEvent.findMany({
+          where: { entityType: 'space', entityId: created.id },
+          orderBy: { seq: 'asc' },
+        });
+        expect(events).toHaveLength(2);
+        expect(events.map((e) => e.schoolId)).toEqual([schools.A, schools.A]);
+
+        const admAAudit = check(
+          await http().get(`/audit/events?entityType=space`).set('Authorization', await bearer(ids.AdminA)),
+          200,
+        ).body;
+        expect(admAAudit.some((e: { entityId: string }) => e.entityId === created.id)).toBe(true);
+      });
+
+      it('serializes concurrent PATCH requests on the same space without dropping diffs or audit events', async () => {
+        const originalName = uniqueName('PatchRaceOrig');
+        const target = await space('A', { name: originalName });
+        const renamed = uniqueName('PatchRaceNew');
+
+        const [r1, r2] = await Promise.all([
+          update(ids.AdminA, target.id, { name: renamed }),
+          update(ids.AdminA, target.id, { name: originalName, privacy: 'private' }),
+        ]);
+        expect([r1.status, r2.status]).toEqual([200, 200]);
+
+        const finalRow = await stored(target.id);
+        expect(finalRow.privacy).toBe('private');
+        const audits = await auditOf('space_updated', target.id);
+        expect(audits).toHaveLength(2);
+      });
     });
   });
 });

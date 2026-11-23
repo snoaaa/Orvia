@@ -608,7 +608,9 @@ export const AuditEvents = {
       actor: {
         userId: p.actor.userId,
         role: p.actor.role ?? null,
-        schoolId: p.actor.schoolId ?? null,
+        // Stamp the target space's school rather than actor.schoolId so platform/multi-school edits
+        // stay visible to that school's admins and never leak to another school's audit trail.
+        schoolId: p.schoolId,
       },
       entity: { type: 'space', id: p.spaceId },
       details: {
@@ -640,7 +642,7 @@ export const AuditEvents = {
       actor: {
         userId: p.actor.userId,
         role: p.actor.role ?? null,
-        schoolId: p.actor.schoolId ?? null,
+        schoolId: p.schoolId,
       },
       entity: { type: 'space', id: p.spaceId },
       details: {

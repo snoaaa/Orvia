@@ -184,6 +184,7 @@ describe('DocumentsService', () => {
           updatedAt: new Date(),
         })),
       },
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'space-1' }]),
       $transaction: vi.fn().mockImplementation(async (cb) => cb(mockPrisma)),
     };
 
@@ -529,14 +530,17 @@ describe('DocumentsService', () => {
       const space = await service.createSpace({ schoolId: 'school-1', name: 'Droit', language: 'fr' }, schoolAdmin, context);
 
       expect(mockAudit.record).toHaveBeenCalledTimes(1);
-      expect(mockAudit.record).toHaveBeenCalledWith({
-        category: 'documents',
-        action: 'space_created',
-        actor: { userId: schoolAdmin.id, role: 'school_admin', schoolId: 'school-1' },
-        entity: { type: 'space', id: space.id },
-        details: { schoolId: 'school-1', name: 'Droit', language: 'fr', privacy: 'public' },
-        context,
-      });
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        {
+          category: 'documents',
+          action: 'space_created',
+          actor: { userId: schoolAdmin.id, role: 'school_admin', schoolId: 'school-1' },
+          entity: { type: 'space', id: space.id },
+          details: { schoolId: 'school-1', name: 'Droit', language: 'fr', privacy: 'public' },
+          context,
+        },
+        expect.anything(),
+      );
     });
 
     it('records nothing when the creation is refused', async () => {
@@ -655,20 +659,38 @@ describe('DocumentsService', () => {
       await service.updateSpace('space-1', { name: 'Maths', privacy: 'private', language: 'en' }, updater, context);
 
       expect(mockAudit.record).toHaveBeenCalledTimes(1);
-      expect(mockAudit.record).toHaveBeenCalledWith({
-        category: 'documents',
-        action: 'space_updated',
-        actor: { userId: updater.id, role: 'school_admin', schoolId: 'school-1' },
-        entity: { type: 'space', id: 'space-1' },
-        details: {
-          schoolId: 'school-1',
-          changes: {
-            name: { from: 'Mathematics', to: 'Maths' },
-            privacy: { from: 'public', to: 'private' },
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        {
+          category: 'documents',
+          action: 'space_updated',
+          actor: { userId: updater.id, role: 'school_admin', schoolId: 'school-1' },
+          entity: { type: 'space', id: 'space-1' },
+          details: {
+            schoolId: 'school-1',
+            changes: {
+              name: { from: 'Mathematics', to: 'Maths' },
+              privacy: { from: 'public', to: 'private' },
+            },
           },
+          context,
         },
-        context,
-      });
+        expect.anything(),
+      );
+    });
+
+    it('rejects creating a space in a deactivated school with 400', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: 'school-off', status: 'deactivated' });
+      await expect(service.createSpace({ schoolId: 'school-off', name: 'Maths' }, platformAdmin)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('rejects updating a space of a deactivated school with 400', async () => {
+      mockPrisma.space.findUnique.mockResolvedValueOnce({ ...stored, school: { status: 'deactivated' } });
+      await expect(service.updateSpace('space-1', { name: 'Maths' }, platformAdmin)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
     });
 
     it.each([null, ''])('clears the description with %j', async (description) => {
