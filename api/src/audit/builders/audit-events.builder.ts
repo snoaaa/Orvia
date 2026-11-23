@@ -219,6 +219,42 @@ export const AuditEvents = {
   },
 
   /**
+   * An unused custom role was deleted (`DELETE /roles/:id`, #46).
+   *
+   * `documentAccessRulesRemoved` counts the `document_access` rules that cascaded away with the role, so
+   * the audit trail says what the publish state of those documents lost.
+   *
+   * `assignmentRecordsRemoved` counts the `user_assignments` rows the cascade removed: normally only
+   * soft-deleted tombstones (a role with an active assignment is refused), kept for the mobile delta sync
+   * (#49), so the trail does not lose them silently.
+   */
+  roleDeleted(
+    p: {
+      roleId: string;
+      role: string;
+      scope: string;
+      documentAccessRulesRemoved: number;
+      assignmentRecordsRemoved: number;
+      deletedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ROLE_DELETED,
+      actor: p.deletedBy ?? anonymous,
+      entity: { type: 'role', id: p.roleId },
+      details: {
+        role: p.role,
+        scope: p.scope,
+        documentAccessRulesRemoved: p.documentAccessRulesRemoved,
+        assignmentRecordsRemoved: p.assignmentRecordsRemoved,
+      },
+      context,
+    };
+  },
+
+  /**
    * Document-management or other fine-grained permission granted to a staff member in a school (§4.5, #88).
    */
   permissionGranted(

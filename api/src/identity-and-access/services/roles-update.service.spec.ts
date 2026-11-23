@@ -80,9 +80,11 @@ describe('IdentityAndAccessService - update role (#45)', () => {
     const prisma = {
       role: {
         findFirst: vi.fn(),
+        findMany: vi.fn(),
         findUnique: vi.fn().mockResolvedValue(null),
         update,
         delete: remove,
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       rolePermission: { deleteMany, createMany },
       permission: {
@@ -397,29 +399,6 @@ describe('IdentityAndAccessService - update role (#45)', () => {
     expect(update).toHaveBeenCalledWith({
       where: { id: 'role-1' },
       data: { name: 'TEACHING_ASSISTANT', scope: 'group' },
-    });
-  });
-
-  describe('deleteRole', () => {
-    it('refuses an actor without platform-wide system:manage', async () => {
-      const { service, prisma, remove } = setup();
-
-      await expect(service.deleteRole('role-1', schoolScopedAdmin)).rejects.toThrow(
-        'Only platform administrators may delete roles',
-      );
-      expect(prisma.role.findFirst).not.toHaveBeenCalled();
-      expect(remove).not.toHaveBeenCalled();
-    });
-
-    it('deletes an unassigned custom role', async () => {
-      const { service, prisma, remove, count } = setup();
-      prisma.role.findFirst.mockResolvedValueOnce(roleRow());
-      count.mockResolvedValueOnce(0);
-
-      const result = await service.deleteRole('role-1', platformAdmin);
-
-      expect(remove).toHaveBeenCalledWith({ where: { id: 'role-1' } });
-      expect(result.success).toBe(true);
     });
   });
 

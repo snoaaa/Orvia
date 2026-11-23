@@ -702,50 +702,59 @@ export class IdentityAndAccessService {
       return UserMapper.toEntity(target);
     }
 
-    const txResult = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
-      const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
-        SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
-      `;
-      const freshRole = lockedRole[0];
-      if (!freshRole) {
-        throw new BadRequestException(`Unknown role '${roleName}'`);
-      }
-      if (freshRole.scope !== role.scope) {
-        throw new ConflictException(
-          `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
-        );
-      }
+    const txResult = await (async () => {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
+          const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
+            SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
+          `;
+          const freshRole = lockedRole[0];
+          if (!freshRole) {
+            throw new BadRequestException(`Unknown role '${roleName}'`);
+          }
+          if (freshRole.scope !== role.scope) {
+            throw new ConflictException(
+              `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
+            );
+          }
 
-      const current = await tx.userAssignment.findFirst({
-        where: { userId: target.id, schoolId: dto.schoolId, ...ACTIVE_ASSIGNMENT },
-        include: { role: { include: { rolePermissions: { select: { permission: { select: { code: true } } } } } } },
-      });
-      if (current?.roleId === role.id) {
-        return { changed: false as const };
-      }
+          const current = await tx.userAssignment.findFirst({
+            where: { userId: target.id, schoolId: dto.schoolId, ...ACTIVE_ASSIGNMENT },
+            include: { role: { include: { rolePermissions: { select: { permission: { select: { code: true } } } } } } },
+          });
+          if (current?.roleId === role.id) {
+            return { changed: false as const };
+          }
 
-      const prevRoleGrantsDocManage =
-        current?.role.name === 'CONTENT_MANAGER' ||
-        current?.role.rolePermissions?.some(
-          (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
-        ) ||
-        false;
+          const prevRoleGrantsDocManage =
+            current?.role.name === 'CONTENT_MANAGER' ||
+            current?.role.rolePermissions?.some(
+              (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
+            ) ||
+            false;
 
-      if (current) {
-        await tx.userAssignment.update({ where: { id: current.id }, data: { roleId: role.id } });
-      } else {
-        await tx.userAssignment.create({
-          data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+          if (current) {
+            await tx.userAssignment.update({ where: { id: current.id }, data: { roleId: role.id } });
+          } else {
+            await tx.userAssignment.create({
+              data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+            });
+          }
+
+          return {
+            changed: true as const,
+            prevRoleGrantsDocManage,
+            previousRoleName: current?.role.name ?? null,
+          };
         });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+          throw new BadRequestException(`Unknown role '${roleName}'`);
+        }
+        throw error;
       }
-
-      return {
-        changed: true as const,
-        prevRoleGrantsDocManage,
-        previousRoleName: current?.role.name ?? null,
-      };
-    });
+    })();
 
     if (!txResult.changed) {
       return UserMapper.toEntity(target);
@@ -1599,37 +1608,100 @@ export class IdentityAndAccessService {
     }
   }
 
-  /** DELETE /identity/roles/:id: removes an unassigned custom role. Platform admins only. */
-  async deleteRole(id: string, actor: AuthenticatedUser): Promise<{ success: boolean; message: string }> {
+  /**
+   * DELETE /roles/:id (#46), also behind the older DELETE /identity/roles/:id: removes an unused custom
+   * role.
+   *
+   * Platform admins only: the guard checks system:manage and this also refuses a school-scoped role
+   * holding it, so a school admin cannot remove a role of the platform. The six base roles are refused
+   * (400): they are recreated by the seed and cannot be deleted. A role that still has active
+   * assignments is refused too (400), naming how many **users** hold it, so nobody loses their access by
+   * accident; reassign them first. Deleting a role also drops its `role_permissions` rows, any
+   * `document_access` rule that granted it and any remaining `user_assignments` rows (all cascade), which
+   * is why an unused role is the only kind worth deleting; the counts of dropped rules and assignment
+   * records are recorded in the audit event.
+   *
+   * The lookup, the checks, the delete and the audit row all happen in **one transaction under a lock on
+   * the role row**: two concurrent deletes cannot both answer 200 with duplicate audit rows (the loser
+   * sees the row gone and answers 404), an assignment being created at the same time cannot slip in
+   * between the count and the delete (POST /assignments locks the same row), and a failed audit append
+   * rolls the deletion back instead of leaving it unaudited.
+   */
+  async deleteRole(
+    id: string,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<{ success: boolean; message: string }> {
+    // Authorization first: a school-scoped `system:manage` holder must learn nothing about which role
+    // ids or names exist, so they get 403 even for an unknown or base role.
     if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
       throw new ForbiddenException('Only platform administrators may delete roles');
     }
-    const role = await this.prisma.role.findFirst({
-      where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
-    });
-    if (!role) {
-      throw new NotFoundException(`Role '${id}' not found`);
-    }
-    if (isBaseRoleName(role.name)) {
-      throw new BadRequestException('System base roles cannot be deleted');
-    }
 
-    const assignedCount = await this.prisma.userAssignment.count({
-      where: { roleId: role.id, ...ACTIVE_ASSIGNMENT },
-    });
-    if (assignedCount > 0) {
-      throw new BadRequestException(
-        `Cannot delete role '${role.name}': still assigned to ${assignedCount} user(s). Please reassign them before deleting.`,
+    const deleted = await this.prisma.$transaction(async (tx) => {
+      // Resolve and lock in one statement: a concurrent delete (or assignment) waits here.
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM roles WHERE id = ${id} OR name = ${id.trim().toUpperCase()} FOR UPDATE
+      `;
+      if (locked.length === 0) {
+        throw new NotFoundException(`Role '${id}' not found`);
+      }
+
+      const role = await tx.role.findFirst({ where: { id: locked[0].id } });
+      if (!role) {
+        throw new NotFoundException(`Role '${id}' not found`);
+      }
+      if (isBaseRoleName(role.name)) {
+        throw new BadRequestException('System base roles cannot be deleted');
+      }
+
+      // Under the lock, so an insert from POST /assignments cannot land between this count and the
+      // delete. Distinct users: the same person holding the role in two schools is one user.
+      const holders = await tx.userAssignment.findMany({
+        where: { roleId: role.id, ...ACTIVE_ASSIGNMENT },
+        select: { userId: true },
+        distinct: ['userId'],
+      });
+      if (holders.length > 0) {
+        throw new BadRequestException(
+          `Cannot delete role '${role.name}': still assigned to ${holders.length} user(s). Please reassign them before deleting.`,
+        );
+      }
+
+      // Counted before the delete, purely to report what the ON DELETE CASCADE is about to remove.
+      const documentAccessRules = await tx.documentAccess.count({ where: { roleId: role.id } });
+      // Soft-deleted assignments (#49) are kept for the mobile delta sync; deleting the role cascades
+      // them away too, so the trail says how many tombstones went with it.
+      const assignmentRecords = await tx.userAssignment.count({ where: { roleId: role.id } });
+
+      const { count } = await tx.role.deleteMany({ where: { id: role.id } });
+      if (count === 0) {
+        // A role deleted by a request that won the lock between our lookup and this statement.
+        throw new NotFoundException(`Role '${id}' not found`);
+      }
+
+      // Same transaction as the delete: if the audit row cannot be appended, everything rolls back.
+      await this.audit.record(
+        AuditEvents.roleDeleted(
+          {
+            roleId: role.id,
+            role: role.name,
+            scope: role.scope,
+            documentAccessRulesRemoved: documentAccessRules,
+            assignmentRecordsRemoved: assignmentRecords,
+            deletedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+        tx,
       );
-    }
 
-    await this.prisma.role.delete({
-      where: { id: role.id },
+      return { name: role.name };
     });
 
     return {
       success: true,
-      message: `Role '${role.name}' was successfully deleted`,
+      message: `Role '${deleted.name}' was successfully deleted`,
     };
   }
 
