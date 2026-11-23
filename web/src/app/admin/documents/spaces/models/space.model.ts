@@ -52,6 +52,12 @@ export interface SpaceEntity {
   updatedAt: string;
 }
 
+/** A school offered in the platform admin's school filter and field. */
+export interface SchoolOption {
+  id: string;
+  name: string;
+}
+
 export interface PaginatedSpaces {
   data: SpaceEntity[];
   total: number;

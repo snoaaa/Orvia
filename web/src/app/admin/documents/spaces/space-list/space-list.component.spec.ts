@@ -8,7 +8,6 @@ import {
   PortalSessionService,
   PortalSessionUser
 } from '../../../identity/services/portal-session.service';
-import { UserManagementService } from '../../../identity/users/services/user-management.service';
 import { PaginatedSpaces, SpaceEntity } from '../models/space.model';
 import { SpaceManagementService } from '../services/space-management.service';
 import { SPACE_SEARCH_DEBOUNCE_MS, SpaceListComponent } from './space-list.component';
@@ -103,12 +102,13 @@ describe('SpaceListComponent', () => {
     getSpaces: ReturnType<typeof vi.fn>;
     deleteSpace: ReturnType<typeof vi.fn>;
     errorMessage: ReturnType<typeof vi.fn>;
+    getAllSchools: ReturnType<typeof vi.fn>;
   };
-  let userService: { getSchools: ReturnType<typeof vi.fn> };
   let toast: {
     success: ReturnType<typeof vi.fn>;
     error: ReturnType<typeof vi.fn>;
     info: ReturnType<typeof vi.fn>;
+    warning: ReturnType<typeof vi.fn>;
   };
 
   const element = (): HTMLElement => fixture.nativeElement as HTMLElement;
@@ -128,17 +128,16 @@ describe('SpaceListComponent', () => {
         .fn()
         .mockReturnValue(of(page([space('s1'), space('s2', { privacy: 'private' })]))),
       deleteSpace: vi.fn().mockReturnValue(of(undefined)),
-      errorMessage: vi.fn().mockReturnValue('Something went wrong.')
+      errorMessage: vi.fn().mockReturnValue('Something went wrong.'),
+      getAllSchools: vi.fn()
     };
-    userService = {
-      getSchools: vi.fn().mockReturnValue(
-        of([
-          { id: 'school-a', name: 'School A' },
-          { id: 'school-b', name: 'School B' }
-        ])
-      )
-    };
-    toast = { success: vi.fn(), error: vi.fn(), info: vi.fn() };
+    spaceService.getAllSchools = vi.fn().mockReturnValue(
+      of([
+        { id: 'school-a', name: 'School A' },
+        { id: 'school-b', name: 'School B' }
+      ])
+    );
+    toast = { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() };
 
     await TestBed.configureTestingModule({
       imports: [SpaceListComponent],
@@ -147,7 +146,6 @@ describe('SpaceListComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: SpaceManagementService, useValue: spaceService },
-        { provide: UserManagementService, useValue: userService },
         { provide: GoeyToastService, useValue: toast }
       ]
     }).compileComponents();
@@ -179,7 +177,7 @@ describe('SpaceListComponent', () => {
       expect(element().querySelector('#space-school-filter')).toBeNull();
       expect(component.showSchoolColumn()).toBe(false);
       expect(element().querySelector('#space-list-school')?.textContent).toContain('School A');
-      expect(userService.getSchools).not.toHaveBeenCalled();
+      expect(spaceService.getAllSchools).not.toHaveBeenCalled();
     });
 
     it('does not show a school badge while only the school id is known', () => {
@@ -276,7 +274,8 @@ describe('SpaceListComponent', () => {
     it('offers to clear the filters when nothing matches', () => {
       spaceService.getSpaces.mockReturnValue(of(page([])));
       create(PLATFORM_ADMIN);
-      component.searchTerm.set('zzz');
+      component.onSearchChange('zzz');
+      component.loadSpaces();
       fixture.detectChanges();
       expect(element().querySelector('#space-list-empty')?.textContent).toContain(
         'No space matches these filters'
@@ -360,6 +359,63 @@ describe('SpaceListComponent', () => {
         description: 'Something went wrong.'
       });
       expect(component.isDeleting()).toBe(false);
+    });
+  });
+
+  describe('review fixes', () => {
+    it('a page change while typing sends the typed search once, from the first page', () => {
+      spaceService.getSpaces.mockReturnValue(of(page([space('s1')], 30, 1, 10)));
+      create(SCHOOL_ADMIN);
+      vi.useFakeTimers();
+      const before = spaceService.getSpaces.mock.calls.length;
+
+      component.onSearchChange('math');
+      component.goToPage(2);
+      expect(spaceService.getSpaces.mock.calls.length).toBe(before + 1);
+      expect(lastQuery()).toMatchObject({ page: 1, search: 'math' });
+
+      vi.advanceTimersByTime(1000);
+      expect(spaceService.getSpaces.mock.calls.length).toBe(before + 1);
+    });
+
+    it('a page change with an unchanged search keeps the page', () => {
+      spaceService.getSpaces.mockReturnValue(of(page([space('s1')], 30, 1, 10)));
+      create(SCHOOL_ADMIN);
+      component.goToPage(2);
+      expect(lastQuery()).toMatchObject({ page: 2, search: '' });
+    });
+
+    it('shows the last page when the page asked for no longer exists', () => {
+      spaceService.getSpaces
+        .mockReturnValueOnce(of({ data: [], total: 10, page: 2, limit: 10, totalPages: 1 }))
+        .mockReturnValue(of(page([space('s1')], 10, 1, 10)));
+      create(SCHOOL_ADMIN);
+      expect(lastQuery()).toMatchObject({ page: 1 });
+      expect(component.currentPage()).toBe(1);
+      expect(component.spaces().map((s) => s.id)).toEqual(['s1']);
+    });
+
+    it('offers only the actions the API accepts', () => {
+      const updateOnly = user({
+        permissions: ['spaces:read', 'spaces:update'],
+        schoolIds: ['school-a'],
+        assignments: [assignment('school-a', 'School A', ['spaces:read', 'spaces:update'])]
+      });
+      create(updateOnly);
+      expect(component.canCreate()).toBe(false);
+      expect(component.canEdit()).toBe(true);
+      expect(component.canDelete()).toBe(false);
+      expect(element().querySelector('#space-create-button')).toBeNull();
+    });
+
+    it('says so when the school names cannot be loaded', () => {
+      spaceService.getAllSchools.mockReturnValue(
+        throwError(() => new HttpErrorResponse({ status: 500 }))
+      );
+      create(PLATFORM_ADMIN);
+      expect(toast.warning).toHaveBeenCalledWith('School names could not be loaded', {
+        description: 'Something went wrong.'
+      });
     });
   });
 });

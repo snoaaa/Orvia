@@ -5,6 +5,7 @@ import {
   portalLandingGuard,
   portalPermissionGuard
 } from './identity/guards/portal-permission.guard';
+import { apiPermissionGuard } from './documents/shared/api-permissions.util';
 import { AdminLayout } from './theme/layouts/admin-layout/admin-layout.component';
 import { PERMISSION_MENU_MAP } from './theme/layouts/admin-layout/navigation/navigation';
 import { GuestLayoutComponent } from './theme/layouts/guest-layout/guest-layout.component';
@@ -86,7 +87,8 @@ export const adminRoutes: Routes = [
       },
       {
         path: 'spaces',
-        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['spaces'])],
+        // Read-only users (spaces:read) see the list without its actions; same rule as GET /documents/spaces.
+        canActivate: [apiPermissionGuard('spaces:read', 'documents:manage')],
         loadComponent: () =>
           import('./documents/spaces/space-list/space-list.component').then(
             (c) => c.SpaceListComponent
@@ -94,7 +96,7 @@ export const adminRoutes: Routes = [
       },
       {
         path: 'spaces/new',
-        canActivate: [portalPermissionGuard('spaces:create')],
+        canActivate: [apiPermissionGuard('spaces:create')],
         loadComponent: () =>
           import('./documents/spaces/space-edit/space-edit.component').then(
             (c) => c.SpaceEditComponent
@@ -110,7 +112,7 @@ export const adminRoutes: Routes = [
       },
       {
         path: 'spaces/:id/edit',
-        canActivate: [portalPermissionGuard('spaces:update')],
+        canActivate: [apiPermissionGuard('spaces:update')],
         loadComponent: () =>
           import('./documents/spaces/space-edit/space-edit.component').then(
             (c) => c.SpaceEditComponent

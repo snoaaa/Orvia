@@ -10,7 +10,6 @@ import {
   PortalSchool,
   PortalSessionService
 } from '../../../identity/services/portal-session.service';
-import { UserManagementService } from '../../../identity/users/services/user-management.service';
 import { notBlank, trimmedMaxLength } from '../../shared/form-validators';
 import {
   CreateSpacePayload,
@@ -27,7 +26,7 @@ import {
   UpdateSpacePayload
 } from '../models/space.model';
 import { SpaceManagementService } from '../services/space-management.service';
-import { schoolsManagingSpaces } from '../utils/space-scope.util';
+import { schoolsGranting } from '../utils/space-scope.util';
 
 const FIELD_LABELS: Record<SpaceFormField, string> = {
   schoolId: 'School',
@@ -54,7 +53,6 @@ export class SpaceEditComponent {
   private readonly router = inject(Router);
   private readonly fb = inject(FormBuilder);
   private readonly spaceService = inject(SpaceManagementService);
-  private readonly userService = inject(UserManagementService);
   private readonly toast = inject(GoeyToastService, { optional: true });
   readonly session = inject(PortalSessionService);
 
@@ -78,7 +76,7 @@ export class SpaceEditComponent {
   readonly schoolOptions = computed<PortalSchool[]>(() =>
     this.session.isPlatformAdmin()
       ? this.allSchools()
-      : schoolsManagingSpaces(this.session.user(), this.session.schools())
+      : schoolsGranting(this.session.user(), this.session.schools(), 'spaces:create')
   );
 
   /** The school field is hidden when the user manages a single school (#113). */
@@ -116,9 +114,15 @@ export class SpaceEditComponent {
   readonly hasChanges = computed(() => Object.keys(this.changes()).length > 0);
 
   constructor() {
+    // A name already used in one school may be free in another: the API's "name already exists" error
+    // (and any other API error on the name) no longer applies once the school changes.
+    this.form.controls.schoolId.valueChanges
+      .pipe(takeUntilDestroyed())
+      .subscribe(() => this.form.controls.name.updateValueAndValidity());
+
     if (this.session.isPlatformAdmin()) {
-      this.userService
-        .getSchools()
+      this.spaceService
+        .getAllSchools()
         .pipe(takeUntilDestroyed())
         .subscribe({
           next: (schools) => this.allSchools.set(schools),
@@ -160,13 +164,14 @@ export class SpaceEditComponent {
   onSubmit(): void {
     if (this.isSaving()) return;
     this.generalError.set(null);
+    // Errors from the previous API answer are about the values sent then: check the fields again without
+    // them, so a stale error never blocks the next try.
+    Object.values(this.form.controls).forEach((control) => control.updateValueAndValidity());
     this.form.markAllAsTouched();
     if (this.form.invalid) {
       // A hidden school field cannot be fixed by the user: say why instead.
       if (this.form.controls.schoolId.invalid && !this.showSchoolField()) {
-        this.generalError.set(
-          'You do not manage documents in any school, so you cannot create a space.'
-        );
+        this.generalError.set('You may not create spaces in any of your schools.');
       }
       return;
     }

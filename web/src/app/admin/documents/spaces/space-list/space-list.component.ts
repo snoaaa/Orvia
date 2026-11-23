@@ -7,10 +7,10 @@ import { GoeyToastService } from 'goey-toast-angular';
 import { EMPTY, Subject, catchError, switchMap } from 'rxjs';
 import { PortalSessionService } from '../../../identity/services/portal-session.service';
 import { ConfirmationModalComponent } from '../../../identity/users/components/confirmation-modal/confirmation-modal.component';
-import { SchoolSummaryOption } from '../../../identity/users/models/user.model';
-import { UserManagementService } from '../../../identity/users/services/user-management.service';
+import { sessionGrants } from '../../shared/api-permissions.util';
 import {
   PaginatedSpaces,
+  SchoolOption,
   SPACE_SEARCH_MAX_LENGTH,
   SpaceEntity,
   spaceLanguageLabel,
@@ -36,7 +36,6 @@ export const SPACE_SEARCH_DEBOUNCE_MS = 300;
 })
 export class SpaceListComponent {
   private readonly spaceService = inject(SpaceManagementService);
-  private readonly userService = inject(UserManagementService);
   private readonly toast = inject(GoeyToastService, { optional: true });
   private readonly destroyRef = inject(DestroyRef);
   readonly session = inject(PortalSessionService);
@@ -54,18 +53,22 @@ export class SpaceListComponent {
   readonly isUpdating = signal(false);
   readonly errorMessage = signal('');
 
+  /** What is typed in the search box. */
+  readonly searchInput = signal('');
+  /** The search the list shows: the typed text once typing pauses (or another action needs a page). */
   readonly searchTerm = signal('');
   /** School filter of platform admins ('' = all schools). */
   readonly selectedSchoolId = signal('');
   /** Schools offered to platform admins in the filter. */
-  readonly schools = signal<SchoolSummaryOption[]>([]);
+  readonly schools = signal<SchoolOption[]>([]);
 
   readonly deleteTarget = signal<SpaceEntity | null>(null);
   readonly isDeleting = signal(false);
 
-  readonly canCreate = computed(() => this.session.hasPermission('spaces:create'));
-  readonly canEdit = computed(() => this.session.hasPermission('spaces:update'));
-  readonly canDelete = computed(() => this.session.hasPermission('spaces:delete'));
+  /** Actions are offered only when the API accepts them (same permission rules, no 403). */
+  readonly canCreate = computed(() => sessionGrants(this.session, 'spaces:create'));
+  readonly canEdit = computed(() => sessionGrants(this.session, 'spaces:update'));
+  readonly canDelete = computed(() => sessionGrants(this.session, 'spaces:delete'));
 
   /** The school column only helps platform admins looking at every school. */
   readonly showSchoolColumn = computed(
@@ -124,12 +127,15 @@ export class SpaceListComponent {
     });
 
     if (this.session.isPlatformAdmin()) {
-      this.userService
-        .getSchools()
+      this.spaceService
+        .getAllSchools()
         .pipe(takeUntilDestroyed())
         .subscribe({
           next: (schools) => this.schools.set(schools),
-          error: () => this.schools.set([])
+          error: (error) =>
+            this.toast?.warning('School names could not be loaded', {
+              description: this.spaceService.errorMessage(error, 'The school filter is empty.')
+            })
         });
     }
 
@@ -143,22 +149,22 @@ export class SpaceListComponent {
   }
 
   loadSpaces(): void {
+    this.applyTypedSearch();
     if (this.spaces().length > 0) this.isUpdating.set(true);
     this.errorMessage.set('');
     this.reload$.next();
   }
 
   onSearchChange(term: string): void {
-    this.searchTerm.set(term);
+    this.searchInput.set(term);
     clearTimeout(this.searchTimer);
-    this.searchTimer = setTimeout(() => {
-      this.currentPage.set(1);
-      this.loadSpaces();
-    }, SPACE_SEARCH_DEBOUNCE_MS);
+    this.searchTimer = setTimeout(() => this.loadSpaces(), SPACE_SEARCH_DEBOUNCE_MS);
   }
 
   clearFilters(): void {
     clearTimeout(this.searchTimer);
+    this.searchTimer = undefined;
+    this.searchInput.set('');
     this.searchTerm.set('');
     this.selectedSchoolId.set('');
     this.currentPage.set(1);
@@ -236,12 +242,33 @@ export class SpaceListComponent {
     this.loadSpaces();
   }
 
+  /**
+   * Applies what was typed in the search box before any request, and cancels the pending search: a page,
+   * page size or filter change made while typing never sends the old search, and the timer never sends a
+   * second request afterwards. A new search starts from the first page.
+   */
+  private applyTypedSearch(): void {
+    clearTimeout(this.searchTimer);
+    this.searchTimer = undefined;
+    if (this.searchInput() !== this.searchTerm()) {
+      this.searchTerm.set(this.searchInput());
+      this.currentPage.set(1);
+    }
+  }
+
   private showPage(res: PaginatedSpaces): void {
+    const totalPages = res.totalPages || Math.ceil(res.total / res.limit) || 1;
+    // A page past the end (spaces deleted meanwhile, by someone else too): show the last page instead.
+    if (res.data.length === 0 && res.total > 0 && res.page > totalPages) {
+      this.currentPage.set(totalPages);
+      this.loadSpaces();
+      return;
+    }
     this.spaces.set(res.data);
     this.total.set(res.total);
     this.currentPage.set(res.page);
     this.pageSize.set(res.limit);
-    this.totalPages.set(res.totalPages || Math.ceil(res.total / res.limit) || 1);
+    this.totalPages.set(totalPages);
     this.isInitialLoading.set(false);
     this.isUpdating.set(false);
   }
