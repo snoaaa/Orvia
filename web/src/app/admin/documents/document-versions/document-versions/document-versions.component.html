@@ -6,6 +6,44 @@
           <i class="ti ti-lock me-1"></i>You do not have permission to manage documents.
         </div>
       } @else {
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+          <span class="text-muted text-sm">
+            Replacing the file adds a new version; earlier versions are kept.
+          </span>
+          <label
+            class="btn btn-sm btn-primary mb-0"
+            [class.disabled]="replacing()"
+            for="replace-file-input"
+          >
+            <i class="ti ti-file-upload me-1"></i>Replace file
+          </label>
+          <input
+            id="replace-file-input"
+            type="file"
+            class="visually-hidden"
+            [disabled]="replacing()"
+            (change)="onReplacePicked($event)"
+          />
+        </div>
+        @if (replacing()) {
+          <div
+            class="progress mb-3"
+            id="replace-progress"
+            role="progressbar"
+            [attr.aria-valuenow]="replaceProgress()"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div class="progress-bar" [style.width.%]="replaceProgress()">
+              {{ replaceProgress() }}%
+            </div>
+          </div>
+        }
+        @if (replaceError()) {
+          <div class="alert alert-danger" id="replace-error" role="alert">
+            {{ replaceError() }}
+          </div>
+        }
         @if (error()) {
           <div class="alert alert-danger d-flex align-items-center justify-content-between" id="versions-error" role="alert">
             <span>{{ error() }}</span>

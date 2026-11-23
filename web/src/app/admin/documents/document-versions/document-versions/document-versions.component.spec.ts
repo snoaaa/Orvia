@@ -1,8 +1,9 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
-import { of, throwError } from 'rxjs';
+import { Subject, of, throwError } from 'rxjs';
 import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
+import { UploadEvent } from '../../document-upload/models/upload.model';
 import { DocumentVersionItem } from '../models/document-version.model';
 import { DocumentVersionService } from '../services/document-version.service';
 import { DocumentVersionsComponent } from './document-versions.component';
@@ -15,10 +16,11 @@ describe('DocumentVersionsComponent', () => {
     list: ReturnType<typeof vi.fn>;
     getDocument: ReturnType<typeof vi.fn>;
     download: ReturnType<typeof vi.fn>;
+    replace: ReturnType<typeof vi.fn>;
     saveFile: ReturnType<typeof vi.fn>;
     errorMessage: ReturnType<typeof vi.fn>;
   };
-  let toast: { error: ReturnType<typeof vi.fn> };
+  let toast: { success: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
 
   const version = (n: number, isCurrent = false): DocumentVersionItem => ({
     id: `v${n}`,
@@ -46,10 +48,11 @@ describe('DocumentVersionsComponent', () => {
       list: vi.fn().mockReturnValue(of([version(1), version(2, true)])),
       getDocument: vi.fn().mockReturnValue(of({ id: 'doc-1', title: 'Notes' })),
       download: vi.fn().mockReturnValue(of(new Blob(['x']))),
+      replace: vi.fn(),
       saveFile: vi.fn(),
       errorMessage: vi.fn((e: { message?: string }) => e?.message ?? 'fallback')
     };
-    toast = { error: vi.fn() };
+    toast = { success: vi.fn(), error: vi.fn() };
     TestBed.configureTestingModule({
       imports: [DocumentVersionsComponent],
       providers: [
@@ -104,6 +107,43 @@ describe('DocumentVersionsComponent', () => {
     expect(service.download).toHaveBeenCalledWith('doc-1', 1);
     expect(service.saveFile).toHaveBeenCalledWith(expect.any(Blob), 'Notes-v1.pdf');
     expect(component.downloading()).toBeNull();
+  });
+
+  describe('replace', () => {
+    const pick = (file: File): void => {
+      const input = el().querySelector('#replace-file-input') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { value: [file], configurable: true });
+      input.dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+    };
+    const pdf = new File(['%PDF'], 'v3.pdf', { type: 'application/pdf' });
+
+    it('shows progress, then reloads the list and toasts on success', () => {
+      const events = new Subject<UploadEvent>();
+      service.replace.mockReturnValue(events.asObservable());
+      create();
+
+      pick(pdf);
+      expect(service.replace).toHaveBeenCalledWith('doc-1', pdf);
+      events.next({ type: 'progress', percent: 40 });
+      fixture.detectChanges();
+      expect(el().querySelector('#replace-progress')?.textContent).toContain('40%');
+
+      events.next({ type: 'done', document: { id: 'doc-1', title: 'Notes' } });
+      fixture.detectChanges();
+      expect(component.replacing()).toBe(false);
+      expect(toast.success).toHaveBeenCalledWith('New version uploaded');
+      expect(service.list).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows the API reason when the replacement is refused', () => {
+      service.replace.mockReturnValue(throwError(() => ({ message: 'file is infected' })));
+      create();
+      pick(pdf);
+      expect(el().querySelector('#replace-error')?.textContent).toContain('file is infected');
+      expect(component.replacing()).toBe(false);
+      expect(service.list).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('toasts a failed download', () => {

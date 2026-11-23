@@ -37,6 +37,10 @@ export class DocumentVersionsComponent implements OnInit {
   /** Version number being downloaded, if any. */
   readonly downloading = signal<number | null>(null);
 
+  readonly replacing = signal(false);
+  readonly replaceProgress = signal(0);
+  readonly replaceError = signal<string | null>(null);
+
   readonly canManage = computed(() => this.session.hasPermission('documents:manage'));
   readonly heading = computed(() => {
     const doc = this.document();
@@ -64,6 +68,33 @@ export class DocumentVersionsComponent implements OnInit {
       error: (error: unknown) => {
         this.error.set(this.versionService.errorMessage(error, 'load'));
         this.loading.set(false);
+      }
+    });
+  }
+
+  /** Uploads the picked file as a new version, then reloads the list. */
+  onReplacePicked(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || this.replacing()) return;
+
+    this.replacing.set(true);
+    this.replaceProgress.set(0);
+    this.replaceError.set(null);
+    this.versionService.replace(this.documentId(), file).subscribe({
+      next: (e) => {
+        if (e.type === 'progress') {
+          this.replaceProgress.set(e.percent);
+        } else {
+          this.replacing.set(false);
+          this.toast?.success('New version uploaded');
+          this.load();
+        }
+      },
+      error: (error: unknown) => {
+        this.replacing.set(false);
+        this.replaceError.set(this.versionService.errorMessage(error, 'replace'));
       }
     });
   }
