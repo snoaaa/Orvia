@@ -1,0 +1,226 @@
+<div class="row">
+  <div class="col-12">
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+      <div>
+        @if (activeSchoolLabel(); as schoolName) {
+          <span class="badge bg-light-primary border border-primary" id="space-list-school">
+            {{ schoolName }}
+          </span>
+        }
+      </div>
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        @if (session.isPlatformAdmin()) {
+          <select
+            id="space-school-filter"
+            class="form-select form-select-sm school-filter"
+            aria-label="Filter by school"
+            [ngModel]="selectedSchoolId()"
+            (ngModelChange)="onSchoolFilterChange($event)"
+          >
+            <option value="">All Schools</option>
+            @for (s of schools(); track s.id) {
+              <option [value]="s.id">{{ s.name }}</option>
+            }
+          </select>
+        }
+        <input
+          id="space-search"
+          type="search"
+          class="form-control form-control-sm search-input"
+          placeholder="Search spaces by name..."
+          aria-label="Search spaces by name"
+          [maxlength]="searchMaxLength"
+          [ngModel]="searchInput()"
+          (ngModelChange)="onSearchChange($event)"
+        />
+        @if (canCreate()) {
+          <a
+            id="space-create-button"
+            routerLink="/admin/spaces/new"
+            class="btn btn-primary btn-sm d-inline-flex align-items-center gap-1"
+          >
+            <i class="ti ti-plus"></i>
+            <span>Create Space</span>
+          </a>
+        }
+      </div>
+    </div>
+
+    @if (errorMessage()) {
+      <div
+        class="alert alert-danger d-flex align-items-center justify-content-between gap-2"
+        role="alert"
+      >
+        <span>{{ errorMessage() }}</span>
+        <button type="button" class="btn btn-sm btn-outline-danger" (click)="loadSpaces()">
+          Retry
+        </button>
+      </div>
+    }
+
+    <div class="card tbl-card">
+      <div class="table-responsive" [class.table-updating]="isUpdating()">
+        @if (isUpdating()) {
+          <div class="table-loading-overlay">
+            <div class="table-loading-bar"></div>
+          </div>
+        }
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>NAME</th>
+              @if (showSchoolColumn()) {
+                <th class="text-nowrap">SCHOOL</th>
+              }
+              <th class="text-nowrap language-column">LANGUAGE</th>
+              <th class="text-nowrap privacy-column">PRIVACY</th>
+              <th class="text-nowrap date-column">UPDATED</th>
+              <th class="text-end text-nowrap pe-4 action-column">ACTIONS</th>
+            </tr>
+          </thead>
+          <tbody>
+            @if (isInitialLoading()) {
+              <tr>
+                <td [attr.colspan]="columnCount()" class="text-center py-5 text-muted">
+                  <div
+                    class="spinner-border spinner-border-sm text-primary me-2"
+                    role="status"
+                  ></div>
+                  Loading spaces...
+                </td>
+              </tr>
+            } @else if (spaces().length === 0) {
+              <tr>
+                <td
+                  [attr.colspan]="columnCount()"
+                  class="text-center py-5 text-muted"
+                  id="space-list-empty"
+                >
+                  @if (hasFilters()) {
+                    <p class="mb-2">No space matches these filters.</p>
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline-secondary"
+                      (click)="clearFilters()"
+                    >
+                      Clear filters
+                    </button>
+                  } @else {
+                    <p class="mb-2">No space yet.</p>
+                    @if (canCreate()) {
+                      <a routerLink="/admin/spaces/new" class="btn btn-sm btn-primary"
+                        >Create the first space</a
+                      >
+                    }
+                  }
+                </td>
+              </tr>
+            } @else {
+              @for (space of spaces(); track space.id) {
+                <tr>
+                  <td class="name-cell">
+                    <div class="f-w-500 text-dark text-truncate" [title]="space.name">
+                      {{ space.name }}
+                    </div>
+                    @if (space.description) {
+                      <small class="text-muted text-truncate d-block" [title]="space.description">
+                        {{ space.description }}
+                      </small>
+                    }
+                  </td>
+                  @if (showSchoolColumn()) {
+                    <td class="text-nowrap">{{ schoolName(space.schoolId) }}</td>
+                  }
+                  <td class="text-nowrap">{{ languageLabel(space.language) }}</td>
+                  <td class="text-nowrap">
+                    <span
+                      class="badge"
+                      [ngClass]="privacyOption(space.privacy)?.badgeClass ?? 'bg-light-secondary'"
+                    >
+                      {{ privacyOption(space.privacy)?.label ?? space.privacy }}
+                    </span>
+                  </td>
+                  <td class="text-nowrap">{{ space.updatedAt | date: 'mediumDate' }}</td>
+                  <td class="text-end text-nowrap pe-4">
+                    @if (canEditSpace(space)) {
+                      <a
+                        [routerLink]="['/admin/spaces', space.id, 'edit']"
+                        class="btn btn-icon btn-link-primary space-edit-action"
+                        title="Edit space"
+                        [attr.aria-label]="'Edit ' + space.name"
+                      >
+                        <i class="ti ti-edit f-18"></i>
+                      </a>
+                    }
+                    @if (canDeleteSpace(space)) {
+                      <button
+                        type="button"
+                        class="btn btn-icon btn-link-danger space-delete-action"
+                        title="Delete space"
+                        [attr.aria-label]="'Delete ' + space.name"
+                        (click)="openDeleteModal(space)"
+                      >
+                        <i class="ti ti-trash f-18"></i>
+                      </button>
+                    }
+                  </td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <div
+        class="card-footer d-flex align-items-center justify-content-between flex-wrap gap-2 py-2"
+      >
+        <span class="text-muted text-sm">
+          Page {{ currentPage() }} of {{ totalPages() }} ({{ total() }}
+          {{ total() === 1 ? 'space' : 'spaces' }})
+        </span>
+        <div class="d-flex align-items-center gap-2">
+          <select
+            class="form-select form-select-sm page-size-select"
+            aria-label="Spaces per page"
+            [ngModel]="pageSize()"
+            (ngModelChange)="changePageSize($event)"
+          >
+            <option [ngValue]="10">10</option>
+            <option [ngValue]="25">25</option>
+            <option [ngValue]="50">50</option>
+          </select>
+          <div class="btn-group btn-group-sm">
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              [disabled]="currentPage() <= 1"
+              (click)="goToPage(currentPage() - 1)"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              [disabled]="currentPage() >= totalPages()"
+              (click)="goToPage(currentPage() + 1)"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<app-confirmation-modal
+  [isOpen]="deleteTarget() !== null"
+  title="Delete Space"
+  message="Delete this space? Its documents are hidden with it, and its name can be used again for a new space."
+  [detailText]="'Space: ' + (deleteTarget()?.name ?? '')"
+  confirmText="Delete Space"
+  confirmButtonClass="btn-danger"
+  [isLoading]="isDeleting()"
+  (confirmed)="confirmDelete()"
+  (cancelled)="closeDeleteModal()"
+/>

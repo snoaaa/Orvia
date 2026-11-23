@@ -1,0 +1,211 @@
+<div class="row justify-content-center">
+  <div class="col-12 col-xl-8">
+    <div class="d-flex align-items-center gap-2 mb-3">
+      <a
+        routerLink="/admin/spaces"
+        class="btn btn-icon btn-link-secondary"
+        aria-label="Back to spaces"
+      >
+        <i class="ti ti-arrow-left f-18"></i>
+      </a>
+      <h5 class="mb-0">{{ isEditMode ? 'Edit Space' : 'Create Space' }}</h5>
+    </div>
+
+    <app-card [cardTitle]="isEditMode ? (space()?.name ?? 'Space') : 'New space'">
+      @if (isLoading()) {
+        <div class="py-5 text-center text-muted">
+          <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+          <span>Loading the space...</span>
+        </div>
+      } @else {
+        @if (generalError()) {
+          <div class="alert alert-danger" role="alert" id="space-form-error">
+            {{ generalError() }}
+          </div>
+        }
+
+        @if (!isEditMode && schoolsLoadError(); as schoolsError) {
+          <div
+            class="alert alert-danger d-flex align-items-center justify-content-between gap-2"
+            role="alert"
+            id="space-schools-error"
+          >
+            <span>{{ schoolsError }}</span>
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-danger"
+              id="space-schools-retry"
+              [disabled]="isLoadingSchools()"
+              (click)="loadAllSchools()"
+            >
+              Retry
+            </button>
+          </div>
+        }
+
+        @if (!loadFailed()) {
+          <form [formGroup]="form" (ngSubmit)="onSubmit()" novalidate>
+            @if (showSchoolField()) {
+              <div class="form-group mb-3">
+                <label class="form-label" for="space-school">
+                  School
+                  @if (!isEditMode) {
+                    <span class="text-danger">*</span>
+                  }
+                </label>
+                @if (isEditMode) {
+                  <input
+                    id="space-school"
+                    type="text"
+                    class="form-control"
+                    [value]="schoolName(space()?.schoolId)"
+                    readonly
+                  />
+                  <small class="text-muted d-block mt-1"
+                    >The school of a space cannot change.</small
+                  >
+                } @else {
+                  <select
+                    id="space-school"
+                    class="form-select"
+                    formControlName="schoolId"
+                    [class.is-invalid]="fieldError('schoolId')"
+                  >
+                    <option value="" disabled>Select a school</option>
+                    @for (school of schoolOptions(); track school.id) {
+                      <option [value]="school.id">{{ school.name }}</option>
+                    }
+                  </select>
+                  @if (fieldError('schoolId'); as message) {
+                    <div class="invalid-feedback d-block">{{ message }}</div>
+                  }
+                }
+              </div>
+            }
+
+            <div class="form-group mb-3">
+              <label class="form-label" for="space-name"
+                >Name <span class="text-danger">*</span></label
+              >
+              <input
+                id="space-name"
+                type="text"
+                class="form-control"
+                formControlName="name"
+                placeholder="e.g. Operating Systems & Architecture"
+                autocomplete="off"
+                [class.is-invalid]="fieldError('name')"
+              />
+              @if (fieldError('name'); as message) {
+                <div class="invalid-feedback d-block">{{ message }}</div>
+              } @else {
+                <small class="text-muted d-block mt-1">
+                  Unique within the school, up to {{ nameMaxLength }} characters.
+                </small>
+              }
+            </div>
+
+            <div class="form-group mb-3">
+              <label class="form-label" for="space-description">Description</label>
+              <textarea
+                id="space-description"
+                class="form-control"
+                rows="4"
+                formControlName="description"
+                placeholder="What the documents of this space are about"
+                [class.is-invalid]="fieldError('description')"
+              ></textarea>
+              <div class="d-flex justify-content-between mt-1">
+                @if (fieldError('description'); as message) {
+                  <div class="invalid-feedback d-block">{{ message }}</div>
+                } @else {
+                  <small class="text-muted">Optional.</small>
+                }
+                <small
+                  class="text-nowrap ms-2"
+                  [class.text-danger]="descriptionLength() > descriptionMaxLength"
+                  [class.text-muted]="descriptionLength() <= descriptionMaxLength"
+                  id="space-description-count"
+                >
+                  {{ descriptionLength() }} / {{ descriptionMaxLength }}
+                </small>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col-md-6 form-group mb-3">
+                <label class="form-label" for="space-language">
+                  Main language <span class="text-danger">*</span>
+                </label>
+                <select
+                  id="space-language"
+                  class="form-select"
+                  formControlName="language"
+                  [class.is-invalid]="fieldError('language')"
+                >
+                  @for (option of languageOptions; track option.value) {
+                    <option [value]="option.value">{{ option.label }}</option>
+                  }
+                </select>
+                @if (fieldError('language'); as message) {
+                  <div class="invalid-feedback d-block">{{ message }}</div>
+                } @else {
+                  <small class="text-muted d-block mt-1"
+                    >The language most documents are written in.</small
+                  >
+                }
+              </div>
+
+              <div class="col-md-6 form-group mb-3">
+                <label class="form-label" for="space-privacy"
+                  >Privacy <span class="text-danger">*</span></label
+                >
+                <select
+                  id="space-privacy"
+                  class="form-select"
+                  formControlName="privacy"
+                  [class.is-invalid]="fieldError('privacy')"
+                >
+                  @for (option of privacyOptions; track option.value) {
+                    <option [value]="option.value">{{ option.label }}</option>
+                  }
+                </select>
+                @if (fieldError('privacy'); as message) {
+                  <div class="invalid-feedback d-block">{{ message }}</div>
+                } @else {
+                  <small class="text-muted d-block mt-1">
+                    Who sees each document is still decided by its publication rules.
+                  </small>
+                }
+              </div>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2 pt-3 border-top">
+              <button
+                type="button"
+                class="btn btn-light-secondary"
+                [disabled]="isSaving()"
+                (click)="cancel()"
+              >
+                Cancel
+              </button>
+              <button
+                id="space-save-button"
+                type="submit"
+                class="btn btn-primary d-inline-flex align-items-center gap-1"
+                [disabled]="isSaving() || (!isEditMode && !!schoolsLoadError()) || (isEditMode && !hasChanges())"
+              >
+                @if (isSaving()) {
+                  <span class="spinner-border spinner-border-sm" role="status"></span>
+                  <span>Saving...</span>
+                } @else {
+                  <span>{{ isEditMode ? 'Save Changes' : 'Create Space' }}</span>
+                }
+              </button>
+            </div>
+          </form>
+        }
+      }
+    </app-card>
+  </div>
+</div>
