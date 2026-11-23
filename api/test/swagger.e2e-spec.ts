@@ -64,6 +64,25 @@ describe('Swagger Documentation & Protection (e2e)', () => {
       expect(tagNames).toContain('Mobile & Synchronization');
       expect(tagNames).toContain('Audit Trail');
     });
+
+    it('should document reading and editing roles, PATCH /roles/{id} included (#45)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/docs-json')
+        .expect(200);
+
+      const paths = res.body.paths ?? {};
+      expect(paths['/roles']).toHaveProperty('get');
+      expect(paths['/roles']).toHaveProperty('post');
+      expect(paths['/roles/{id}']).toHaveProperty('get');
+      expect(paths['/roles/{id}']).toHaveProperty('patch');
+
+      const patch = paths['/roles/{id}'].patch;
+      // Both permission spellings are advertised, and the base-role rule is spelled out.
+      expect(JSON.stringify(patch)).toContain('permissionIds');
+      expect(JSON.stringify(patch)).toContain('permissions');
+      expect(patch.description).toContain('Base roles cannot be edited');
+      expect(JSON.stringify(paths['/permissions'].get)).toContain('permissionIds');
+    });
   });
 
   describe('Swagger Basic Auth Protection', () => {

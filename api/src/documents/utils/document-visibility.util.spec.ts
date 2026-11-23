@@ -63,7 +63,7 @@ describe('document visibility (#109)', () => {
     const reader = user([{ role: 'STAFF', schoolId: 's1', permissions: ['documents:read'] }]);
     expect(await isDocumentVisibleTo(prisma, reader, 'd1')).toBe(false);
     expect(prisma.document.findFirst).toHaveBeenCalledWith({
-      where: { AND: [{ id: 'd1', deletedAt: null }, visibleDocumentsWhere(reader)] },
+      where: { AND: [{ id: 'd1', deletedAt: null, space: { deletedAt: null } }, visibleDocumentsWhere(reader)] },
       select: { id: true },
     });
 
@@ -71,7 +71,7 @@ describe('document visibility (#109)', () => {
     const admin = user([{ role: 'PLATFORM_ADMIN', scope: 'platform', schoolId: '', permissions: ['*'] }]);
     expect(await isDocumentVisibleTo(prisma, admin, 'd1')).toBe(true);
     expect(prisma.document.findFirst).toHaveBeenLastCalledWith({
-      where: { AND: [{ id: 'd1', deletedAt: null }] },
+      where: { AND: [{ id: 'd1', deletedAt: null, space: { deletedAt: null } }] },
       select: { id: true },
     });
   });

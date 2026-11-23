@@ -140,7 +140,9 @@ describe('DocumentProcessingStatusService (#112)', () => {
     it('announces nothing for a draft or a deleted document', async () => {
       prisma.document.findUnique.mockResolvedValueOnce({ deletedAt: null, space: { schoolId: 'school-a' }, access: [] });
       await service.setStatus('v1', 'available');
-      prisma.document.findUnique.mockResolvedValueOnce({ deletedAt: new Date(), space: { schoolId: 'school-a' }, access: [{ targetType: 'school' }] });
+      prisma.document.findUnique.mockResolvedValueOnce({ deletedAt: new Date(), space: { schoolId: 'school-a', deletedAt: null }, access: [{ targetType: 'school' }] });
+      await service.setStatus('v1', 'available');
+      prisma.document.findUnique.mockResolvedValueOnce({ deletedAt: null, space: { schoolId: 'school-a', deletedAt: new Date() }, access: [{ targetType: 'school' }] });
       await service.setStatus('v1', 'available');
       expect(audienceOf).not.toHaveBeenCalled();
       expect(prisma.syncChange.createMany).not.toHaveBeenCalled();

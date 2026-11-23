@@ -21,6 +21,8 @@ export const AuditAction = {
   USER_INVITED: 'user_invited',
   PASSWORD_SETUP: 'password_setup',
   ROLE_ASSIGNED: 'role_assigned',
+  ROLE_UPDATED: 'role_updated',
+  ROLE_DELETED: 'role_deleted',
   PERMISSION_GRANTED: 'permission_granted',
   PERMISSION_REVOKED: 'permission_revoked',
   ASSIGNMENT_UPDATED: 'assignment_updated',
@@ -35,6 +37,9 @@ export const AuditAction = {
   DOCUMENT_DELETED: 'document_deleted',
   DOCUMENT_PUBLISHED: 'document_published',
   DOCUMENT_ACCESS_CHANGED: 'document_access_changed',
+  SPACE_CREATED: 'space_created',
+  SPACE_UPDATED: 'space_updated',
+  SPACE_DELETED: 'space_deleted',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
@@ -48,6 +53,8 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.USER_INVITED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.PASSWORD_SETUP]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.ROLE_ASSIGNED]: AuditCategory.IDENTITY_ACCESS,
+  [AuditAction.ROLE_UPDATED]: AuditCategory.IDENTITY_ACCESS,
+  [AuditAction.ROLE_DELETED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.PERMISSION_GRANTED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.PERMISSION_REVOKED]: AuditCategory.IDENTITY_ACCESS,
   [AuditAction.ASSIGNMENT_UPDATED]: AuditCategory.IDENTITY_ACCESS,
@@ -60,6 +67,9 @@ export const AUDIT_ACTION_CATEGORY: Record<AuditAction, AuditCategory> = {
   [AuditAction.DOCUMENT_DELETED]: AuditCategory.DOCUMENTS,
   [AuditAction.DOCUMENT_PUBLISHED]: AuditCategory.DOCUMENTS,
   [AuditAction.DOCUMENT_ACCESS_CHANGED]: AuditCategory.DOCUMENTS,
+  [AuditAction.SPACE_CREATED]: AuditCategory.DOCUMENTS,
+  [AuditAction.SPACE_UPDATED]: AuditCategory.DOCUMENTS,
+  [AuditAction.SPACE_DELETED]: AuditCategory.DOCUMENTS,
 };
 
 /** Primary key of the single audit_chain_head row. */

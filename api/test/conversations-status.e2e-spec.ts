@@ -170,6 +170,7 @@ describe('Message generation status polling (e2e)', () => {
         content: 'Mitochondria generate ATP [1].',
         references: {
           create: {
+            marker: 1,
             documentVersionId: docVerId,
             pageOrImageId: 'page_2',
             excerpt: 'Mitochondria are the powerhouse of the cell.',
@@ -194,10 +195,12 @@ describe('Message generation status polling (e2e)', () => {
     });
     expect(r3.body.answer.citations).toHaveLength(1);
     expect(r3.body.answer.citations[0]).toMatchObject({
+      marker: 1,
       documentId: docId,
       versionId: docVerId,
       available: true,
     });
+    expect(r3.body.answer.notEnoughEvidence).toBe(false);
 
     // 4. failed message exposes errorCode and null answer
     const failedMsg = await prisma.message.create({
