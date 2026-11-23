@@ -26,6 +26,7 @@ export class AuthUserService {
 
     const assignments: AuthRoleAssignment[] = user.assignments.map((a) => ({
       role: a.role.name,
+      roleId: a.roleId,
       scope: a.role.scope,
       schoolId: a.schoolId,
       schoolName: a.school?.name ?? null,

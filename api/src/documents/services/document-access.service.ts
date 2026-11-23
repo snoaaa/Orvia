@@ -221,9 +221,14 @@ export class DocumentAccessService {
   private async findManagedDocument(id: string, actor: AuthenticatedUser) {
     const doc = await this.prisma.document.findUnique({
       where: { id },
-      select: { id: true, spaceId: true, deletedAt: true, space: { select: { schoolId: true } } },
+      select: {
+        id: true,
+        spaceId: true,
+        deletedAt: true,
+        space: { select: { schoolId: true, deletedAt: true } },
+      },
     });
-    if (!doc || doc.deletedAt) {
+    if (!doc || doc.deletedAt || doc.space.deletedAt) {
       throw new NotFoundException(`Document with ID ${id} not found`);
     }
     assertSchoolAccess(actor, 'documents:manage', doc.space.schoolId);

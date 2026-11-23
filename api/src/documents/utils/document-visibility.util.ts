@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
+import { ACTIVE_DOCUMENT } from './active-space.util.js';
 import { AVAILABLE_STATUS, type DocumentStatus, type DocumentType, typeWhere } from './document-filters.util.js';
 
 /** The kinds of target a document can be published to (#109). */
@@ -112,7 +113,7 @@ export async function isDocumentVisibleTo(
 ): Promise<boolean> {
   const visible = visibleDocumentsWhere(actor);
   const found = await prisma.document.findFirst({
-    where: { AND: [{ id: documentId, deletedAt: null }, ...(visible ? [visible] : [])] },
+    where: { AND: [{ id: documentId, ...ACTIVE_DOCUMENT }, ...(visible ? [visible] : [])] },
     select: { id: true },
   });
   return found !== null;

@@ -124,7 +124,7 @@ export function Conversation({
       <View className="relative flex-1 bg-background">
         {/* Empty state overlay */}
         {messages.length === 0 && emptyState && (
-          <View className="absolute inset-0 z-10 flex items-center justify-center">
+          <View className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
             {emptyState}
           </View>
         )}

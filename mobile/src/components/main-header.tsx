@@ -1,3 +1,3 @@
-export function MainHeader(_props: { onNewChat?: () => void }) {
+export function MainHeader() {
   return null;
 }

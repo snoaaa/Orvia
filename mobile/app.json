@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Orvia",
-    "slug": "orvia",
+    "name": "mobile",
+    "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "orvia",
+    "scheme": "mobile",
     "userInterfaceStyle": "automatic",
     "ios": {
       "infoPlist": {
@@ -15,7 +15,6 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
-      "package": "com.wamdp.orvia",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -47,9 +46,7 @@
       "expo-image",
       "expo-web-browser",
       "expo-system-ui",
-      "expo-status-bar",
-      "expo-sqlite",
-      "expo-localization"
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,
