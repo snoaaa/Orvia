@@ -702,50 +702,59 @@ export class IdentityAndAccessService {
       return UserMapper.toEntity(target);
     }
 
-    const txResult = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
-      const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
-        SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
-      `;
-      const freshRole = lockedRole[0];
-      if (!freshRole) {
-        throw new BadRequestException(`Unknown role '${roleName}'`);
-      }
-      if (freshRole.scope !== role.scope) {
-        throw new ConflictException(
-          `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
-        );
-      }
+    const txResult = await (async () => {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
+          const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
+            SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
+          `;
+          const freshRole = lockedRole[0];
+          if (!freshRole) {
+            throw new BadRequestException(`Unknown role '${roleName}'`);
+          }
+          if (freshRole.scope !== role.scope) {
+            throw new ConflictException(
+              `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
+            );
+          }
 
-      const current = await tx.userAssignment.findFirst({
-        where: { userId: target.id, schoolId: dto.schoolId, ...ACTIVE_ASSIGNMENT },
-        include: { role: { include: { rolePermissions: { select: { permission: { select: { code: true } } } } } } },
-      });
-      if (current?.roleId === role.id) {
-        return { changed: false as const };
-      }
+          const current = await tx.userAssignment.findFirst({
+            where: { userId: target.id, schoolId: dto.schoolId, ...ACTIVE_ASSIGNMENT },
+            include: { role: { include: { rolePermissions: { select: { permission: { select: { code: true } } } } } } },
+          });
+          if (current?.roleId === role.id) {
+            return { changed: false as const };
+          }
 
-      const prevRoleGrantsDocManage =
-        current?.role.name === 'CONTENT_MANAGER' ||
-        current?.role.rolePermissions?.some(
-          (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
-        ) ||
-        false;
+          const prevRoleGrantsDocManage =
+            current?.role.name === 'CONTENT_MANAGER' ||
+            current?.role.rolePermissions?.some(
+              (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
+            ) ||
+            false;
 
-      if (current) {
-        await tx.userAssignment.update({ where: { id: current.id }, data: { roleId: role.id } });
-      } else {
-        await tx.userAssignment.create({
-          data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+          if (current) {
+            await tx.userAssignment.update({ where: { id: current.id }, data: { roleId: role.id } });
+          } else {
+            await tx.userAssignment.create({
+              data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+            });
+          }
+
+          return {
+            changed: true as const,
+            prevRoleGrantsDocManage,
+            previousRoleName: current?.role.name ?? null,
+          };
         });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+          throw new BadRequestException(`Unknown role '${roleName}'`);
+        }
+        throw error;
       }
-
-      return {
-        changed: true as const,
-        prevRoleGrantsDocManage,
-        previousRoleName: current?.role.name ?? null,
-      };
-    });
+    })();
 
     if (!txResult.changed) {
       return UserMapper.toEntity(target);

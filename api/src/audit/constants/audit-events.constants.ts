@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Catalogue of audited actions (issue #14). Documented in api/README.md ("Audit trail").
  * Add new actions here rather than passing free-form strings to AuditService.record().
  */

@@ -278,6 +278,40 @@ describe('Role deletion (e2e)', () => {
         expect(roleGone ? activeAssignments : 0).toBe(0);
       }
     });
+
+    it('cannot be raced by PATCH /assignments/:id switching to that role', async () => {
+      const created = check(await createRole('RACE_PATCH_ASSIGN'), 201).body;
+      const holder = await user('RacePatchAssignDel', 'STAFF');
+      const assignment = await prisma.userAssignment.findFirstOrThrow({
+        where: { userId: holder, schoolId, deletedAt: null },
+      });
+      const auth = await bearer(platformAdminId);
+
+      const [deleted, updated] = await Promise.all([
+        http().delete(`/roles/${created.id}`).set('Authorization', auth),
+        http().patch(`/assignments/${assignment.id}`).set('Authorization', auth).send({ role: roleName('RACE_PATCH_ASSIGN') }),
+      ]);
+
+      expect([deleted.status, updated.status].filter((status) => status >= 500)).toEqual([]);
+      expect([deleted.status, updated.status].filter((status) => status < 300)).toHaveLength(1);
+    });
+
+    it('cannot be raced by PATCH /identity/users/:id/role switching to that role', async () => {
+      const created = check(await createRole('RACE_IDENTITY_ASSIGN'), 201).body;
+      const holder = await user('RaceIdentityAssignDel', 'STAFF');
+      const auth = await bearer(platformAdminId);
+
+      const [deleted, assigned] = await Promise.all([
+        http().delete(`/roles/${created.id}`).set('Authorization', auth),
+        http()
+          .patch(`/identity/users/${holder}/role`)
+          .set('Authorization', auth)
+          .send({ schoolId, role: roleName('RACE_IDENTITY_ASSIGN') }),
+      ]);
+
+      expect([deleted.status, assigned.status].filter((status) => status >= 500)).toEqual([]);
+      expect([deleted.status, assigned.status].filter((status) => status < 300)).toHaveLength(1);
+    });
   });
 
   describe('older path DELETE /identity/roles/:id', () => {

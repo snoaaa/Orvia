@@ -247,54 +247,63 @@ export class AssignmentsService {
     }
     const group = groupId ? await this.findGroupOfSchool(groupId, school.id, role.scope) : null;
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`;
-      // Lock the target role row after the user row (matching `createAssignment` lock order to prevent
-      // deadlocks) so a concurrent `PATCH /roles/:id` cannot re-scope it to `platform` while we attach
-      // or retain a school/group assignment on it.
-      const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
-        SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
-      `;
-      const freshRole = lockedRole[0];
-      if (!freshRole) {
-        throw new BadRequestException(`Unknown role '${role.name}'`);
-      }
-      if (freshRole.scope !== role.scope) {
-        throw new ConflictException(
-          `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
-        );
-      }
-      // Re-read under the lock, so a concurrent PATCH cannot leave a stale group membership behind,
-      // and a concurrent DELETE (#49) makes this one 404.
-      const current = await tx.userAssignment.findFirst({
-        where: { id: assignment.id, ...ACTIVE_ASSIGNMENT },
-        select: { groupId: true, updatedAt: true, role: { select: { id: true, name: true } } },
-      });
-      if (!current) {
-        throw new NotFoundException(`Assignment with ID ${id} not found`);
-      }
-      if (current.role.id === role.id && current.groupId === groupId) {
-        return { changed: false as const, updatedAt: current.updatedAt };
-      }
-      const updated = await tx.userAssignment.update({
-        where: { id: assignment.id },
-        data: { roleId: role.id, groupId },
-        select: { updatedAt: true },
-      });
-      if (current.groupId !== groupId) {
-        if (current.groupId) {
-          await tx.groupMember.deleteMany({ where: { groupId: current.groupId, userId: user.id } });
-        }
-        if (groupId) {
-          await tx.groupMember.upsert({
-            where: { groupId_userId: { groupId, userId: user.id } },
-            create: { groupId, userId: user.id },
-            update: {},
+    const result = await (async () => {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`;
+          // Lock the target role row after the user row (matching `createAssignment` lock order to prevent
+          // deadlocks) so a concurrent `PATCH /roles/:id` or `DELETE /roles/:id` cannot re-scope or delete
+          // it while we attach or retain an assignment on it.
+          const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
+            SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
+          `;
+          const freshRole = lockedRole[0];
+          if (!freshRole) {
+            throw new BadRequestException(`Unknown role '${role.name}'`);
+          }
+          if (freshRole.scope !== role.scope) {
+            throw new ConflictException(
+              `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
+            );
+          }
+          // Re-read under the lock, so a concurrent PATCH cannot leave a stale group membership behind,
+          // and a concurrent DELETE (#49) makes this one 404.
+          const current = await tx.userAssignment.findFirst({
+            where: { id: assignment.id, ...ACTIVE_ASSIGNMENT },
+            select: { groupId: true, updatedAt: true, role: { select: { id: true, name: true } } },
           });
+          if (!current) {
+            throw new NotFoundException(`Assignment with ID ${id} not found`);
+          }
+          if (current.role.id === role.id && current.groupId === groupId) {
+            return { changed: false as const, updatedAt: current.updatedAt };
+          }
+          const updated = await tx.userAssignment.update({
+            where: { id: assignment.id },
+            data: { roleId: role.id, groupId },
+            select: { updatedAt: true },
+          });
+          if (current.groupId !== groupId) {
+            if (current.groupId) {
+              await tx.groupMember.deleteMany({ where: { groupId: current.groupId, userId: user.id } });
+            }
+            if (groupId) {
+              await tx.groupMember.upsert({
+                where: { groupId_userId: { groupId, userId: user.id } },
+                create: { groupId, userId: user.id },
+                update: {},
+              });
+            }
+          }
+          return { changed: true as const, updatedAt: updated.updatedAt, previous: current };
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+          throw new BadRequestException(`Unknown role '${role.name}'`);
         }
+        throw error;
       }
-      return { changed: true as const, updatedAt: updated.updatedAt, previous: current };
-    });
+    })();
 
     if (result.changed) {
       await this.audit.record(
