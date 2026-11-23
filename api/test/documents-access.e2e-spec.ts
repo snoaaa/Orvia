@@ -177,6 +177,55 @@ describe('Document publication (e2e)', () => {
     });
   });
 
+  describe('GET /documents/:id/access/options (#117)', () => {
+    let doc: string;
+    beforeAll(async () => {
+      doc = await document('A', 'Options');
+    });
+    const options = async (as: string, documentId: string) =>
+      http()
+        .get(`/documents/${documentId}/access/options`)
+        .set('Authorization', await bearer(as));
+
+    it('requires a token', async () => {
+      await http().get(`/documents/${doc}/access/options`).expect(401);
+    });
+
+    it('gives a content manager of the school its school, roles, classes and groups', async () => {
+      const body = check(await options(ids.ManagerA, doc), 200).body;
+      expect(body.school).toEqual({ id: schools.A, name: `Test E2E DocAccess School A ${stamp}` });
+      const roleNames = body.roles.map((r: { name: string }) => r.name);
+      expect(roleNames).toEqual(expect.arrayContaining(['STAFF', 'STUDENT']));
+      expect(roleNames).not.toContain('PLATFORM_ADMIN');
+      const classIds = body.classes.map((g: { id: string }) => g.id);
+      expect(classIds).toEqual(expect.arrayContaining([groups.classA, groups.otherClassA]));
+      expect(classIds).not.toContain(groups.classB);
+      expect(body.groups.map((g: { id: string }) => g.id)).toEqual([groups.departmentA]);
+    });
+
+    it('leaves out deleted groups', async () => {
+      const gone = await prisma.group.create({
+        data: { schoolId: schools.A, name: `${tag} Gone`, type: 'class', deletedAt: new Date() },
+      });
+      const body = check(await options(ids.AdminA, doc), 200).body;
+      expect(body.classes.map((g: { id: string }) => g.id)).not.toContain(gone.id);
+    });
+
+    it('lets a platform admin read the options of any school', async () => {
+      check(await options(platformAdminId, doc), 200);
+    });
+
+    it('answers 403 to a manager of another school, and to students, staff and parents', async () => {
+      check(await options(ids.AdminB, doc), 403);
+      for (const key of ['StudentA', 'StaffA', 'ParentA']) check(await options(ids[key], doc), 403);
+    });
+
+    it('answers 404 for an unknown document and 400 for an invalid id', async () => {
+      check(await options(ids.AdminA, '00000000-0000-4000-8000-000000000000'), 404);
+      check(await options(ids.AdminA, 'abc'), 400);
+    });
+  });
+
   describe('validation', () => {
     let doc: string;
     beforeAll(async () => {

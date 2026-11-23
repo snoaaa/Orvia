@@ -9,7 +9,7 @@ import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 import { assertSchoolAccess } from '../../auth/utils/school-scope.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AddDocumentAccessDto, DocumentAccessTargetDto, ReplaceDocumentAccessDto } from '../dto/index.js';
-import { DocumentAccessRuleEntity } from '../entities/index.js';
+import { DocumentAccessOptionEntity, DocumentAccessOptionsEntity, DocumentAccessRuleEntity } from '../entities/index.js';
 import { audienceChange } from '../utils/document-audience.util.js';
 import type { DocumentAccessTargetType } from '../utils/document-visibility.util.js';
 
@@ -77,6 +77,36 @@ export class DocumentAccessService {
   async listRules(documentId: string, actor: AuthenticatedUser): Promise<DocumentAccessRuleEntity[]> {
     const doc = await this.findManagedDocument(documentId, actor);
     return this.loadRules(doc.id);
+  }
+
+  /**
+   * The targets the document can be published to (#117), for the access editor: its school, the roles of a
+   * school (never platform roles), and the live groups of the school split into classes and other groups.
+   * Same scope check as the other access routes.
+   */
+  async listOptions(documentId: string, actor: AuthenticatedUser): Promise<DocumentAccessOptionsEntity> {
+    const doc = await this.findManagedDocument(documentId, actor);
+    const schoolId = doc.space.schoolId;
+    const [school, roles, groups] = await Promise.all([
+      this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { id: true, name: true } }),
+      this.prisma.role.findMany({
+        where: { scope: { not: 'platform' } },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.group.findMany({
+        where: { schoolId, deletedAt: null },
+        select: { id: true, name: true, type: true },
+        orderBy: { name: 'asc' },
+      }),
+    ]);
+    const option = ({ id, name }: { id: string; name: string }) => new DocumentAccessOptionEntity({ id, name });
+    return new DocumentAccessOptionsEntity({
+      school: option(school),
+      roles: roles.map(option),
+      classes: groups.filter((g) => g.type === 'class').map(option),
+      groups: groups.filter((g) => g.type !== 'class').map(option),
+    });
   }
 
   /**

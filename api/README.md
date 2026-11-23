@@ -739,6 +739,14 @@ any step before available ──► error (reason required) ──► pending (p
 After pulling, run `npx prisma generate` and `npm run db:migrate`. Any old status outside the list (such as
 `uploaded`) becomes `pending`.
 
+### Targets of a document: `GET /documents/{id}/access/options` (#117, `documents:manage`)
+
+For the access editor. Answers `{ school: {id, name}, roles: [{id, name}], classes: [{id, name}], groups: [{id, name}] }`
+for the school of the document: its school, the roles of a school (platform roles excluded), the non-deleted
+groups of type `class` (publish them as `class`) and the other groups (`group`). Same scope as the other access
+routes: platform admins any school, others only the schools where they hold `documents:manage` (403 otherwise,
+404 for an unknown or deleted document).
+
 ### Change or remove access rules (#110, `documents:manage`)
 
 | Endpoint | Answer |
