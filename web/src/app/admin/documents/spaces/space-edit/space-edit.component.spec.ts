@@ -370,5 +370,31 @@ describe('SpaceEditComponent', () => {
       component.onSubmit();
       expect(spaceService.createSpace).toHaveBeenCalledTimes(2);
     });
+
+    it('keeps the school-load error visible across submit attempts and recovers on Retry', () => {
+      spaceService.getAllSchools
+        .mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 500 })))
+        .mockReturnValueOnce(of([{ id: 'school-a', name: 'School A' }]));
+
+      create(PLATFORM_ADMIN);
+      expect(element().querySelector('#space-schools-error')?.textContent).toContain(
+        'list of schools could not be loaded'
+      );
+      expect((element().querySelector('#space-save-button') as HTMLButtonElement).disabled).toBe(
+        true
+      );
+
+      component.onSubmit();
+      fixture.detectChanges();
+      expect(spaceService.createSpace).not.toHaveBeenCalled();
+      expect(element().querySelector('#space-schools-error')).not.toBeNull();
+
+      (element().querySelector('#space-schools-retry') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(element().querySelector('#space-schools-error')).toBeNull();
+      expect((element().querySelector('#space-save-button') as HTMLButtonElement).disabled).toBe(
+        false
+      );
+    });
   });
 });

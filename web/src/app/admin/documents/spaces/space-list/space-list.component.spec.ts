@@ -417,5 +417,41 @@ describe('SpaceListComponent', () => {
         description: 'Something went wrong.'
       });
     });
+
+    it('clears deleteTarget and scopes actions per active school when switching schools', () => {
+      const mixedUser = user({
+        permissions: ['spaces:read', 'spaces:update', 'spaces:create', 'spaces:delete'],
+        schoolIds: ['school-a', 'school-b'],
+        assignments: [
+          assignment('school-a', 'School A', ['spaces:read', 'spaces:update']),
+          assignment('school-b', 'School B', ['spaces:read', 'spaces:create', 'spaces:delete'])
+        ]
+      });
+      spaceService.getSpaces.mockReturnValue(of(page([space('s1', { schoolId: 'school-a' })])));
+      session.selectSchool('school-a');
+      create(mixedUser);
+
+      expect(component.canCreate()).toBe(false);
+      expect(component.canEdit()).toBe(true);
+      expect(component.canDelete()).toBe(false);
+      expect(element().querySelector('#space-create-button')).toBeNull();
+      expect(element().querySelectorAll('.space-edit-action').length).toBe(1);
+      expect(element().querySelector('.space-delete-action')).toBeNull();
+
+      component.openDeleteModal(space('s1', { schoolId: 'school-a' }));
+      expect(component.deleteTarget()).not.toBeNull();
+
+      spaceService.getSpaces.mockReturnValue(of(page([space('s2', { schoolId: 'school-b' })])));
+      session.selectSchool('school-b');
+      fixture.detectChanges();
+
+      expect(component.deleteTarget()).toBeNull();
+      expect(component.canCreate()).toBe(true);
+      expect(component.canEdit()).toBe(false);
+      expect(component.canDelete()).toBe(true);
+      expect(element().querySelector('#space-create-button')).not.toBeNull();
+      expect(element().querySelector('.space-edit-action')).toBeNull();
+      expect(element().querySelectorAll('.space-delete-action').length).toBe(1);
+    });
   });
 });

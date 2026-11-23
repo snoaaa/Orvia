@@ -7,7 +7,7 @@ import { GoeyToastService } from 'goey-toast-angular';
 import { EMPTY, Subject, catchError, switchMap } from 'rxjs';
 import { PortalSessionService } from '../../../identity/services/portal-session.service';
 import { ConfirmationModalComponent } from '../../../identity/users/components/confirmation-modal/confirmation-modal.component';
-import { sessionGrants } from '../../shared/api-permissions.util';
+import { grantsApiPermission, sessionGrants } from '../../shared/api-permissions.util';
 import {
   PaginatedSpaces,
   SchoolOption,
@@ -65,10 +65,38 @@ export class SpaceListComponent {
   readonly deleteTarget = signal<SpaceEntity | null>(null);
   readonly isDeleting = signal(false);
 
-  /** Actions are offered only when the API accepts them (same permission rules, no 403). */
-  readonly canCreate = computed(() => sessionGrants(this.session, 'spaces:create'));
-  readonly canEdit = computed(() => sessionGrants(this.session, 'spaces:update'));
-  readonly canDelete = computed(() => sessionGrants(this.session, 'spaces:delete'));
+  /** Actions are offered only when the API accepts them in the active/target school (same permission rules, no 403). */
+  readonly canCreate = computed(() =>
+    this.hasSchoolPermission(this.session.activeSchoolId(), 'spaces:create')
+  );
+  readonly canEdit = computed(() =>
+    this.hasSchoolPermission(this.session.activeSchoolId(), 'spaces:update')
+  );
+  readonly canDelete = computed(() =>
+    this.hasSchoolPermission(this.session.activeSchoolId(), 'spaces:delete')
+  );
+
+  canEditSpace(space: SpaceEntity): boolean {
+    return this.hasSchoolPermission(space.schoolId, 'spaces:update');
+  }
+
+  canDeleteSpace(space: SpaceEntity): boolean {
+    return this.hasSchoolPermission(space.schoolId, 'spaces:delete');
+  }
+
+  private hasSchoolPermission(schoolId: string | null | undefined, permission: string): boolean {
+    if (this.session.isPlatformAdmin()) return true;
+    const user = this.session.user();
+    if (!user) return false;
+    const assignments = user.assignments ?? [];
+    if (assignments.length === 0) {
+      return sessionGrants(this.session, permission);
+    }
+    const scoped = schoolId
+      ? assignments.filter((a) => a.schoolId === schoolId || a.scope === 'platform')
+      : assignments;
+    return scoped.some((a) => grantsApiPermission(a.permissions ?? [], permission));
+  }
 
   /** The school column only helps platform admins looking at every school. */
   readonly showSchoolColumn = computed(
@@ -117,10 +145,11 @@ export class SpaceListComponent {
       )
       .subscribe((res) => this.showPage(res));
 
-    // Loads the first page, then again whenever the header school selector changes the active school.
+    // Loads the first page, closes any pending delete modal, then reloads when the active school changes.
     effect(() => {
       this.session.activeSchoolId();
       untracked(() => {
+        this.deleteTarget.set(null);
         this.currentPage.set(1);
         this.loadSpaces();
       });
