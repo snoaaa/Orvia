@@ -702,22 +702,56 @@ export class IdentityAndAccessService {
       return UserMapper.toEntity(target);
     }
 
-    const prevRoleGrantsDocManage =
-      existing?.role.name === 'CONTENT_MANAGER' ||
-      existing?.role.rolePermissions?.some(
-        (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
-      ) ||
-      false;
+    const txResult = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
+      const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
+        SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
+      `;
+      const freshRole = lockedRole[0];
+      if (!freshRole) {
+        throw new BadRequestException(`Unknown role '${roleName}'`);
+      }
+      if (freshRole.scope !== role.scope) {
+        throw new ConflictException(
+          `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
+        );
+      }
 
-    if (existing) {
-      await this.prisma.userAssignment.update({ where: { id: existing.id }, data: { roleId: role.id } });
-    } else {
-      await this.prisma.userAssignment.create({
-        data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+      const current = await tx.userAssignment.findFirst({
+        where: { userId: target.id, schoolId: dto.schoolId, ...ACTIVE_ASSIGNMENT },
+        include: { role: { include: { rolePermissions: { select: { permission: { select: { code: true } } } } } } },
       });
+      if (current?.roleId === role.id) {
+        return { changed: false as const };
+      }
+
+      const prevRoleGrantsDocManage =
+        current?.role.name === 'CONTENT_MANAGER' ||
+        current?.role.rolePermissions?.some(
+          (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
+        ) ||
+        false;
+
+      if (current) {
+        await tx.userAssignment.update({ where: { id: current.id }, data: { roleId: role.id } });
+      } else {
+        await tx.userAssignment.create({
+          data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+        });
+      }
+
+      return {
+        changed: true as const,
+        prevRoleGrantsDocManage,
+        previousRoleName: current?.role.name ?? null,
+      };
+    });
+
+    if (!txResult.changed) {
+      return UserMapper.toEntity(target);
     }
 
-    if (roleGrantsDocManage && !prevRoleGrantsDocManage) {
+    if (roleGrantsDocManage && !txResult.prevRoleGrantsDocManage) {
       await this.audit.record(
         AuditEvents.permissionGranted(
           {
@@ -730,7 +764,7 @@ export class IdentityAndAccessService {
           auditContext,
         ),
       );
-    } else if (!roleGrantsDocManage && prevRoleGrantsDocManage) {
+    } else if (!roleGrantsDocManage && txResult.prevRoleGrantsDocManage) {
       await this.audit.record(
         AuditEvents.permissionRevoked(
           {
@@ -752,7 +786,7 @@ export class IdentityAndAccessService {
           email: target.email,
           schoolId: dto.schoolId,
           role: role.name,
-          previousRole: existing?.role.name ?? null,
+          previousRole: txResult.previousRoleName,
           assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
         },
         auditContext,
@@ -1243,8 +1277,10 @@ export class IdentityAndAccessService {
         rolePermissions: {
           include: { permission: true },
         },
-        _count: {
-          select: { assignments: { where: ACTIVE_ASSIGNMENT } },
+        assignments: {
+          where: ACTIVE_ASSIGNMENT,
+          distinct: ['userId'],
+          select: { userId: true },
         },
       },
     });
@@ -1261,7 +1297,7 @@ export class IdentityAndAccessService {
     name: string;
     scope: string;
     rolePermissions: Array<{ permission: { id: string; code: string } }>;
-    _count: { assignments: number };
+    assignments: Array<{ userId: string }>;
     createdAt: Date;
     updatedAt: Date;
   }): RoleEntity {
@@ -1274,7 +1310,7 @@ export class IdentityAndAccessService {
       scope: role.scope,
       permissions: permissions.map((permission) => permission.code),
       permissionIds: permissions.map((permission) => permission.id),
-      assignedUsersCount: role._count.assignments,
+      assignedUsersCount: new Set(role.assignments.map((assignment) => assignment.userId)).size,
       isBase: isBaseRoleName(role.name),
       createdAt: role.createdAt,
       updatedAt: role.updatedAt,
@@ -1288,8 +1324,10 @@ export class IdentityAndAccessService {
         rolePermissions: {
           include: { permission: true },
         },
-        _count: {
-          select: { assignments: { where: ACTIVE_ASSIGNMENT } },
+        assignments: {
+          where: ACTIVE_ASSIGNMENT,
+          distinct: ['userId'],
+          select: { userId: true },
         },
       },
     });
@@ -1449,7 +1487,11 @@ export class IdentityAndAccessService {
           where: { id: roleId },
           include: {
             rolePermissions: { include: { permission: { select: { id: true, code: true } } } },
-            _count: { select: { assignments: { where: ACTIVE_ASSIGNMENT } } },
+            assignments: {
+              where: ACTIVE_ASSIGNMENT,
+              distinct: ['userId'],
+              select: { userId: true },
+            },
           },
         });
         if (!role) {
@@ -1460,12 +1502,13 @@ export class IdentityAndAccessService {
         }
 
         const nextScope = rescopes ? dto.scope! : role.scope;
-        if (rescopes && nextScope !== role.scope && role._count.assignments > 0) {
+        const assignedUsersCount = new Set(role.assignments.map((assignment) => assignment.userId)).size;
+        if (rescopes && nextScope !== role.scope && assignedUsersCount > 0) {
           // `schoolsWithPermission()` treats a platform-scoped assignment as "all schools", so moving an
           // assigned role into (or out of) the platform scope would silently widen (or narrow) the access
           // of everyone holding it, in schools they were never granted.
           throw new BadRequestException(
-            `Cannot change the scope of role '${role.name}': still assigned to ${role._count.assignments} user(s). Please reassign them first.`,
+            `Cannot change the scope of role '${role.name}': still assigned to ${assignedUsersCount} user(s). Please reassign them first.`,
           );
         }
 

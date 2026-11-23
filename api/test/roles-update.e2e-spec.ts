@@ -492,6 +492,83 @@ describe('Role edition (e2e)', () => {
       expect(role.scope === 'platform' && activeAssignments > 0).toBe(false);
     });
 
+    it('cannot re-scope a role to platform while PATCH /assignments/:id assigns it', async () => {
+      const created = check(await createRole('RACE_PATCH_ASSIGNMENT'), 201).body;
+      const holderId = await user('RacePatchAssign', 'STAFF');
+      const assignment = await prisma.userAssignment.findFirstOrThrow({
+        where: { userId: holderId, schoolId, deletedAt: null },
+      });
+
+      const auth = await bearer(platformAdminId);
+      const [patched, updatedAssignment] = await Promise.all([
+        http().patch(`/roles/${created.id}`).set('Authorization', auth).send({ scope: 'platform' }),
+        http().patch(`/assignments/${assignment.id}`).set('Authorization', auth).send({ role: roleName('RACE_PATCH_ASSIGNMENT') }),
+      ]);
+
+      const winners = [patched.status, updatedAssignment.status].filter((status) => status < 300);
+      expect(winners).toHaveLength(1);
+      const role = await prisma.role.findUniqueOrThrow({ where: { id: created.id } });
+      const activeAssignments = await prisma.userAssignment.count({
+        where: { roleId: created.id, deletedAt: null },
+      });
+      expect(role.scope === 'platform' && activeAssignments > 0).toBe(false);
+    });
+
+    it('cannot re-scope a role to platform while PATCH /identity/users/:id/role assigns it', async () => {
+      const created = check(await createRole('RACE_IDENTITY_ROLE'), 201).body;
+      const holderId = await user('RaceIdentityRole', 'STAFF');
+
+      const auth = await bearer(platformAdminId);
+      const [patched, assigned] = await Promise.all([
+        http().patch(`/roles/${created.id}`).set('Authorization', auth).send({ scope: 'platform' }),
+        http()
+          .patch(`/identity/users/${holderId}/role`)
+          .set('Authorization', auth)
+          .send({ schoolId, role: roleName('RACE_IDENTITY_ROLE') }),
+      ]);
+
+      const winners = [patched.status, assigned.status].filter((status) => status < 300);
+      expect(winners).toHaveLength(1);
+      const role = await prisma.role.findUniqueOrThrow({ where: { id: created.id } });
+      const activeAssignments = await prisma.userAssignment.count({
+        where: { roleId: created.id, deletedAt: null },
+      });
+      expect(role.scope === 'platform' && activeAssignments > 0).toBe(false);
+    });
+
+    it('counts distinct users rather than per-school assignment rows in GET /roles and scope-change refusal', async () => {
+      const created = check(await createRole('MULTI_SCHOOL_USER'), 201).body;
+      const secondSchool = await prisma.school.create({
+        data: { name: `Test E2E RoleUpdate School Second ${stamp}` },
+      });
+      const holderId = await user('MultiSchoolHolder', 'STAFF');
+      await prisma.userAssignment.deleteMany({ where: { userId: holderId } });
+      await prisma.userAssignment.createMany({
+        data: [
+          { userId: holderId, schoolId, roleId: created.id },
+          { userId: holderId, schoolId: secondSchool.id, roleId: created.id },
+        ],
+      });
+
+      const readRes = check(await http().get(`/roles/${created.id}`).set('Authorization', await bearer(platformAdminId)), 200);
+      expect(readRes.body.assignedUsersCount).toBe(1);
+
+      const patchRes = check(await patch(created.id, { scope: 'platform' }, platformAdminId), 400);
+      expect(patchRes.body.message).toContain('still assigned to 1 user(s)');
+    });
+
+    it('rejects mixed-case duplicate permissionIds with 400', async () => {
+      const created = check(await createRole('MIXED_CASE_UUIDS'), 201).body;
+      const permsRes = check(await http().get('/permissions').set('Authorization', await bearer(platformAdminId)), 200);
+      const firstId = String(permsRes.body[0].id);
+
+      check(
+        await patch(created.id, { permissionIds: [firstId.toLowerCase(), firstId.toUpperCase()] }, platformAdminId),
+        400,
+      );
+      expect(await codesOf(created.id)).toEqual(['documents:read', 'rag:query']);
+    });
+
     it('refuses a school-scoped system:manage holder before revealing anything', async () => {
       const base = await prisma.role.findUniqueOrThrow({ where: { name: 'STUDENT' } });
       const custom = check(await createRole('GUARDED'), 201).body;

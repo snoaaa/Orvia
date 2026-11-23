@@ -411,6 +411,19 @@ describe('AssignmentsService', () => {
         expect.objectContaining({ where: { id: 'assignment-1', deletedAt: null } }),
       );
     });
+
+    it('rejects 409 when a concurrent PATCH /roles/:id re-scopes the role during updateAssignment', async () => {
+      tx.$queryRaw.mockImplementation((strings: TemplateStringsArray) =>
+        strings.join('?').includes('FROM roles')
+          ? Promise.resolve([{ id: ROLES.STAFF.id, scope: 'platform', name: 'STAFF' }])
+          : Promise.resolve([{ id: 'user-1' }]),
+      );
+
+      await expect(service.updateAssignment('assignment-1', { role: 'STAFF' }, actor('school'))).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(tx.userAssignment.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('removeAssignment', () => {

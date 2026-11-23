@@ -41,4 +41,12 @@ describe('PATCH /roles/:id payload validation (#45 review)', () => {
   it('rejects a padding-only code, which trims to an empty string', async () => {
     expect(await errorsOf({ permissions: ['   '] })).toContain('permissions');
   });
+
+  it('normalizes UUID case on permissionIds and rejects mixed-case duplicates', async () => {
+    const lower = '8f1d3d1e-0a1c-4d3b-9c4e-0e2f1a5b6c7d';
+    expect(await errorsOf({ permissionIds: [lower, lower.toUpperCase()] })).toContain('permissionIds');
+    const dto = plainToInstance(UpdateRoleDto, { permissionIds: [` ${lower.toUpperCase()} `] });
+    expect(await validate(dto, { whitelist: true, forbidNonWhitelisted: true })).toEqual([]);
+    expect(dto.permissionIds).toEqual([lower]);
+  });
 });

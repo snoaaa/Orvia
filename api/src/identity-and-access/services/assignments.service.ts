@@ -236,6 +236,21 @@ export class AssignmentsService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`;
+      // Lock the target role row after the user row (matching `createAssignment` lock order to prevent
+      // deadlocks) so a concurrent `PATCH /roles/:id` cannot re-scope it to `platform` while we attach
+      // or retain a school/group assignment on it.
+      const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
+        SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
+      `;
+      const freshRole = lockedRole[0];
+      if (!freshRole) {
+        throw new BadRequestException(`Unknown role '${role.name}'`);
+      }
+      if (freshRole.scope !== role.scope) {
+        throw new ConflictException(
+          `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
+        );
+      }
       // Re-read under the lock, so a concurrent PATCH cannot leave a stale group membership behind,
       // and a concurrent DELETE (#49) makes this one 404.
       const current = await tx.userAssignment.findFirst({

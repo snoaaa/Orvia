@@ -63,7 +63,7 @@ describe('IdentityAndAccessService - update role (#45)', () => {
     name: 'TEACHING_ASSISTANT',
     scope: 'school',
     rolePermissions: [{ permission: { id: 'p-read', code: 'documents:read' } }],
-    _count: { assignments: 0 },
+    assignments: [],
     createdAt: new Date('2026-11-01T10:00:00.000Z'),
     updatedAt: new Date('2026-11-01T10:00:00.000Z'),
     ...overrides,
@@ -359,7 +359,9 @@ describe('IdentityAndAccessService - update role (#45)', () => {
 
   it('refuses to change the scope of a role that still has assignments', async () => {
     const { service, prisma, update } = setup();
-    prisma.role.findFirst.mockResolvedValueOnce(roleRow({ _count: { assignments: 3 } }));
+    prisma.role.findFirst.mockResolvedValueOnce(
+      roleRow({ assignments: [{ userId: 'u-1' }, { userId: 'u-2' }, { userId: 'u-3' }] }),
+    );
 
     const error = await service
       .updateRole('role-1', dto({ scope: 'platform' }), platformAdmin)
@@ -370,10 +372,24 @@ describe('IdentityAndAccessService - update role (#45)', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('counts distinct users rather than assignment rows across schools when refusing a scope change', async () => {
+    const { service, prisma } = setup();
+    prisma.role.findFirst.mockResolvedValueOnce(
+      roleRow({ assignments: [{ userId: 'u-1' }, { userId: 'u-1' }] }),
+    );
+
+    const error = await service
+      .updateRole('role-1', dto({ scope: 'platform' }), platformAdmin)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).message).toContain('still assigned to 1 user(s)');
+  });
+
   it('keeps the scope change allowed once the role has no assignments', async () => {
     const { service, prisma, update } = setup();
     prisma.role.findFirst
-      .mockResolvedValueOnce(roleRow({ scope: 'school', _count: { assignments: 0 } }))
+      .mockResolvedValueOnce(roleRow({ scope: 'school', assignments: [] }))
       .mockResolvedValueOnce(roleRow({ scope: 'group' }));
 
     await service.updateRole('role-1', dto({ scope: 'group' }), platformAdmin);

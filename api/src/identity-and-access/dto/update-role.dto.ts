@@ -26,6 +26,12 @@ const ifPresent = (_object: unknown, value: unknown) => value !== undefined;
 const trimElements = ({ value }: { value: unknown }) =>
   Array.isArray(value) ? value.map((item) => (typeof item === 'string' ? item.trim() : item)) : value;
 
+/** UUIDs match case-insensitively in MySQL; normalize case before `@ArrayUnique()` to reject mixed-case duplicates. */
+const normalizeUuidElements = ({ value }: { value: unknown }) =>
+  Array.isArray(value)
+    ? value.map((item) => (typeof item === 'string' ? item.trim().toLowerCase() : item))
+    : value;
+
 /**
  * Body of `PATCH /roles/:id` (#45): change a custom role's name, scope and/or permission set.
  *
@@ -74,10 +80,10 @@ export class UpdateRoleDto {
     description:
       'Permission ids the role should grant, replacing the current set (from GET /permissions). Cannot be sent with permissions',
   })
-  @Transform(trimElements)
+  @Transform(normalizeUuidElements)
   @ValidateIf(ifPresent)
   @IsArray()
-  @ArrayUnique()
+  @ArrayUnique({ message: 'permissionIds must not contain duplicates' })
   @ArrayMaxSize(200)
   @IsUUID('all', { each: true })
   permissionIds?: string[];
