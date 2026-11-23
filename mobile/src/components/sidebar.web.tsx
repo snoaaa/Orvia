@@ -1,20 +1,20 @@
-import { PermissionGate } from "@/components/permission-gate";
-import { FEATURE_FLAGS } from "@/config/features";
-import { useI18n } from "@/i18n";
-import { useAppSession } from "@/view-models/app-session-context";
+import { MOCK_CHATS } from "@/utils/mock-chats";
+import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { Link, usePathname } from "expo-router";
 import {
-  FileUp,
-  FolderOpen,
-  History,
+  Archive,
+  Edit3,
   LogOut,
   MessageSquarePlus,
   PanelLeft,
   PanelLeftOpen,
+  Pin,
   Settings,
+  Share,
   SquarePen,
+  Trash2,
   User,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -55,13 +55,21 @@ function SidebarTooltip({
   );
 }
 
-function getInitials(fullName?: string | null): string {
-  if (!fullName) return "OR";
-  const parts = fullName.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase();
-}
+const NAV_ITEMS = [
+  { href: "/", label: "Chats" },
+  { href: "/settings", label: "Settings" },
+] as const;
 
+
+/**
+ * Sidebar matching the native drawer content layout:
+ * - Bold "Chat" title
+ * - Nav items (Chats, Settings)
+ * - Scrollable "Recents" section with mock chat history
+ * - Footer with user avatar + new chat button
+ *
+ * Collapses on desktop, slides on mobile.
+ */
 export function Sidebar({
   isOpen,
   onToggle,
@@ -74,30 +82,6 @@ export function Sidebar({
   onCollapse: () => void;
 }) {
   const pathname = usePathname();
-  const { translations } = useI18n();
-  const { user, primaryRole, canManageDocuments, signOut } = useAppSession();
-
-  const navItems = [
-    { href: "/", label: translations.nav.chat, icon: MessageSquarePlus, visible: true },
-    {
-      href: "/spaces",
-      label: translations.nav.spaces,
-      icon: FolderOpen,
-      visible: FEATURE_FLAGS.ENABLE_SPACES_SCREEN,
-    },
-    {
-      href: "/chats",
-      label: translations.nav.chats,
-      icon: History,
-      visible: FEATURE_FLAGS.ENABLE_CHAT_HISTORY_SCREEN,
-    },
-    {
-      href: "/settings",
-      label: translations.nav.settings,
-      icon: Settings,
-      visible: FEATURE_FLAGS.ENABLE_SETTINGS_MODAL,
-    },
-  ].filter((item) => item.visible);
 
   return (
     <>
@@ -132,15 +116,17 @@ export function Sidebar({
           <View className="flex flex-row items-center px-4 pt-5 pb-3">
             <View className="flex flex-row items-center justify-between flex-1">
               <Text className="text-[28px] font-bold text-foreground">
-                {translations.common.appName}
+                Chat
               </Text>
               <View className="flex flex-row items-center gap-1">
+                {/* Close button on mobile */}
                 <Pressable
                   onPress={onToggle}
                   className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent md:hidden"
                 >
                   <Text className="text-sm">✕</Text>
                 </Pressable>
+                {/* Collapse button on desktop */}
                 <Pressable
                   onPress={onCollapse}
                   className="hidden md:flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -152,24 +138,24 @@ export function Sidebar({
           </View>
         )}
 
-        {/* Navigation */}
+        {/* Nav + Chat history */}
         {!isCollapsed && (
           <ScrollView
             className="flex-1"
             contentContainerStyle={{ paddingBottom: 8 }}
           >
-            {navItems.map((item) => {
+            {/* Nav items */}
+            {NAV_ITEMS.map((item) => {
               const isActive = pathname === item.href;
               return (
                 <Link key={item.href} href={item.href as any} asChild>
                   <Pressable
-                    className={`flex-row items-center gap-2.5 px-4 py-3 mx-2 rounded-[10px] ${
+                    className={`px-4 py-3 mx-2 rounded-[10px] ${
                       isActive
                         ? "bg-accent"
                         : "hover:bg-accent/50 active:bg-accent"
                     }`}
                   >
-                    <item.icon size={16} strokeWidth={1.7} />
                     <Text
                       className={`text-base ${
                         isActive
@@ -184,33 +170,64 @@ export function Sidebar({
               );
             })}
 
-            {FEATURE_FLAGS.ENABLE_DOCUMENT_IMPORT && (
-              <PermissionGate when={canManageDocuments}>
-                <Link href="/import" asChild>
-                  <Pressable
-                    className={`flex-row items-center gap-2.5 px-4 py-3 mx-2 rounded-[10px] ${
-                      pathname === "/import"
-                        ? "bg-accent"
-                        : "hover:bg-accent/50 active:bg-accent"
-                    }`}
-                  >
-                    <FileUp size={16} strokeWidth={1.7} />
-                    <Text className="text-base text-foreground">
-                      {translations.nav.importDocument}
-                    </Text>
-                  </Pressable>
-                </Link>
-              </PermissionGate>
-            )}
-
-            <View className="px-6 pt-5">
-              <Text className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
-                {translations.nav.workspaceLabel}
-              </Text>
-              <Text className="text-xs text-muted-foreground mt-1.5 leading-5">
-                {translations.nav.workspaceHint}
-              </Text>
-            </View>
+            {/* Recents */}
+            <Text className="text-[13px] font-semibold text-muted-foreground/60 px-6 pt-5 pb-1.5 uppercase tracking-wider">
+              Recents
+            </Text>
+            {MOCK_CHATS.map((chat) => {
+              const isActive = chat.id === "1";
+              return (
+                <ContextMenu.Root key={chat.id}>
+                  <ContextMenu.Trigger asChild>
+                    <Link href="/" asChild>
+                      <Pressable
+                        className={`px-4 py-2.5 mx-2 rounded-[10px] ${
+                          isActive
+                            ? "bg-accent"
+                            : "hover:bg-accent/50 active:bg-accent"
+                        }`}
+                      >
+                        <Text
+                          numberOfLines={1}
+                          className={`text-[15px] ${
+                            isActive
+                              ? "text-foreground"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          {chat.title}
+                        </Text>
+                      </Pressable>
+                    </Link>
+                  </ContextMenu.Trigger>
+                  <ContextMenu.Portal>
+                    <ContextMenu.Content className={MENU_CONTENT_CLASS}>
+                      <ContextMenu.Item className={MENU_ITEM_CLASS}>
+                        <Pin size={14} strokeWidth={1.5} />
+                        Pin chat
+                      </ContextMenu.Item>
+                      <ContextMenu.Item className={MENU_ITEM_CLASS}>
+                        <Edit3 size={14} strokeWidth={1.5} />
+                        Rename
+                      </ContextMenu.Item>
+                      <ContextMenu.Item className={MENU_ITEM_CLASS}>
+                        <Share size={14} strokeWidth={1.5} />
+                        Share
+                      </ContextMenu.Item>
+                      <ContextMenu.Item className={MENU_ITEM_CLASS}>
+                        <Archive size={14} strokeWidth={1.5} />
+                        Archive
+                      </ContextMenu.Item>
+                      <ContextMenu.Separator className={MENU_SEPARATOR_CLASS} />
+                      <ContextMenu.Item className={MENU_DESTRUCTIVE_CLASS}>
+                        <Trash2 size={14} strokeWidth={1.5} />
+                        Delete
+                      </ContextMenu.Item>
+                    </ContextMenu.Content>
+                  </ContextMenu.Portal>
+                </ContextMenu.Root>
+              );
+            })}
           </ScrollView>
         )}
 
@@ -218,7 +235,7 @@ export function Sidebar({
         {isCollapsed && (
           <Tooltip.Provider delayDuration={200}>
             <View className="flex flex-col items-center gap-1 pt-3 px-1.5">
-              <SidebarTooltip label={translations.nav.openDrawer}>
+              <SidebarTooltip label="Open sidebar">
                 <Pressable
                   onPress={onCollapse}
                   className="sidebar-toggle-btn flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -231,17 +248,23 @@ export function Sidebar({
                   </View>
                 </Pressable>
               </SidebarTooltip>
-              <SidebarTooltip label={translations.nav.newChat}>
+              <SidebarTooltip label="New chat">
                 <Link href="/" asChild>
                   <Pressable className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground">
                     <SquarePen size={18} strokeWidth={1.5} />
                   </Pressable>
                 </Link>
               </SidebarTooltip>
+              <SidebarTooltip label="Delete chat">
+                <Pressable className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground">
+                  <Trash2 size={18} strokeWidth={1.5} />
+                </Pressable>
+              </SidebarTooltip>
             </View>
           </Tooltip.Provider>
         )}
 
+        {/* Spacer when collapsed */}
         {isCollapsed && <View className="flex-1" />}
 
         {/* Footer */}
@@ -253,19 +276,10 @@ export function Sidebar({
                   <Pressable className="flex flex-row items-center gap-2.5 rounded-full hover:opacity-70 active:opacity-60">
                     <View className="rounded-full bg-muted items-center justify-center shrink-0 w-8 h-8">
                       <Text className="font-semibold text-foreground text-[13px]">
-                        {getInitials(user?.fullName)}
+                        EB
                       </Text>
                     </View>
-                    <View>
-                      <Text className="text-sm text-foreground">
-                        {user?.fullName ?? translations.common.appName}
-                      </Text>
-                      {primaryRole && (
-                        <Text className="text-[11px] text-muted-foreground">
-                          {primaryRole}
-                        </Text>
-                      )}
-                    </View>
+                    <Text className="text-sm text-foreground">Evan Bacon</Text>
                   </Pressable>
                 </DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
@@ -275,27 +289,20 @@ export function Sidebar({
                     align="start"
                     className={MENU_CONTENT_CLASS}
                   >
-                    <Link href="/profile" asChild>
-                      <DropdownMenu.Item className={MENU_ITEM_CLASS}>
-                        <User size={14} strokeWidth={1.5} />
-                        {translations.nav.profile}
-                      </DropdownMenu.Item>
-                    </Link>
-                    <Link href="/settings" asChild>
-                      <DropdownMenu.Item className={MENU_ITEM_CLASS}>
-                        <Settings size={14} strokeWidth={1.5} />
-                        {translations.nav.settings}
-                      </DropdownMenu.Item>
-                    </Link>
-                    <DropdownMenu.Separator className={MENU_SEPARATOR_CLASS} />
-                    <DropdownMenu.Item
-                      className={MENU_DESTRUCTIVE_CLASS}
-                      onSelect={() => {
-                        void signOut();
-                      }}
-                    >
+                    <DropdownMenu.Item className={MENU_ITEM_CLASS}>
+                      <User size={14} strokeWidth={1.5} />
+                      Profile
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item className={MENU_ITEM_CLASS}>
+                      <Settings size={14} strokeWidth={1.5} />
+                      Settings
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator
+                      className={MENU_SEPARATOR_CLASS}
+                    />
+                    <DropdownMenu.Item className={MENU_DESTRUCTIVE_CLASS}>
                       <LogOut size={14} strokeWidth={1.5} />
-                      {translations.settings.logout}
+                      Sign out
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>

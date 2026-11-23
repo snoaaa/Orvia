@@ -24,6 +24,25 @@
           </div>
         }
 
+        @if (!isEditMode && schoolsLoadError(); as schoolsError) {
+          <div
+            class="alert alert-danger d-flex align-items-center justify-content-between gap-2"
+            role="alert"
+            id="space-schools-error"
+          >
+            <span>{{ schoolsError }}</span>
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-danger"
+              id="space-schools-retry"
+              [disabled]="isLoadingSchools()"
+              (click)="loadAllSchools()"
+            >
+              Retry
+            </button>
+          </div>
+        }
+
         @if (!loadFailed()) {
           <form [formGroup]="form" (ngSubmit)="onSubmit()" novalidate>
             @if (showSchoolField()) {
@@ -174,7 +193,7 @@
                 id="space-save-button"
                 type="submit"
                 class="btn btn-primary d-inline-flex align-items-center gap-1"
-                [disabled]="isSaving() || (isEditMode && !hasChanges())"
+                [disabled]="isSaving() || (!isEditMode && !!schoolsLoadError()) || (isEditMode && !hasChanges())"
               >
                 @if (isSaving()) {
                   <span class="spinner-border spinner-border-sm" role="status"></span>

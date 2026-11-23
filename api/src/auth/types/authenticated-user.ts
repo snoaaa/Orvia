@@ -3,6 +3,8 @@ import type { UserStatus } from '@prisma/client';
 /** One role the user holds, where it applies, and what it allows. */
 export interface AuthRoleAssignment {
   role: string;
+  /** Id of the role (`roles.id`), used to match `document_access.role_id` (#99). */
+  roleId?: string;
   /** 'platform' roles apply to every school; 'school' / 'group' roles only to `schoolId`. */
   scope: string;
   schoolId: string;

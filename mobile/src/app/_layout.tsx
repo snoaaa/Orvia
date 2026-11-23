@@ -5,17 +5,59 @@ import {
 } from "@/components/drawer-content";
 import { DrawerLayout } from "@/components/drawer-layout";
 import "@/global.css";
-import { I18nProvider, useI18n } from "@/i18n";
-import { AppThemeProvider } from "@/theme";
 import { useSystemBackgroundColor } from "@/utils/use-system-background-color";
-import { AppSessionProvider } from "@/view-models";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Platform } from "react-native";
-import { useCSSVariable } from "uniwind";
+
+import { ModelProvider } from "@/components/model-context";
+import {
+  DarkTheme,
+  DefaultTheme,
+  ThemeProvider as RNTheme,
+} from "expo-router/react-navigation";
+import { useColorScheme } from "react-native";
+import { SafeAreaListener } from "react-native-safe-area-context";
+import { Uniwind, useCSSVariable } from "uniwind";
 
 const GLASS = Platform.OS === "ios";
 const IS_ANDROID = process.env.EXPO_OS === "android";
+const MODELS = [
+  {
+    id: "opus-4.6",
+    label: "Opus 4.6",
+    subtitle: "Most capable for ambitious work",
+  },
+  {
+    id: "sonnet-4.6",
+    label: "Sonnet 4.6",
+    subtitle: "Most efficient for everyday tasks",
+  },
+  {
+    id: "haiku-4.5",
+    label: "Haiku 4.5",
+    subtitle: "Fastest for quick answers",
+  },
+] as const;
+
+const MORE_MODELS = [
+  { id: "opus-4.5", label: "Opus 4.5" },
+  { id: "opus-3", label: "Opus 3" },
+  { id: "sonnet-4.5", label: "Sonnet 4.5" },
+] as const;
+
+const ALL_MODELS = [...MODELS, ...MORE_MODELS];
+
+function ThemeProvider(props: { children: React.ReactNode }) {
+  const colorScheme = useColorScheme();
+  return (
+    <RNTheme value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+      <SafeAreaListener onChange={({ insets }) => Uniwind.updateInsets(insets)}>
+        {props.children}
+      </SafeAreaListener>
+    </RNTheme>
+  );
+}
 
 export const unstable_settings = {
   anchor: "index",
@@ -23,16 +65,14 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   return (
-    <AppThemeProvider>
-      <I18nProvider>
-        <AppSessionProvider>
-          <DrawerProvider>
-            <RootDrawer />
-          </DrawerProvider>
-        </AppSessionProvider>
-      </I18nProvider>
+    <ThemeProvider>
+      <ModelProvider models={ALL_MODELS}>
+        <DrawerProvider>
+          <RootDrawer />
+        </DrawerProvider>
+      </ModelProvider>
       {process.env.EXPO_OS !== "ios" && <StatusBar style="auto" />}
-    </AppThemeProvider>
+    </ThemeProvider>
   );
 }
 
@@ -54,7 +94,6 @@ function RootDrawer() {
             router.replace(path, { withAnchor: true });
           }}
           onOpenModal={(path) => {
-            closeDrawer();
             router.navigate(path);
           }}
         />
@@ -66,7 +105,6 @@ function RootDrawer() {
 }
 
 function StackLayout() {
-  const { translations } = useI18n();
   const appForeground = useCSSVariable("--app-foreground") as string;
   const appBackground = useCSSVariable("--app-background") as string;
 
@@ -88,16 +126,7 @@ function StackLayout() {
         name="index"
         dangerouslySingular
         options={{
-          title: translations.nav.chat,
-          animation: "none",
-          gestureEnabled: false,
-        }}
-      />
-
-      <Stack.Screen
-        name="spaces"
-        options={{
-          title: translations.nav.spaces,
+          title: "Chat",
           animation: "none",
           gestureEnabled: false,
         }}
@@ -106,7 +135,7 @@ function StackLayout() {
       <Stack.Screen
         name="chats"
         options={{
-          title: translations.nav.chats,
+          title: "Chats",
           animation: "none",
           headerLargeTitleShadowVisible: false,
           gestureEnabled: false,
@@ -114,20 +143,25 @@ function StackLayout() {
       />
 
       <Stack.Screen
-        name="import"
+        name="attachments"
         options={{
-          title: translations.nav.importDocument,
-          animation: "none",
-          gestureEnabled: false,
+          title: "Add to chat",
+          presentation: "formSheet",
+          sheetAllowedDetents: [0.55],
+          // following https://m3.material.io/components/bottom-sheets/specs
+          sheetCornerRadius: IS_ANDROID ? 28 : undefined,
+          sheetGrabberVisible: true,
+          headerTransparent: GLASS,
+          headerLargeTitleShadowVisible: false,
         }}
       />
 
       <Stack.Screen
-        name="attachments"
+        name="model-picker"
         options={{
-          title: translations.attachments.title,
+          title: "Model",
           presentation: "formSheet",
-          sheetAllowedDetents: [0.55],
+          sheetAllowedDetents: "fitToContents",
           sheetCornerRadius: IS_ANDROID ? 28 : undefined,
           sheetGrabberVisible: true,
           headerTransparent: GLASS,

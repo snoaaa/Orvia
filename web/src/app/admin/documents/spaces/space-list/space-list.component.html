@@ -146,7 +146,7 @@
                   </td>
                   <td class="text-nowrap">{{ space.updatedAt | date: 'mediumDate' }}</td>
                   <td class="text-end text-nowrap pe-4">
-                    @if (canEdit()) {
+                    @if (canEditSpace(space)) {
                       <a
                         [routerLink]="['/admin/spaces', space.id, 'edit']"
                         class="btn btn-icon btn-link-primary space-edit-action"
@@ -156,7 +156,7 @@
                         <i class="ti ti-edit f-18"></i>
                       </a>
                     }
-                    @if (canDelete()) {
+                    @if (canDeleteSpace(space)) {
                       <button
                         type="button"
                         class="btn btn-icon btn-link-danger space-delete-action"

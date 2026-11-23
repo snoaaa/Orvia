@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
@@ -54,6 +54,7 @@ export class SpaceEditComponent {
   private readonly fb = inject(FormBuilder);
   private readonly spaceService = inject(SpaceManagementService);
   private readonly toast = inject(GoeyToastService, { optional: true });
+  private readonly destroyRef = inject(DestroyRef);
   readonly session = inject(PortalSessionService);
 
   readonly nameMaxLength = SPACE_NAME_MAX_LENGTH;
@@ -67,6 +68,8 @@ export class SpaceEditComponent {
   readonly isLoading = signal(this.isEditMode);
   readonly loadFailed = signal(false);
   readonly isSaving = signal(false);
+  readonly isLoadingSchools = signal(false);
+  readonly schoolsLoadError = signal<string | null>(null);
   readonly generalError = signal<string | null>(null);
 
   /** Schools platform admins can pick from (loaded from the API). */
@@ -121,16 +124,7 @@ export class SpaceEditComponent {
       .subscribe(() => this.form.controls.name.updateValueAndValidity());
 
     if (this.session.isPlatformAdmin()) {
-      this.spaceService
-        .getAllSchools()
-        .pipe(takeUntilDestroyed())
-        .subscribe({
-          next: (schools) => this.allSchools.set(schools),
-          error: () =>
-            this.generalError.set(
-              'The list of schools could not be loaded. Please reload the page.'
-            )
-        });
+      this.loadAllSchools();
     }
 
     if (this.isEditMode) {
@@ -139,6 +133,31 @@ export class SpaceEditComponent {
     } else {
       this.presetSchool();
     }
+  }
+
+  /** Loads all schools for platform admins; kept separate from `generalError` so submit cannot clear it. */
+  loadAllSchools(): void {
+    if (this.isLoadingSchools()) return;
+    this.isLoadingSchools.set(true);
+    this.schoolsLoadError.set(null);
+    this.spaceService
+      .getAllSchools()
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (schools) => {
+          this.allSchools.set(schools);
+          this.isLoadingSchools.set(false);
+          if (!this.isEditMode && !this.form.controls.schoolId.value) {
+            this.presetSchool();
+          }
+        },
+        error: () => {
+          this.isLoadingSchools.set(false);
+          this.schoolsLoadError.set(
+            'The list of schools could not be loaded. Please try again.'
+          );
+        }
+      });
   }
 
   /** Name of the space's school, shown read-only in edit mode. */
@@ -162,7 +181,7 @@ export class SpaceEditComponent {
   }
 
   onSubmit(): void {
-    if (this.isSaving()) return;
+    if (this.isSaving() || (!this.isEditMode && this.schoolsLoadError())) return;
     this.generalError.set(null);
     // Errors from the previous API answer are about the values sent then: check the fields again without
     // them, so a stale error never blocks the next try.

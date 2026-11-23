@@ -327,28 +327,48 @@ export class IdentityAndAccessController {
 
   @Patch('roles/:id')
   @RequirePermission('system:manage')
-  @ApiOperation({ summary: 'Update a custom role and its permissions (platform admin)' })
+  @ApiOperation({
+    summary: 'Update a custom role and its permissions (platform admin)',
+    description:
+      'Older path of PATCH /roles/:id, same rules and answers: name, scope and/or permission set (codes or ' +
+      'permission ids), base roles refused, assignments `updated_at` bumped for the mobile sync, audited as ' +
+      '`identity_access/role_updated`.',
+  })
   @ApiParam({ name: 'id', description: 'Role UUID or name' })
   @ApiResponse({ status: 200, description: 'Role updated', type: RoleEntity })
-  @ApiResponse({ status: 400, description: 'Base roles cannot be edited or invalid payload' })
+  @ApiResponse({ status: 400, description: 'Base role, unknown permission code/id, or invalid payload' })
+  @ApiResponse({ status: 403, description: 'Not a platform admin (missing platform-wide system:manage)' })
   @ApiResponse({ status: 404, description: 'Role not found' })
   @ApiResponse({ status: 409, description: 'Role name already taken' })
   async updateRole(
     @Param('id') id: string,
     @Body() dto: UpdateRoleDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
   ): Promise<RoleEntity> {
-    return this.identityService.updateRole(id, dto);
+    return this.identityService.updateRole(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Delete('roles/:id')
   @RequirePermission('system:manage')
-  @ApiOperation({ summary: 'Delete a custom role (blocked if base role or still assigned to users)' })
+  @ApiOperation({
+    summary: 'Delete a custom role (blocked if base role or still assigned to users)',
+    description:
+      'Older path of DELETE /roles/:id (#46), same rules and answers: base roles refused, a role still assigned ' +
+      'to users refused with its count, platform admins only (a school-scoped system:manage holder gets 403), ' +
+      'audited as `identity_access/role_deleted`.',
+  })
   @ApiParam({ name: 'id', description: 'Role UUID or name' })
   @ApiResponse({ status: 200, description: 'Role deleted' })
   @ApiResponse({ status: 400, description: 'Cannot delete base role or role currently assigned to users' })
+  @ApiResponse({ status: 403, description: 'Not a platform admin (missing platform-wide system:manage)' })
   @ApiResponse({ status: 404, description: 'Role not found' })
-  async deleteRole(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
-    return this.identityService.deleteRole(id);
+  async deleteRole(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.identityService.deleteRole(id, actor, auditContextFromRequest(req));
   }
 
   @Get('permissions')
