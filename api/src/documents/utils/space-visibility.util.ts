@@ -2,39 +2,31 @@ import type { Prisma } from '@prisma/client';
 import { schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { ACTIVE_DOCUMENT, ACTIVE_SPACE } from './active-space.util.js';
+import { AVAILABLE_STATUS } from './document-filters.util.js';
+import { matchingAccessRulesWhere } from './document-visibility.util.js';
 
 /**
- * WHO SEES WHAT (Section 4.7, #99). ONE rule, shared by the space list, the space detail and (#111) the document
- * list. Build the context with `buildVisibilityContext`, then use one of the two where-builders below.
+ * WHO SEES WHAT (Section 4.7, #99). ONE rule, shared by the space list and the space detail.
+ * Build the context with `buildVisibilityContext`, then use one of the two where-builders below.
  *
  * Tier 1 - platform scope: every space.
  * Tier 2 - `documents:manage` in school S (school admin, content manager): every space of S, even with no document.
- * Tier 3 - any other assignment (staff, student, guest) in school S: only the documents "published to them".
- *
- * A `document_access` row is published to an assignment (school S, role R, groups G) when ALL hold:
- *  - the document's space is in S and `row.school_id = S` (a row with `school_id = NULL` matches nobody);
- *  - `row.role_id` is NULL or equals R;
- *  - `row.group_id` is NULL or is in G (the assignment's own group plus the user's non-deleted `group_members`).
- * So a row with only `school_id` means "the whole school": staff and students, NOT guests. A guest (PARENT_GUEST)
- * needs an explicit row: `role_id` or `group_id` must be set (and match), so sharing is by guest role or by group.
- * (document_access has no user column: sharing with one single person is not possible yet.)
- *
- * A document counts only when it is not deleted, in a non-deleted space (ACTIVE_DOCUMENT) and has an `indexed`
- * version: a document still being processed cannot be opened or retrieved yet.
+ * Tier 3 - any other assignment granting `spaces:read` in school S: only spaces holding at least one active
+ *   document with an `available` version and a `document_access` rule matching `matchingAccessRulesWhere`.
+ *   A guest (`PARENT_GUEST`) never matches school-wide (`targetType: 'school'`) rules.
  */
 
 /** Role name whose members only see what is explicitly shared with them. */
 export const GUEST_ROLE = 'PARENT_GUEST';
 
 /** Status of a document version that is ready to be read and retrieved. */
-export const AVAILABLE_VERSION_STATUS = 'indexed';
+export const AVAILABLE_VERSION_STATUS = AVAILABLE_STATUS;
 
-/** One assignment of the user in a school, with the groups it gives access to. */
+/** Per-school Tier 3 access matcher derived from the user's non-manager assignments holding `spaces:read`. */
 export interface PublishedGrant {
   schoolId: string;
-  roleId?: string;
   isGuest: boolean;
-  groupIds: string[];
+  accessWhere: Prisma.DocumentAccessWhereInput;
 }
 
 export interface VisibilityContext {
@@ -42,57 +34,51 @@ export interface VisibilityContext {
   all: boolean;
   /** Tier 2: schools where the user holds `documents:manage`. */
   manageSchoolIds: string[];
-  /** Tier 3: one grant per remaining assignment. */
+  /** Tier 3: one grant per non-manager school where the user holds `spaces:read`. */
   grants: PublishedGrant[];
 }
 
 /** Matches nothing. */
 const NOTHING_ID = { in: [] as string[] };
 
-/** True when tier 3 applies, i.e. the caller's groups must be loaded. */
-export function needsGroups(user: AuthenticatedUser): boolean {
-  const manage = schoolsWithPermission(user, 'documents:manage');
-  return manage !== 'all' && user.assignments.some((a) => !manage.includes(a.schoolId));
-}
-
 /**
- * Builds the context from the authenticated user. `groupIdsBySchool` holds the user's NON-DELETED groups per school
- * (the group of the assignment and `group_members`): the caller loads them, because a soft-deleted group must not
- * keep giving access.
+ * Builds the context from the authenticated user. Only schools where the user holds `documents:manage` (Tier 2)
+ * or `spaces:read` (Tier 3) are included; another school assignment lacking `spaces:read` grants no visibility.
  */
-export function buildVisibilityContext(
-  user: AuthenticatedUser,
-  groupIdsBySchool: ReadonlyMap<string, readonly string[]> = new Map(),
-): VisibilityContext {
+export function buildVisibilityContext(user: AuthenticatedUser): VisibilityContext {
   const manage = schoolsWithPermission(user, 'documents:manage');
   if (manage === 'all') return { all: true, manageSchoolIds: [], grants: [] };
-  const grants = user.assignments
-    .filter((a) => !manage.includes(a.schoolId))
-    .map((a) => ({
-      schoolId: a.schoolId,
-      roleId: a.roleId,
-      isGuest: a.role === GUEST_ROLE,
-      groupIds: [...(groupIdsBySchool.get(a.schoolId) ?? [])],
-    }));
+
+  const readable = schoolsWithPermission(user, 'spaces:read');
+  const bySchool = new Map<string, typeof user.assignments>();
+  for (const a of user.assignments) {
+    if (!a.schoolId || manage.includes(a.schoolId)) continue;
+    if (readable !== 'all' && !readable.includes(a.schoolId)) continue;
+    const list = bySchool.get(a.schoolId) ?? [];
+    list.push(a);
+    bySchool.set(a.schoolId, list);
+  }
+
+  const grants: PublishedGrant[] = [...bySchool].map(([schoolId, assignments]) => {
+    const isGuest = assignments.every((a) => a.role === GUEST_ROLE);
+    const branchActor: AuthenticatedUser = {
+      ...user,
+      assignments,
+      schoolIds: [schoolId],
+    };
+    const baseAccess = matchingAccessRulesWhere(branchActor);
+    const accessWhere: Prisma.DocumentAccessWhereInput = isGuest
+      ? { AND: [baseAccess, { NOT: { targetType: 'school' } }] }
+      : baseAccess;
+    return { schoolId, isGuest, accessWhere };
+  });
+
   return { all: false, manageSchoolIds: manage, grants };
 }
 
-/** The `document_access` rows published to one grant (see the rule above). */
-function accessRowFor(grant: PublishedGrant): Prisma.DocumentAccessWhereInput {
-  const roleMatch: Prisma.DocumentAccessWhereInput[] = [{ roleId: null }];
-  if (grant.roleId) roleMatch.push({ roleId: grant.roleId });
-  const groupMatch: Prisma.DocumentAccessWhereInput[] = [{ groupId: null }];
-  if (grant.groupIds.length > 0) groupMatch.push({ groupId: { in: grant.groupIds } });
-  return {
-    schoolId: grant.schoolId,
-    AND: [{ OR: roleMatch }, { OR: groupMatch }],
-    ...(grant.isGuest ? { NOT: { roleId: null, groupId: null } } : {}),
-  };
-}
-
 /**
- * Documents published to the user through tier 3 (no tier 1/2 shortcut): active, available and matching a
- * `document_access` row. Reuse it for the document list (#111), adding the tier 1/2 clauses there.
+ * Documents published to the user through tier 3 (no tier 1/2 shortcut): active, available and matching
+ * `matchingAccessRulesWhere`.
  */
 export function buildPublishedDocumentWhere(grants: readonly PublishedGrant[]): Prisma.DocumentWhereInput {
   if (grants.length === 0) return { id: NOTHING_ID };
@@ -103,7 +89,7 @@ export function buildPublishedDocumentWhere(grants: readonly PublishedGrant[]): 
       {
         OR: grants.map((g) => ({
           space: { schoolId: g.schoolId },
-          access: { some: accessRowFor(g) },
+          access: { some: g.accessWhere },
         })),
       },
     ],

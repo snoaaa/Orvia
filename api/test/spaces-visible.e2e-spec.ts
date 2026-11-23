@@ -35,7 +35,13 @@ describe('Visible spaces (e2e)', () => {
     return (res.body.data as { id: string }[]).map((s) => labelOf.get(s.id)!).sort();
   };
 
-  type Access = { school?: 'A' | 'B' | null; role?: string; group?: keyof typeof groups };
+  type Access = {
+    school?: 'A' | 'B';
+    targetType: 'school' | 'role' | 'class' | 'group' | 'user';
+    role?: string;
+    group?: keyof typeof groups;
+    userKey?: string;
+  };
   /** A space in school `school`; optionally with a document (status of its version) and its access rows. */
   async function space(
     label: string,
@@ -59,15 +65,32 @@ describe('Visible spaces (e2e)', () => {
               storageKey: `e2e/${stamp}/${++counter}.pdf`,
               mimeType: 'application/pdf',
               checksum: `sum-${stamp}-${counter}`,
-              status: opts.doc.status ?? 'indexed',
+              status: (opts.doc.status ?? 'available') as never,
             },
           },
           access: {
-            create: (opts.doc.access ?? []).map((a) => ({
-              schoolId: a.school === null ? null : schools[a.school ?? school],
-              roleId: a.role ? roleIds[a.role] : null,
-              groupId: a.group ? groups[a.group] : null,
-            })),
+            create: (opts.doc.access ?? []).map((a) => {
+              const targetSchool = schools[a.school ?? school];
+              const roleId = a.role ? roleIds[a.role] : null;
+              const groupId = a.group ? groups[a.group] : null;
+              const userId = a.userKey ? ids[a.userKey] : null;
+              const targetId =
+                a.targetType === 'role'
+                  ? roleId!
+                  : a.targetType === 'class' || a.targetType === 'group'
+                    ? groupId!
+                    : a.targetType === 'user'
+                      ? userId!
+                      : targetSchool;
+              return {
+                schoolId: targetSchool,
+                targetType: a.targetType,
+                targetId,
+                roleId,
+                groupId,
+                userId,
+              };
+            }),
           },
         },
       });
@@ -89,8 +112,18 @@ describe('Visible spaces (e2e)', () => {
   }
 
   const ALL_A = [
-    'deletedDoc', 'empty', 'groupG1', 'groupGuest', 'noAccess', 'nullSchoolRow', 'otherSchoolRow', 'pending',
-    'roleGuest', 'roleStaff', 'schoolWide',
+    'classG1',
+    'deletedDoc',
+    'empty',
+    'groupG1',
+    'groupGuest',
+    'noAccess',
+    'otherSchoolRow',
+    'pending',
+    'roleGuest',
+    'roleStaff',
+    'schoolWide',
+    'userGuest',
   ].sort();
 
   beforeAll(async () => {
@@ -114,25 +147,11 @@ describe('Visible spaces (e2e)', () => {
     };
     await makeRole('STAFF', ['spaces:read', 'documents:read']);
     await makeRole('STAFF_DOCS', ['spaces:read', 'documents:read', 'documents:update']);
+    await makeRole('NO_SPACES_READ', ['documents:read']);
     schools.A = (await prisma.school.create({ data: { name: `Test E2E Vis School A ${stamp}` } })).id;
     schools.B = (await prisma.school.create({ data: { name: `Test E2E Vis School B ${stamp}` } })).id;
     groups.G1 = (await prisma.group.create({ data: { schoolId: schools.A, name: `G1 ${stamp}` } })).id;
     groups.G9 = (await prisma.group.create({ data: { schoolId: schools.A, name: `G9 ${stamp}` } })).id;
-
-    // Spaces of school A, one per way a document can (not) be published.
-    await space('empty', 'A');
-    await space('schoolWide', 'A', { doc: { access: [{}] } });
-    await space('roleStaff', 'A', { doc: { access: [{ role: 'STAFF' }] } });
-    await space('groupG1', 'A', { doc: { access: [{ group: 'G1' }] } });
-    await space('roleGuest', 'A', { doc: { access: [{ role: 'PARENT_GUEST' }] } });
-    await space('groupGuest', 'A', { doc: { access: [{ group: 'G9' }] } });
-    await space('pending', 'A', { doc: { status: 'pending', access: [{}] } });
-    await space('noAccess', 'A', { doc: { access: [] } });
-    await space('deletedDoc', 'A', { doc: { deleted: true, access: [{}] } });
-    await space('nullSchoolRow', 'A', { doc: { access: [{ school: null, role: 'STAFF' }] } });
-    await space('otherSchoolRow', 'A', { doc: { access: [{ school: 'B' }] } });
-    await space('deletedSpace', 'A', { deleted: true, doc: { access: [{}] } });
-    await space('schoolB', 'B', { doc: { access: [{}] } });
 
     await user('AdminA', [{ school: 'A', role: 'SCHOOL_ADMIN' }]);
     await user('ManagerA', [{ school: 'A', role: 'CONTENT_MANAGER' }]);
@@ -143,7 +162,24 @@ describe('Visible spaces (e2e)', () => {
     await user('GuestG9', [{ school: 'A', role: 'PARENT_GUEST', group: 'G9' }]);
     await user('GuestPlain', [{ school: 'A', role: 'PARENT_GUEST' }]);
     await user('ManagerAStaffB', [{ school: 'A', role: 'CONTENT_MANAGER' }, { school: 'B', role: 'STAFF' }]);
+    await user('ManagerANoReadB', [{ school: 'A', role: 'CONTENT_MANAGER' }, { school: 'B', role: 'NO_SPACES_READ' }]);
     await user('StaffDocsA', [{ school: 'A', role: 'STAFF_DOCS' }]);
+
+    // Spaces of school A, one per way a document can (not) be published.
+    await space('empty', 'A');
+    await space('schoolWide', 'A', { doc: { access: [{ targetType: 'school' }] } });
+    await space('roleStaff', 'A', { doc: { access: [{ targetType: 'role', role: 'STAFF' }] } });
+    await space('groupG1', 'A', { doc: { access: [{ targetType: 'group', group: 'G1' }] } });
+    await space('classG1', 'A', { doc: { access: [{ targetType: 'class', group: 'G1' }] } });
+    await space('roleGuest', 'A', { doc: { access: [{ targetType: 'role', role: 'PARENT_GUEST' }] } });
+    await space('groupGuest', 'A', { doc: { access: [{ targetType: 'group', group: 'G9' }] } });
+    await space('userGuest', 'A', { doc: { access: [{ targetType: 'user', userKey: 'GuestPlain' }] } });
+    await space('pending', 'A', { doc: { status: 'pending', access: [{ targetType: 'school' }] } });
+    await space('noAccess', 'A', { doc: { access: [] } });
+    await space('deletedDoc', 'A', { doc: { deleted: true, access: [{ targetType: 'school' }] } });
+    await space('otherSchoolRow', 'A', { doc: { access: [{ school: 'B', targetType: 'school' }] } });
+    await space('deletedSpace', 'A', { deleted: true, doc: { access: [{ targetType: 'school' }] } });
+    await space('schoolB', 'B', { doc: { access: [{ targetType: 'school' }] } });
 
     platformAdminId = (
       await prisma.user.findUniqueOrThrow({ where: { email: process.env.PLATFORM_ADMIN_EMAIL || 'admin@wamdp.platform' } })
@@ -182,21 +218,21 @@ describe('Visible spaces (e2e)', () => {
       expect(await seen(ids.StaffA)).toEqual(['roleStaff', 'schoolWide']);
     });
 
-    it('student with the group on the assignment: school-wide and own group', async () => {
-      expect(await seen(ids.StudentG1)).toEqual(['groupG1', 'schoolWide']);
+    it('student with the group on the assignment: school-wide, class and own group', async () => {
+      expect(await seen(ids.StudentG1)).toEqual(['classG1', 'groupG1', 'schoolWide']);
     });
 
     it('student in the group through group_members: same as a member by assignment', async () => {
-      expect(await seen(ids.StudentMember)).toEqual(['groupG1', 'schoolWide']);
+      expect(await seen(ids.StudentMember)).toEqual(['classG1', 'groupG1', 'schoolWide']);
     });
 
     it('student without group: school-wide only', async () => {
       expect(await seen(ids.StudentPlain)).toEqual(['schoolWide']);
     });
 
-    it('guest: only what is explicitly shared with the guest role or their group, never school-wide', async () => {
+    it('guest: only what is explicitly shared with the guest role, group, or account, never school-wide', async () => {
       expect(await seen(ids.GuestG9)).toEqual(['groupGuest', 'roleGuest']);
-      expect(await seen(ids.GuestPlain)).toEqual(['roleGuest']);
+      expect(await seen(ids.GuestPlain)).toEqual(['roleGuest', 'userGuest']);
     });
 
     it('staff holding a document-management right (documents:update) see every space of their school (#97/#98 rule)', async () => {
@@ -212,19 +248,24 @@ describe('Visible spaces (e2e)', () => {
       expect(await seen(ids.ManagerAStaffB)).toEqual([...ALL_A, 'schoolB'].sort());
     });
 
-    it('never returns an unprocessed document, a deleted document or space, a row of another school or no school', async () => {
+    it('manager in A with non-spaces:read assignment in B does not see spaces in B', async () => {
+      expect(await seen(ids.ManagerANoReadB)).toEqual(ALL_A);
+      check(await get(ids.ManagerANoReadB, `/documents/spaces/${spaces.schoolB}`), 404);
+    });
+
+    it('never returns an unprocessed document, a deleted document or space, or a row of another school', async () => {
       for (const key of ['StaffA', 'StudentG1', 'StudentPlain', 'GuestG9', 'GuestPlain']) {
         const list = await seen(ids[key]);
-        for (const hidden of ['pending', 'deletedDoc', 'deletedSpace', 'noAccess', 'otherSchoolRow', 'nullSchoolRow', 'empty', 'schoolB']) {
+        for (const hidden of ['pending', 'deletedDoc', 'deletedSpace', 'noAccess', 'otherSchoolRow', 'empty', 'schoolB']) {
           expect(list).not.toContain(hidden);
         }
       }
     });
 
-    it('a document that becomes indexed makes its space visible; a deleted document hides it again', async () => {
+    it('a document that becomes available makes its space visible; a deleted document hides it again', async () => {
       const doc = await prisma.document.findFirstOrThrow({ where: { spaceId: spaces.pending } });
       expect(await seen(ids.StudentPlain)).not.toContain('pending');
-      await prisma.documentVersion.updateMany({ where: { documentId: doc.id }, data: { status: 'indexed' } });
+      await prisma.documentVersion.updateMany({ where: { documentId: doc.id }, data: { status: 'available' } });
       expect(await seen(ids.StudentPlain)).toContain('pending');
       await prisma.document.update({ where: { id: doc.id }, data: { deletedAt: new Date() } });
       expect(await seen(ids.StudentPlain)).not.toContain('pending');
@@ -235,7 +276,7 @@ describe('Visible spaces (e2e)', () => {
       expect(await seen(ids.StudentG1)).toEqual(['schoolWide']);
       expect(await seen(ids.StudentMember)).toEqual(['schoolWide']);
       await prisma.group.update({ where: { id: groups.G1 }, data: { deletedAt: null } });
-      expect(await seen(ids.StudentG1)).toEqual(['groupG1', 'schoolWide']);
+      expect(await seen(ids.StudentG1)).toEqual(['classG1', 'groupG1', 'schoolWide']);
 
       await prisma.userAssignment.updateMany({ where: { userId: ids.StudentPlain }, data: { deletedAt: new Date() } });
       // No active assignment left: no spaces:read either, so the request is refused outright.

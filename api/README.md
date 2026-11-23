@@ -794,18 +794,16 @@ Deleted spaces (`ACTIVE_SPACE`) are never returned.
 | Platform admin | Every space; `?schoolId=` narrows to one school |
 | `documents:manage` in a school (school admin, content manager, or any role with a document-management right) | Every space of that school, including spaces with no document yet |
 | Staff, student | Spaces of their school with at least one **published** document (below) |
-| Guest / parent (`PARENT_GUEST`) | Only spaces with a document **explicitly** shared with their role or one of their groups |
+| Guest / parent (`PARENT_GUEST`) | Only spaces with a document **explicitly** shared with their role, class/group, or user account |
 
-A user with several assignments gets the union. A document is **published to** an assignment (school S, role R,
-groups G) when it is not deleted, in a non-deleted space of S, has at least one version with status `indexed` (a
-document still being processed does not count), and has a `document_access` row where:
-- `school_id` = S (a row with `school_id` NULL matches nobody);
-- `role_id` is NULL or R;
-- `group_id` is NULL or one of G: the group of the assignment plus the user's `group_members`, ignoring deleted groups.
-
-So a row with only `school_id` is published to the whole school (staff and students), **not** to guests: for a guest the
-row must also set `role_id` or `group_id`. `document_access` has no user column, so sharing with one single person is not
-possible yet.
+A user with several assignments gets the union (in schools where they hold `documents:manage` or `spaces:read`).
+A document is **published to** an assignment in school S when it is not deleted, in a non-deleted space of S, has
+at least one version with status `available` (a document still being processed does not count), and matches
+`matchingAccessRulesWhere` (`src/documents/utils/document-visibility.util.ts`):
+- `school`: everyone in S (**not** guests);
+- `role`: users holding that role in S;
+- `class` / `group`: members in `group_members` or `user_assignments.group_id` for a non-deleted group;
+- `user`: that specific user account (`user_id`).
 
 Query parameters: `page`, `limit` (same contract as the other lists), `search` (name contains, case-insensitive, max 100),
 `schoolId` (UUID; for anyone but a platform admin it can only narrow what they already see, so another school gives an

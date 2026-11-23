@@ -5,7 +5,7 @@ import type { Readable } from 'node:stream';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { assertSchoolAccess, canInSchool, schoolIdFilter } from '../../auth/utils/school-scope.util.js';
-import { buildVisibilityContext, buildVisibleSpacesWhere, needsGroups } from '../utils/space-visibility.util.js';
+import { buildVisibilityContext, buildVisibleSpacesWhere } from '../utils/space-visibility.util.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { STORAGE_SERVICE } from '../../storage/storage.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
@@ -496,24 +496,11 @@ export class DocumentsService {
    * Where clause of the spaces `actor` may see (#99, rule in `space-visibility.util.ts`). The groups of the
    * caller are loaded only when a non-manager assignment needs them.
    */
-  private async visibleSpacesWhere(
+  private visibleSpacesWhere(
     actor: AuthenticatedUser,
     filters: { schoolId?: string; search?: string } = {},
-  ): Promise<Prisma.SpaceWhereInput> {
-    const groupIdsBySchool = new Map<string, string[]>();
-    if (needsGroups(actor)) {
-      const assignmentGroupIds = actor.assignments.map((a) => a.groupId).filter((g): g is string => !!g);
-      const groups = await this.prisma.group.findMany({
-        where: {
-          deletedAt: null,
-          schoolId: { in: actor.schoolIds },
-          OR: [{ id: { in: assignmentGroupIds } }, { members: { some: { userId: actor.id } } }],
-        },
-        select: { id: true, schoolId: true },
-      });
-      for (const g of groups) groupIdsBySchool.set(g.schoolId, [...(groupIdsBySchool.get(g.schoolId) ?? []), g.id]);
-    }
-    return buildVisibleSpacesWhere(buildVisibilityContext(actor, groupIdsBySchool), filters);
+  ): Prisma.SpaceWhereInput {
+    return buildVisibleSpacesWhere(buildVisibilityContext(actor), filters);
   }
 
   /**
@@ -525,7 +512,7 @@ export class DocumentsService {
     const limit = Math.min(100, Math.max(1, query?.limit ?? 10));
     const skip = (page - 1) * limit;
 
-    const where = await this.visibleSpacesWhere(actor, { schoolId: query?.schoolId, search: query?.search });
+    const where = this.visibleSpacesWhere(actor, { schoolId: query?.schoolId, search: query?.search });
 
     const [total, spaces] = await Promise.all([
       this.prisma.space.count({ where }),
@@ -765,7 +752,7 @@ export class DocumentsService {
    * see answers 404, exactly like an unknown or deleted one, so its existence is not revealed.
    */
   async findSpaceById(id: string, actor: AuthenticatedUser): Promise<SpaceEntity> {
-    const visible = await this.visibleSpacesWhere(actor);
+    const visible = this.visibleSpacesWhere(actor);
     const space = await this.prisma.space.findFirst({ where: { AND: [{ id }, visible] } });
     if (!space) {
       throw new NotFoundException(`Space with ID ${id} not found`);

@@ -89,7 +89,7 @@ export class DocumentsController {
     description:
       'Platform admins see every space; roles with documents:manage see every space of their school(s); staff, ' +
       'students and guests only the spaces holding at least one available document published to them ' +
-      '(guests: explicitly shared with their role or group). ' +
+      '(guests: explicitly shared with their role, class, group, or account). ' +
       'Same page/limit contract as the other lists: page defaults to 1, limit to 10 and is capped at 100. ' +
       'Returns { data, total, page, limit, totalPages }.',
   })
