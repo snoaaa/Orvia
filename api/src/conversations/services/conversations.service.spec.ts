@@ -407,6 +407,8 @@ describe('ConversationsService (#123)', () => {
       ['done', 'done', true, true],
       ['completed', 'done', true, true],
       ['failed', 'failed', false, false],
+      // Same rule as every other route (#119): an empty or unknown status is not final.
+      ['', 'pending', false, false],
     ])('maps stored status %s -> %s (ready=%s, answer=%s)', async (stored, expectedStatus, expectedReady, hasAnswer) => {
       mockPrisma.message.findFirst.mockResolvedValueOnce({
         id: 'msg-1',
@@ -481,6 +483,49 @@ describe('ConversationsService (#123)', () => {
       const saved = await service.saveAnswer({ messageId: 'msg-1' }, student);
       expect(saved.id).toBe('save-1');
       expect(mockPrisma.savedAnswer.create).not.toHaveBeenCalled();
+    });
+
+    it('shares a "not enough evidence" answer without any source, shown or hidden (#119)', async () => {
+      const shared = await (async () => {
+        mockPrisma.message.findFirst.mockResolvedValueOnce({
+          id: 'msg-1',
+          conversationId: 'conv-1',
+          role: 'assistant',
+          content: 'The documents do not contain this.',
+          status: 'done',
+          conversation: { userId: student.id },
+        });
+        return service.createShareLink('conv-1', 'msg-1', student);
+      })();
+      mockPrisma.message.findFirst.mockResolvedValueOnce({
+        id: 'msg-1',
+        conversationId: 'conv-1',
+        content: 'The documents do not contain this.',
+        modelUsed: 'mock-rag',
+        notEnoughEvidence: true,
+        createdAt: new Date(),
+        references: [
+          {
+            id: 'ref-1',
+            marker: 1,
+            documentVersionId: 'ver-2',
+            pageOrImageId: 'page_2',
+            excerpt: 'Secret excerpt',
+            coordinates: null,
+            documentVersion: {
+              id: 'ver-2',
+              documentId: 'doc-2',
+              versionNo: 1,
+              status: 'available',
+              document: { title: 'Secret Doc', deletedAt: null },
+            },
+          },
+        ],
+      });
+
+      const view = await service.getSharedAnswer(shared.shareToken, student);
+      expect(view).toMatchObject({ notEnoughEvidence: true, citations: [], redactedCitationsCount: 0 });
+      expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
     });
 
     it('creates a share link and strips citations invisible to the receiver', async () => {

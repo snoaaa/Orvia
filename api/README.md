@@ -797,10 +797,12 @@ Storing the question and generating the answer are #120 and #121: until then the
 |---|---|
 | `role` | `user` (question) or `assistant` (answer) |
 | `content` | The question, or the answer text with citation markers `[1]`, `[2]`... (empty while pending) |
-| `status` | `pending`, `generating`, `done` or `failed`; questions are `done`. Older stored values (`completed`) are given as `done` |
+| `status` | `pending`, `generating`, `done` or `failed`; questions are `done`. Older stored values (`completed`) are given as `done`; a missing or unknown one as `pending`, on every route |
 | `notEnoughEvidence` | `true` when the documents do not contain the answer: `citations` is empty and `content` says so |
 | `citations` | The sources, ordered by `marker`; empty for questions |
 | `modelUsed`, `createdAt` | The model that answered and when |
+
+A "not enough evidence" answer never shows or counts citations, shared answers included (`redactedCitationsCount` is 0).
 
 **A citation:** `marker` (the `n` of `[n]` in the text), `documentId`, `versionId`, `documentName`, `versionNumber`,
 `pageOrImageId` (`page_<n>` or an image id), `excerpt`, `zone` and `available` (false once the document is deleted or

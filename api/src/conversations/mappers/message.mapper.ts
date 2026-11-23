@@ -93,8 +93,9 @@ export class MessageMapper {
       content: raw.content,
       modelUsed: raw.modelUsed || 'default',
       parameters: asRecord(raw.parameters),
-      // Stored values such as the legacy 'completed' are given in the contract's states (#119, #122).
-      status: normalizeGenerationStatus(raw.status || 'done'),
+      // Same rule as the status route (#122): legacy values such as 'completed' are given in the contract's
+      // states, and a missing or unknown status is 'pending' (an answer is never claimed final by mistake).
+      status: normalizeGenerationStatus(raw.status),
       notEnoughEvidence,
       // "Not enough evidence" answers have no sources, whatever was stored.
       citations: notEnoughEvidence

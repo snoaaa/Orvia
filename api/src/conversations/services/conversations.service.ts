@@ -447,7 +447,9 @@ export class ConversationsService {
     const citations: MessageCitationEntity[] = [];
     let redactedCitationsCount = 0;
 
-    for (const ref of message.references) {
+    // A "not enough evidence" answer has no sources: nothing to show, nothing hidden.
+    const references = message.notEnoughEvidence ? [] : message.references;
+    for (const ref of references) {
       const docId = ref.documentVersion.documentId;
       let visible = visibilityCache.get(docId);
       if (visible === undefined) {
@@ -466,7 +468,7 @@ export class ConversationsService {
       content: message.content,
       modelUsed: message.modelUsed,
       notEnoughEvidence: message.notEnoughEvidence,
-      citations: message.notEnoughEvidence ? [] : citations,
+      citations,
       redactedCitationsCount,
       createdAt: message.createdAt,
     });

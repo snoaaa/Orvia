@@ -4,7 +4,6 @@ export * from './paginated-conversations.entity.js';
 export * from './message.entity.js';
 export * from './message-citation.entity.js';
 export * from './message-generation-status.entity.js';
-export * from './message-reference.entity.js';
 export * from './retrieved-passage.entity.js';
 export * from './saved-answer.entity.js';
 export * from './paginated-saved-answers.entity.js';

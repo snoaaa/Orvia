@@ -73,8 +73,10 @@ describe('MessageMapper (#119 chat contract)', () => {
     ['done', 'done'],
     ['streaming', 'generating'],
     ['error', 'failed'],
-    [null, 'done'],
-    ['', 'done'],
+    // Same as GET .../status (#122): unknown means not final.
+    [null, 'pending'],
+    ['', 'pending'],
+    ['unknown', 'pending'],
   ])('gives the stored status %s as %s', (stored, expected) => {
     expect(MessageMapper.toEntity(answer({ status: stored })).status).toBe(expected);
   });

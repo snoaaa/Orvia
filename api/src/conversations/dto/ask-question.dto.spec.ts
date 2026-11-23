@@ -43,6 +43,14 @@ describe('AskQuestionDto (#119)', () => {
     expect(check({ question: 'Q', ...body }).fields).toContain('spaceIds');
   });
 
+  it('compares space ids without case: the same space in two cases is a repeat', () => {
+    const upper = SPACE.toUpperCase();
+    expect(check({ question: 'Q', spaceIds: [SPACE, upper] }).fields).toContain('spaceIds');
+    const { dto, fields } = check({ question: 'Q', spaceIds: [upper] });
+    expect(fields).toEqual([]);
+    expect(dto.spaceIds).toEqual([SPACE]);
+  });
+
   it.each(['role', 'content', 'modelUsed', 'parameters', 'conversationId'])(
     'refuses %s: the client never chooses it',
     (field) => {

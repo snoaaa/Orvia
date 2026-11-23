@@ -32,6 +32,10 @@ export class AskQuestionDto {
       'Search only these spaces. Left out: the space of the conversation. Spaces the caller may not see never ' +
       'contribute to the answer.',
   })
+  // UUIDs are case-insensitive: lowercased first, so the same space in two cases counts as a repeat.
+  @Transform(({ value }) =>
+    Array.isArray(value) ? value.map((id) => (typeof id === 'string' ? id.toLowerCase() : id)) : value,
+  )
   @IsArray()
   @ArrayMaxSize(QUESTION_MAX_SPACES)
   @ArrayUnique()
