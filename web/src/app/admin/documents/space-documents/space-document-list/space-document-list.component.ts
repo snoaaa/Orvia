@@ -9,7 +9,7 @@ import { PortalSessionService } from '../../../identity/services/portal-session.
 import { ConfirmationModalComponent } from '../../../identity/users/components/confirmation-modal/confirmation-modal.component';
 import { SpaceEntity } from '../../spaces/models/space.model';
 import { SpaceManagementService } from '../../spaces/services/space-management.service';
-import { sessionGrants } from '../../shared/api-permissions.util';
+import { sessionGrantsInSchool } from '../../shared/api-permissions.util';
 import { DocumentMetadataModalComponent } from '../document-metadata-modal/document-metadata-modal.component';
 import {
   DOCUMENT_SEARCH_MAX_LENGTH,
@@ -107,7 +107,13 @@ export class SpaceDocumentListComponent {
    * Edit, versions, access and delete need `documents:manage` with the API's rules (any document or space
    * management permission grants it there), so the buttons shown always work.
    */
-  readonly canManage = computed(() => sessionGrants(this.session, 'documents:manage'));
+  readonly canManage = computed(() =>
+    sessionGrantsInSchool(
+      this.session,
+      this.space()?.schoolId ?? this.session.activeSchoolId(),
+      'documents:manage'
+    )
+  );
   readonly hasFilters = computed(
     () =>
       this.searchTerm().trim() !== '' ||

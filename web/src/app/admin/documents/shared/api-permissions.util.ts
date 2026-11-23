@@ -51,6 +51,29 @@ export function sessionGrants(session: PortalSessionService, required: string): 
 }
 
 /**
+ * True when the signed-in user may use `required` in `schoolId` with the API's rules:
+ * when `user.assignments` is present, only assignments for `schoolId` (or platform scope)
+ * count so permissions from another school never leak.
+ */
+export function sessionGrantsInSchool(
+  session: PortalSessionService,
+  schoolId: string | null | undefined,
+  required: string
+): boolean {
+  if (session.isPlatformAdmin()) return true;
+  const user = session.user();
+  if (!user) return false;
+  const assignments = user.assignments ?? [];
+  if (assignments.length === 0) {
+    return sessionGrants(session, required);
+  }
+  const scoped = schoolId
+    ? assignments.filter((a) => a.schoolId === schoolId || a.scope === 'platform')
+    : assignments;
+  return scoped.some((a) => grantsApiPermission(a.permissions ?? [], required));
+}
+
+/**
  * Route guard: lets the page open when the user holds at least one of `anyOf` (API rules above),
  * otherwise shows the "Not allowed" page like `portalPermissionGuard`.
  */

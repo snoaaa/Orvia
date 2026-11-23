@@ -119,13 +119,19 @@
               @for (space of spaces(); track space.id) {
                 <tr>
                   <td class="name-cell">
-                    <a
-                      [routerLink]="['/admin/spaces', space.id, 'documents']"
-                      class="f-w-500 text-dark text-truncate d-block space-documents-link"
-                      [title]="'Open the documents of ' + space.name"
-                    >
-                      {{ space.name }}
-                    </a>
+                    @if (canOpenDocuments(space)) {
+                      <a
+                        [routerLink]="['/admin/spaces', space.id, 'documents']"
+                        class="f-w-500 text-dark text-truncate d-block space-documents-link"
+                        [title]="'Open the documents of ' + space.name"
+                      >
+                        {{ space.name }}
+                      </a>
+                    } @else {
+                      <div class="f-w-500 text-dark text-truncate" [title]="space.name">
+                        {{ space.name }}
+                      </div>
+                    }
                     @if (space.description) {
                       <small class="text-muted text-truncate d-block" [title]="space.description">
                         {{ space.description }}

@@ -614,5 +614,42 @@ describe('SpaceDocumentListComponent', () => {
       create(user(['documents:publish', 'spaces:read']));
       expect(component.canManage()).toBe(true);
     });
+
+    it('scopes canManage to the loaded space school so permissions from another school do not leak', () => {
+      spaceService.getSpace.mockReturnValue(
+        of({ id: 'sp-b', schoolId: 'school-b', name: 'History B', description: '' })
+      );
+      const multiSchoolUser: PortalSessionUser = {
+        id: 'u1',
+        email: 'u1@school.edu',
+        fullName: 'User One',
+        status: 'ACTIVE',
+        role: null,
+        permissions: ['documents:manage', 'documents:read', 'spaces:read'],
+        schoolIds: ['school-a', 'school-b'],
+        isPlatformAdmin: false,
+        assignments: [
+          {
+            role: 'CONTENT_MANAGER',
+            scope: 'school',
+            schoolId: 'school-a',
+            schoolName: 'School A',
+            groupId: null,
+            permissions: ['documents:manage', 'documents:read', 'spaces:read']
+          },
+          {
+            role: 'STAFF',
+            scope: 'school',
+            schoolId: 'school-b',
+            schoolName: 'School B',
+            groupId: null,
+            permissions: ['documents:read', 'spaces:read']
+          }
+        ]
+      };
+      session.selectSchool('school-a');
+      create(multiSchoolUser);
+      expect(component.canManage()).toBe(false);
+    });
   });
 });
