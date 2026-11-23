@@ -85,13 +85,18 @@ export class DocumentsController {
   @Get('spaces')
   @RequirePermission('spaces:read')
   @ApiOperation({
-    summary: 'List document spaces of your schools, paginated and alphabetical',
+    summary: 'List the document spaces you may see, paginated and alphabetical (§4.7, #99)',
     description:
+      'Platform admins see every space; roles with documents:manage see every space of their school(s); staff, ' +
+      'students and guests only the spaces holding at least one available document published to them ' +
+      '(guests: explicitly shared with their role, class, group, or account). ' +
       'Same page/limit contract as the other lists: page defaults to 1, limit to 10 and is capped at 100. ' +
       'Returns { data, total, page, limit, totalPages }.',
   })
   @ApiQuery({ name: 'page', required: false, description: 'Page number (minimum 1)' })
   @ApiQuery({ name: 'limit', required: false, description: 'Items per page (1-100)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Name contains (case-insensitive)' })
+  @ApiQuery({ name: 'schoolId', required: false, description: 'Only the spaces of this school (UUID)' })
   @ApiResponse({ status: 200, description: 'Paginated list of spaces', type: PaginatedSpacesEntity })
   async getSpaces(
     @Query() query: ListSpacesQueryDto,
@@ -126,14 +131,16 @@ export class DocumentsController {
   @Get('spaces/:id')
   @RequirePermission('spaces:read')
   @ApiOperation({
-    summary: 'Get document space by ID (scoped to school) (§4.5, #89)',
-    description: 'Retrieves space details. Caller must hold spaces:read in the space school, otherwise 403.',
+    summary: 'Get a document space by ID (§4.5, §4.7, #89, #99)',
+    description:
+      'Same visibility rule as GET /documents/spaces: a space the caller may not see is answered 404, like an ' +
+      'unknown or deleted space.',
   })
   @ApiParam({ name: 'id', description: 'Space UUID' })
   @ApiResponse({ status: 200, description: 'Space retrieved successfully', type: SpaceEntity })
-  @ApiResponse({ status: 403, description: 'Forbidden: caller lacks access to space school' })
-  @ApiResponse({ status: 404, description: 'Space not found' })
-  async getSpaceById(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
+  @ApiResponse({ status: 400, description: 'Invalid UUID' })
+  @ApiResponse({ status: 404, description: 'Space not found, deleted, or outside what the caller may see' })
+  async getSpaceById(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: AuthenticatedUser): Promise<SpaceEntity> {
     return this.documentsService.findSpaceById(id, actor);
   }
 

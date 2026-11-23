@@ -215,6 +215,18 @@ describe('Delete a space (e2e)', () => {
       dead = await space('A', uniqueName('Dead'));
       liveDoc = await document(live.id, uniqueName('Live doc'));
       deadDoc = await document(dead.id, uniqueName('Dead doc'));
+      await prisma.documentVersion.updateMany({
+        where: { documentId: { in: [liveDoc.id, deadDoc.id] } },
+        data: { status: 'available' },
+      });
+      await prisma.documentAccess.createMany({
+        data: [liveDoc.id, deadDoc.id].map((documentId) => ({
+          documentId,
+          schoolId: schools.A,
+          targetType: 'school',
+          targetId: schools.A,
+        })),
+      });
       check(await remove(ids.AdminA, dead.id), 204);
     });
 
