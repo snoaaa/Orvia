@@ -2,6 +2,9 @@ import { ApiProperty } from '@nestjs/swagger';
 
 /** One school/role(/group) of a user, as shown in the user list. */
 export class UserAssignmentSummaryEntity {
+  @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174005', description: 'Assignment id, for PATCH/DELETE /assignments/:id' })
+  id: string;
+
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174001' })
   schoolId: string;
 

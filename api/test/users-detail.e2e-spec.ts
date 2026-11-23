@@ -110,7 +110,14 @@ describe('User detail (e2e)', () => {
         sessions: [],
       });
       expect(res.body.assignments).toEqual([
-        { schoolId: schools.A, schoolName: expect.any(String), role: 'STUDENT', groupId: groups.A1, groupName: 'A1' },
+        {
+          id: expect.any(String),
+          schoolId: schools.A,
+          schoolName: expect.any(String),
+          role: 'STUDENT',
+          groupId: groups.A1,
+          groupName: 'A1',
+        },
       ]);
     });
 

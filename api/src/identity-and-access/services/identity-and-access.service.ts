@@ -152,6 +152,7 @@ export class IdentityAndAccessService {
             authProvider: u.authProvider,
             status: u.status,
             assignments: u.assignments.map((a) => ({
+              id: a.id,
               schoolId: a.schoolId,
               schoolName: a.school.name,
               role: a.role.name,
@@ -208,6 +209,7 @@ export class IdentityAndAccessService {
       hasPassword: user.passwordHash !== null,
       googleLinked: user.googleSub !== null,
       assignments: user.assignments.map((a) => ({
+        id: a.id,
         schoolId: a.schoolId,
         schoolName: a.school.name,
         role: a.role.name,

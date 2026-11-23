@@ -1,6 +1,6 @@
 import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, catchError, map, throwError } from 'rxjs';
+import { EMPTY, Observable, catchError, expand, reduce, throwError } from 'rxjs';
 import { environment } from 'src/environments/environment';
 import {
   ActiveSession,
@@ -118,16 +118,22 @@ export class UserManagementService {
   }
 
   /**
-   * Fetches schools visible to the current administrator.
+   * Fetches all schools visible to the current administrator (across pages).
    */
   getSchools(): Observable<SchoolSummaryOption[]> {
-    const params = new HttpParams().set('limit', '100');
-    return this.http
-      .get<{ data: SchoolSummaryOption[] }>(`${this.apiUrl}/schools`, { params })
-      .pipe(
-        map((res) => res.data ?? []),
-        catchError((error) => throwError(() => error))
+    const fetchPage = (page: number) => {
+      const params = new HttpParams().set('page', String(page)).set('limit', '100');
+      return this.http.get<{ data: SchoolSummaryOption[]; page?: number; totalPages?: number }>(
+        `${this.apiUrl}/schools`,
+        { params }
       );
+    };
+
+    return fetchPage(1).pipe(
+      expand((res) => (res.page && res.totalPages && res.page < res.totalPages ? fetchPage(res.page + 1) : EMPTY)),
+      reduce((all, res) => [...all, ...(res.data ?? [])], [] as SchoolSummaryOption[]),
+      catchError((error) => throwError(() => error))
+    );
   }
 
   /**

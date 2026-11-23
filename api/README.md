@@ -564,7 +564,8 @@ refuses a role above it, here and in `PATCH /identity/users/{id}/role`.
 
 Answer 201 with `id`, `userId`, `schoolId`, `schoolName`, `groupId`, `groupName`, `role`, `roleScope`,
 `createdAt`, `updatedAt`. Audited as `identity_access/role_assigned` (with `groupId`, `previousRole: null`). The
-assignment appears in `GET /users/{id}`.
+assignment appears in `GET /users/{id}` (and `GET /users`), where each `assignments[]` item carries its `id` so
+clients can call `PATCH` / `DELETE /assignments/{id}` (#61).
 
 ### Update an assignment: `PATCH /assignments/{id}` (#48)
 

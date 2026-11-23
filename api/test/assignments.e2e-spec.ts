@@ -123,7 +123,14 @@ describe('Assignments (e2e)', () => {
         200,
       );
       expect(detail.body.assignments).toEqual([
-        { schoolId: schools.A, schoolName: expect.any(String), role: 'STUDENT', groupId: groups.A1, groupName: 'A1' },
+        {
+          id: res.body.id,
+          schoolId: schools.A,
+          schoolName: expect.any(String),
+          role: 'STUDENT',
+          groupId: groups.A1,
+          groupName: 'A1',
+        },
       ]);
       expect(detail.body.groups).toEqual([expect.objectContaining({ groupId: groups.A1, schoolId: schools.A })]);
 
