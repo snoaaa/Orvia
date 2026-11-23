@@ -9,6 +9,7 @@ import {
   IsString,
   Length,
   Matches,
+  MaxLength,
 } from 'class-validator';
 
 /** Documentary scopes a role can have (Section 4.5 / 4.7), as used by the seeded base roles. */
@@ -40,5 +41,7 @@ export class CreateRoleDto {
   @ArrayMaxSize(100)
   @ArrayUnique()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
+  @Matches(/\S/, { each: true, message: 'permission codes must not be blank' })
   permissions: string[];
 }

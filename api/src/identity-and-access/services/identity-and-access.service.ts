@@ -9,7 +9,7 @@ import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/util
 import { ActiveSessionEntity } from '../../auth/entities/index.js';
 import { SessionService } from '../../auth/services/session.service.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { isAdminRole, isBaseRoleName } from '../../auth/utils/admin-role.util.js';
+import { isAdminRole, isBaseRoleName, PLATFORM_ADMIN_PERMISSION } from '../../auth/utils/admin-role.util.js';
 import { assertCanGrantRole } from '../../auth/utils/role-grant.util.js';
 import { highestRoleLevel, roleScopeLevel } from '../../auth/utils/role-level.util.js';
 import { assertSchoolAccess, schoolIdFilter, schoolsWithPermission } from '../../auth/utils/school-scope.util.js';
@@ -702,22 +702,56 @@ export class IdentityAndAccessService {
       return UserMapper.toEntity(target);
     }
 
-    const prevRoleGrantsDocManage =
-      existing?.role.name === 'CONTENT_MANAGER' ||
-      existing?.role.rolePermissions?.some(
-        (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
-      ) ||
-      false;
+    const txResult = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
+      const lockedRole = await tx.$queryRaw<Array<{ id: string; scope: string; name: string }>>`
+        SELECT id, scope, name FROM roles WHERE id = ${role.id} FOR UPDATE
+      `;
+      const freshRole = lockedRole[0];
+      if (!freshRole) {
+        throw new BadRequestException(`Unknown role '${roleName}'`);
+      }
+      if (freshRole.scope !== role.scope) {
+        throw new ConflictException(
+          `Role '${freshRole.name}' changed scope while the assignment was being updated; retry the request`,
+        );
+      }
 
-    if (existing) {
-      await this.prisma.userAssignment.update({ where: { id: existing.id }, data: { roleId: role.id } });
-    } else {
-      await this.prisma.userAssignment.create({
-        data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+      const current = await tx.userAssignment.findFirst({
+        where: { userId: target.id, schoolId: dto.schoolId, ...ACTIVE_ASSIGNMENT },
+        include: { role: { include: { rolePermissions: { select: { permission: { select: { code: true } } } } } } },
       });
+      if (current?.roleId === role.id) {
+        return { changed: false as const };
+      }
+
+      const prevRoleGrantsDocManage =
+        current?.role.name === 'CONTENT_MANAGER' ||
+        current?.role.rolePermissions?.some(
+          (rp) => rp.permission.code === 'documents:manage' || rp.permission.code === 'documents.manage',
+        ) ||
+        false;
+
+      if (current) {
+        await tx.userAssignment.update({ where: { id: current.id }, data: { roleId: role.id } });
+      } else {
+        await tx.userAssignment.create({
+          data: { userId: target.id, schoolId: dto.schoolId, roleId: role.id },
+        });
+      }
+
+      return {
+        changed: true as const,
+        prevRoleGrantsDocManage,
+        previousRoleName: current?.role.name ?? null,
+      };
+    });
+
+    if (!txResult.changed) {
+      return UserMapper.toEntity(target);
     }
 
-    if (roleGrantsDocManage && !prevRoleGrantsDocManage) {
+    if (roleGrantsDocManage && !txResult.prevRoleGrantsDocManage) {
       await this.audit.record(
         AuditEvents.permissionGranted(
           {
@@ -730,7 +764,7 @@ export class IdentityAndAccessService {
           auditContext,
         ),
       );
-    } else if (!roleGrantsDocManage && prevRoleGrantsDocManage) {
+    } else if (!roleGrantsDocManage && txResult.prevRoleGrantsDocManage) {
       await this.audit.record(
         AuditEvents.permissionRevoked(
           {
@@ -752,7 +786,7 @@ export class IdentityAndAccessService {
           email: target.email,
           schoolId: dto.schoolId,
           role: role.name,
-          previousRole: existing?.role.name ?? null,
+          previousRole: txResult.previousRoleName,
           assignedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
         },
         auditContext,
@@ -763,7 +797,7 @@ export class IdentityAndAccessService {
   }
 
   /**
-   * Grant document-management rights to a staff member in a school (§4.5, #88).
+   * Grant document-management rights to a staff member in a school (Â§4.5, #88).
    *
    * Enforces:
    *  - Caller must hold users:assign_role. Platform admins can grant in any school;
@@ -870,7 +904,7 @@ export class IdentityAndAccessService {
   }
 
   /**
-   * Revoke document-management rights from a staff member in a school (§4.5, #88).
+   * Revoke document-management rights from a staff member in a school (Â§4.5, #88).
    *
    * Enforces:
    *  - Caller must hold users:assign_role. Platform admins can revoke in any school;
@@ -1243,24 +1277,44 @@ export class IdentityAndAccessService {
         rolePermissions: {
           include: { permission: true },
         },
-        _count: {
-          select: { assignments: { where: ACTIVE_ASSIGNMENT } },
+        assignments: {
+          where: ACTIVE_ASSIGNMENT,
+          distinct: ['userId'],
+          select: { userId: true },
         },
       },
     });
-    return roles.map(
-      (r) =>
-        new RoleEntity({
-          id: r.id,
-          name: r.name,
-          scope: r.scope,
-          permissions: r.rolePermissions.map((rp) => rp.permission.code).sort(),
-          assignedUsersCount: r._count.assignments,
-          isBase: isBaseRoleName(r.name),
-          createdAt: r.createdAt,
-          updatedAt: r.updatedAt,
-        }),
-    );
+    return roles.map((role) => this.toRoleEntity(role));
+  }
+
+  /**
+   * One sorted permission list feeds both arrays: `permissions` and `permissionIds` are documented as
+   * parallel, so they must never be ordered by different comparators (`.sort()` is UTF-16 order, where
+   * `.` < `:`, while `localeCompare` shifts punctuation — the two disagreed for dotted codes).
+   */
+  private toRoleEntity(role: {
+    id: string;
+    name: string;
+    scope: string;
+    rolePermissions: Array<{ permission: { id: string; code: string } }>;
+    assignments: Array<{ userId: string }>;
+    createdAt: Date;
+    updatedAt: Date;
+  }): RoleEntity {
+    const permissions = role.rolePermissions
+      .map((rolePermission) => rolePermission.permission)
+      .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+    return new RoleEntity({
+      id: role.id,
+      name: role.name,
+      scope: role.scope,
+      permissions: permissions.map((permission) => permission.code),
+      permissionIds: permissions.map((permission) => permission.id),
+      assignedUsersCount: new Set(role.assignments.map((assignment) => assignment.userId)).size,
+      isBase: isBaseRoleName(role.name),
+      createdAt: role.createdAt,
+      updatedAt: role.updatedAt,
+    });
   }
 
   async findRoleById(id: string): Promise<RoleEntity> {
@@ -1270,24 +1324,33 @@ export class IdentityAndAccessService {
         rolePermissions: {
           include: { permission: true },
         },
-        _count: {
-          select: { assignments: { where: ACTIVE_ASSIGNMENT } },
+        assignments: {
+          where: ACTIVE_ASSIGNMENT,
+          distinct: ['userId'],
+          select: { userId: true },
         },
       },
     });
     if (!role) {
       throw new NotFoundException(`Role '${id}' not found`);
     }
-    return new RoleEntity({
-      id: role.id,
-      name: role.name,
-      scope: role.scope,
-      permissions: role.rolePermissions.map((rp) => rp.permission.code).sort(),
-      assignedUsersCount: role._count.assignments,
-      isBase: isBaseRoleName(role.name),
-      createdAt: role.createdAt,
-      updatedAt: role.updatedAt,
-    });
+    return this.toRoleEntity(role);
+  }
+
+  /**
+   * `system:manage` (or the `*` wildcard) is the platform-administration permission: a role holding
+   * it must be platform-scoped, otherwise a school-scoped role could administer the whole platform.
+   * Enforced on create and on edit.
+   */
+  private assertScopeAllowsPermissions(scope: string, codes: readonly string[]): void {
+    const grantsPlatformAdministration = codes.some(
+      (code) => code === PLATFORM_ADMIN_PERMISSION || code === '*',
+    );
+    if (grantsPlatformAdministration && scope !== 'platform') {
+      throw new BadRequestException(
+        `A role that grants ${PLATFORM_ADMIN_PERMISSION} must have the platform scope`,
+      );
+    }
   }
 
   /**
@@ -1309,6 +1372,7 @@ export class IdentityAndAccessService {
     }
 
     const codes = [...new Set(dto.permissions)];
+    this.assertScopeAllowsPermissions(dto.scope, codes);
     const permissions = await this.prisma.permission.findMany({ where: { code: { in: codes } }, select: { id: true, code: true } });
     const unknown = codes.filter((code) => !permissions.some((p) => p.code === code));
     if (unknown.length > 0) {
@@ -1333,63 +1397,213 @@ export class IdentityAndAccessService {
     }
   }
 
-  async updateRole(id: string, dto: UpdateRoleDto): Promise<RoleEntity> {
-    const role = await this.prisma.role.findFirst({
-      where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
+  /**
+   * Resolves a replacement permission set given either codes or ids (never both), rejecting unknown
+   * entries with a 400 that names them. Codes are trimmed, deduplicated and blank-free.
+   *
+   * Ids are compared in lower case: `@IsUUID()` accepts upper-case UUIDs and MySQL's collation matches
+   * them case-insensitively, so `known.has(rawValue)` used to reject a perfectly valid id.
+   */
+  private async resolvePermissions(input: { codes?: string[]; ids?: string[] }): Promise<{ id: string; code: string }[]> {
+    const byId = input.ids !== undefined;
+    const values = [
+      ...new Set((byId ? input.ids! : input.codes ?? []).map((value) => value.trim()).filter(Boolean)),
+    ];
+    if (values.length === 0) return [];
+
+    const lookups = values.map((value) => (byId ? value.toLowerCase() : value));
+    const found = await this.prisma.permission.findMany({
+      where: byId ? { id: { in: lookups } } : { code: { in: lookups } },
+      select: { id: true, code: true },
     });
-    if (!role) {
-      throw new NotFoundException(`Role '${id}' not found`);
+    const known = new Set(
+      found.map((permission) => (byId ? permission.id.toLowerCase() : permission.code)),
+    );
+    const unknown = values.filter((_value, index) => !known.has(lookups[index]));
+    if (unknown.length > 0) {
+      throw new BadRequestException(
+        byId ? `Unknown permission id(s): ${unknown.join(', ')}` : `Unknown permission code(s): ${unknown.join(', ')}`,
+      );
     }
-    if (isBaseRoleName(role.name)) {
-      throw new BadRequestException('System base roles cannot be modified');
-    }
-
-    let nextName = role.name;
-    if (dto.name && dto.name.trim()) {
-      nextName = dto.name.trim().toUpperCase();
-      if (isBaseRoleName(nextName)) {
-        throw new BadRequestException(`Role name '${nextName}' is reserved for system base roles`);
-      }
-      if (nextName !== role.name) {
-        const existing = await this.prisma.role.findUnique({ where: { name: nextName } });
-        if (existing && existing.id !== role.id) {
-          throw new ConflictException(`Role '${nextName}' already exists`);
-        }
-      }
-    }
-
-    await this.prisma.role.update({
-      where: { id: role.id },
-      data: {
-        name: nextName,
-        ...(dto.scope ? { scope: dto.scope } : {}),
-      },
-    });
-
-    if (dto.permissions) {
-      await this.prisma.rolePermission.deleteMany({
-        where: { roleId: role.id },
-      });
-      if (dto.permissions.length > 0) {
-        const perms = await this.prisma.permission.findMany({
-          where: { code: { in: dto.permissions } },
-        });
-        if (perms.length > 0) {
-          await this.prisma.rolePermission.createMany({
-            data: perms.map((p) => ({
-              roleId: role.id,
-              permissionId: p.id,
-            })),
-            skipDuplicates: true,
-          });
-        }
-      }
-    }
-
-    return this.findRoleById(role.id);
+    return found;
   }
 
-  async deleteRole(id: string): Promise<{ success: boolean; message: string }> {
+  /**
+   * PATCH /roles/:id (#45), also behind the older PATCH /identity/roles/:id.
+   *
+   * Edits a custom role's name, scope and/or permission set. Base roles are immutable (400): they are
+   * the capability matrix the seed recreates, so a custom role is the only editable kind. The
+   * permission set is replaced as a whole, given either as codes (`GET /roles` returns them) or as
+   * ids (`GET /permissions` returns them), never both; an unknown entry is 400 and nothing is
+   * written. A payload that changes nothing writes nothing and audits nothing.
+   *
+   * The role row, its permissions and the `updated_at` of its active assignments move in one
+   * transaction: the mobile sync (Section 4.7) reads `user_assignments.updated_at`, so a role change
+   * reaches the devices of everyone holding it without touching each user. The permissions of a
+   * request are read live from the database (`AuthUserService`), so a holder is allowed or refused by
+   * the new set on their very next request; the change is recorded as
+   * `identity_access/role_updated` with the permission diff.
+   */
+  async updateRole(
+    id: string,
+    dto: UpdateRoleDto,
+    actor: AuthenticatedUser,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+  ): Promise<RoleEntity> {
+    // Authorization first: a school-scoped `system:manage` holder must learn nothing about which role
+    // ids or names exist, so they get 403 rather than 404/400 for an unknown or base role.
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may edit roles');
+    }
+
+    const renames = dto.name !== undefined;
+    const rescopes = dto.scope !== undefined;
+    const replacesPermissions = dto.permissions !== undefined || dto.permissionIds !== undefined;
+    if (!renames && !rescopes && !replacesPermissions) {
+      throw new BadRequestException('Nothing to update: send name, scope, permissions or permissionIds');
+    }
+    if (dto.permissions !== undefined && dto.permissionIds !== undefined) {
+      throw new BadRequestException('Send either permissions (codes) or permissionIds (ids), not both');
+    }
+
+    let roleId = id;
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // Resolve and lock the role row in one statement: POST /assignments (AssignmentsService) locks
+        // the same row, so the "an assigned role cannot change scope" rule and an assignment insert
+        // cannot interleave — otherwise a role could be re-scoped to `platform` while a school
+        // assignment was being created, silently giving that school's user access to every school.
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM roles WHERE id = ${id} OR name = ${id.trim().toUpperCase()} FOR UPDATE
+        `;
+        if (locked.length === 0) {
+          throw new NotFoundException(`Role '${id}' not found`);
+        }
+        roleId = locked[0].id;
+
+        // Fresh state, read under the lock: the pre-lock values may already be stale.
+        const role = await tx.role.findFirst({
+          where: { id: roleId },
+          include: {
+            rolePermissions: { include: { permission: { select: { id: true, code: true } } } },
+            assignments: {
+              where: ACTIVE_ASSIGNMENT,
+              distinct: ['userId'],
+              select: { userId: true },
+            },
+          },
+        });
+        if (!role) {
+          throw new NotFoundException(`Role '${id}' not found`);
+        }
+        if (isBaseRoleName(role.name)) {
+          throw new BadRequestException('System base roles cannot be edited');
+        }
+
+        const nextScope = rescopes ? dto.scope! : role.scope;
+        const assignedUsersCount = new Set(role.assignments.map((assignment) => assignment.userId)).size;
+        if (rescopes && nextScope !== role.scope && assignedUsersCount > 0) {
+          // `schoolsWithPermission()` treats a platform-scoped assignment as "all schools", so moving an
+          // assigned role into (or out of) the platform scope would silently widen (or narrow) the access
+          // of everyone holding it, in schools they were never granted.
+          throw new BadRequestException(
+            `Cannot change the scope of role '${role.name}': still assigned to ${assignedUsersCount} user(s). Please reassign them first.`,
+          );
+        }
+
+        let nextName = role.name;
+        if (renames) {
+          nextName = dto.name!.trim().toUpperCase();
+          if (isBaseRoleName(nextName)) {
+            throw new BadRequestException(`Role name '${nextName}' is reserved for system base roles`);
+          }
+          if (nextName !== role.name) {
+            const existing = await tx.role.findUnique({ where: { name: nextName }, select: { id: true } });
+            if (existing && existing.id !== role.id) {
+              throw new ConflictException(`Role '${nextName}' already exists`);
+            }
+          }
+        }
+
+        const permissions = replacesPermissions
+          ? await this.resolvePermissions({ codes: dto.permissions, ids: dto.permissionIds })
+          : null;
+        const nextCodes = permissions ? permissions.map((permission) => permission.code).sort() : null;
+        const previousCodes = role.rolePermissions.map((rp) => rp.permission.code).sort();
+        const effectiveCodes = nextCodes ?? previousCodes;
+        if (replacesPermissions || rescopes) {
+          this.assertScopeAllowsPermissions(nextScope, effectiveCodes);
+        }
+        const permissionsChanged =
+          nextCodes !== null &&
+          (nextCodes.length !== previousCodes.length ||
+            nextCodes.some((code, index) => code !== previousCodes[index]));
+        if (nextName === role.name && nextScope === role.scope && !permissionsChanged) {
+          // A payload that changes nothing writes nothing — and audits nothing.
+          return { changed: false as const };
+        }
+
+        await tx.role.update({
+          where: { id: role.id },
+          data: { name: nextName, ...(rescopes ? { scope: nextScope } : {}) },
+        });
+
+        if (permissions) {
+          await tx.rolePermission.deleteMany({ where: { roleId: role.id } });
+          if (permissions.length > 0) {
+            await tx.rolePermission.createMany({
+              data: permissions.map((permission) => ({ roleId: role.id, permissionId: permission.id })),
+            });
+          }
+        }
+
+        // Section 4.7: the mobile delta sync reads `user_assignments.updated_at`, so every active
+        // assignment of the role gets a fresh stamp and the change reaches the devices.
+        await tx.userAssignment.updateMany({
+          where: { roleId: role.id, ...ACTIVE_ASSIGNMENT },
+          data: { updatedAt: new Date() },
+        });
+
+        // Same transaction as the write: if the audit row cannot be appended, the role edit and the
+        // `user_assignments.updated_at` bump roll back with it instead of leaving an unaudited change.
+        await this.audit.record(
+          AuditEvents.roleUpdated(
+            {
+              roleId: role.id,
+              role: nextName,
+              previousName: role.name,
+              previousScope: role.scope,
+              scope: nextScope,
+              permissions: nextCodes ?? previousCodes,
+              addedPermissions: nextCodes ? nextCodes.filter((code) => !previousCodes.includes(code)) : [],
+              removedPermissions: nextCodes ? previousCodes.filter((code) => !nextCodes.includes(code)) : [],
+              updatedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+            },
+            auditContext,
+          ),
+          tx,
+        );
+
+        return { changed: true as const };
+      });
+
+      return await this.findRoleById(roleId);
+    } catch (error) {
+      // The unique index on roles.name decides between two concurrent renames that both passed the
+      // check above: answer 409 like the sequential path, not a 500.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Role '${dto.name?.trim().toUpperCase() ?? id}' already exists`);
+      }
+      throw error;
+    }
+  }
+
+  /** DELETE /identity/roles/:id: removes an unassigned custom role. Platform admins only. */
+  async deleteRole(id: string, actor: AuthenticatedUser): Promise<{ success: boolean; message: string }> {
+    if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
+      throw new ForbiddenException('Only platform administrators may delete roles');
+    }
     const role = await this.prisma.role.findFirst({
       where: { OR: [{ id }, { name: id.trim().toUpperCase() }] },
     });
@@ -1427,9 +1641,17 @@ export class IdentityAndAccessService {
     if (schoolsWithPermission(actor, 'system:manage') !== 'all') {
       throw new ForbiddenException('Only platform administrators may list permissions');
     }
-    const rows = await this.prisma.permission.findMany({ select: { code: true, description: true } });
+    const rows = await this.prisma.permission.findMany({ select: { id: true, code: true, description: true } });
     return rows
-      .map((p) => new PermissionEntity({ code: p.code, description: p.description, category: p.code.split(':')[0] }))
+      .map(
+        (p) =>
+          new PermissionEntity({
+            id: p.id,
+            code: p.code,
+            description: p.description,
+            category: p.code.split(':')[0],
+          }),
+      )
       .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
   }
 
