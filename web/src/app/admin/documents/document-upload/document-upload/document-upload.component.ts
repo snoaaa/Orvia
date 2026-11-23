@@ -304,7 +304,11 @@ export class DocumentUploadComponent implements OnInit {
           this.patch(item.id, { progress: event.percent });
         } else {
           this.running.delete(item.id);
-          this.patch(item.id, { status: 'done', progress: 100 });
+          this.patch(item.id, {
+            status: 'done',
+            progress: 100,
+            documentId: event.document.id
+          });
           this.batchDone++;
           this.uploaded.emit(event.document);
           this.pump();

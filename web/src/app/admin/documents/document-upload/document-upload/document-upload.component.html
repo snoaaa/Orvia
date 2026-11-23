@@ -187,6 +187,14 @@
                       }
                     </td>
                     <td class="text-end text-nowrap">
+                      @if (item.status === 'done' && item.documentId) {
+                        <a
+                          class="btn btn-sm btn-light-secondary me-1 upload-versions"
+                          [routerLink]="['/admin/documents', item.documentId, 'versions']"
+                        >
+                          <i class="ti ti-history me-1"></i>Versions
+                        </a>
+                      }
                       @if (item.status === 'error') {
                         <button
                           type="button"
