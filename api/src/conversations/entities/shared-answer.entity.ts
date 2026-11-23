@@ -35,8 +35,11 @@ export class SharedAnswerViewEntity {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174021', description: 'Message UUID' })
   messageId: string;
 
-  @ApiProperty({ example: 'Backpropagation computes the gradient...', description: 'Answer text' })
+  @ApiProperty({ example: 'Backpropagation computes the gradient...', description: 'Answer text, with citation markers `[n]` (#119)' })
   content: string;
+
+  @ApiProperty({ example: false, description: 'True when the documents did not contain enough evidence to answer (#119)' })
+  notEnoughEvidence: boolean;
 
   @ApiProperty({ example: 'mock-rag-v1', description: 'Model used to generate the answer' })
   modelUsed: string;

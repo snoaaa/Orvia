@@ -764,7 +764,7 @@ Otherwise these routes answer 404. Remove them once the real auth endpoints exis
 Requires `conversations:read`. Every user (including platform and school admins) only reads **their own** conversations here; monitoring uses dedicated routes. Soft-deleted conversations and soft-deleted messages are never returned, and requesting another user's conversation returns `404`.
 
 - `GET /conversations`: paginated (`page`, `limit` capped at `100`), ordered newest first (`updatedAt DESC, createdAt DESC, id DESC`). Optional filters: `spaceId` (UUID) and `q` (title search, trimmed).
-- `GET /conversations/:id`: returns the conversation with chronological messages (`createdAt ASC`) and citations (`documentId`, `versionId`, `documentName`, `versionNumber`, `pageOrImageId`, `excerpt`, `coordinates`, `available`).
+- `GET /conversations/:id`: returns the conversation with chronological messages (`createdAt ASC`), each in the format of the chat contract below.
 - `GET /conversations/:id/messages`: returns the chronological messages and citations for the conversation.
 - `GET /conversations/:id/messages/:messageId/status` (`conversations:read`, #122): polling endpoint returning `{ messageId, conversationId, status, ready, modelUsed, errorCode, updatedAt, answer }` where `status` is `pending | generating | done | failed` and `answer` is populated once `done`.
 - `PATCH /conversations/:id` (`conversations:update`, #124): renames a conversation owned by the caller (`title` trimmed, 1–191 characters).
@@ -772,3 +772,66 @@ Requires `conversations:read`. Every user (including platform and school admins)
 - `POST /conversations/saved-answers` & `GET /conversations/saved-answers` & `DELETE /conversations/saved-answers/:id` (#125): bookmark, list (newest first, paginated), and unbookmark completed assistant answers (`answers:save` / `conversations:read`).
 - `POST /conversations/:id/messages/:messageId/share` & `GET /conversations/shared/:token` (#125): generate a signed share link/text and resolve it for a receiver, stripping any citations whose source documents are not visible to the receiver (`redactedCitationsCount`).
 - `POST /conversations/reports` (`answers:report`, #125) & `GET /conversations/reports` (`metrics:view`, #125): report an assistant answer (`hallucination`, `toxic`, `incorrect_citation`, `irrelevant`, `incomplete`, `other`) and list reports scoped to the admin's school(s) (or all schools for platform admins).
+
+### Chat contract (#119)
+
+The format shared by the mobile app, the portal and the chat backend (spec §4.2, §4.3). It is fixed in Swagger
+(`AskQuestionDto`, `MessageEntity`, `MessageCitationEntity`, `CitationZoneEntity`) and checked by
+`test/conversations-ask.e2e-spec.ts`; change it only with the mobile and web developers.
+
+**Asking: `POST /conversations/{id}/messages`** (`messages:send`). The conversation is `{id}`; the body is:
+
+| Field | Rules |
+|---|---|
+| `question` | Required, trimmed, 1 to 4000 characters |
+| `spaceIds` | Optional, up to 10 different space UUIDs to search; left out: the conversation's space. Spaces the caller may not see never contribute |
+
+Any other field (`role`, `content`, `modelUsed`, `parameters`...) is a **400**: the client never chooses the role or
+the model. Someone else's conversation, or a deleted one, is a **404**. The answer is `201` with the **pending answer**;
+poll `GET /conversations/{id}/messages/{messageId}/status` with its `id` until `status` is `done` or `failed`.
+Storing the question and generating the answer are #120 and #121: until then the pending answer is not stored.
+
+**A message (question or answer)**, as returned by every chat route:
+
+| Field | Meaning |
+|---|---|
+| `role` | `user` (question) or `assistant` (answer) |
+| `content` | The question, or the answer text with citation markers `[1]`, `[2]`... (empty while pending) |
+| `status` | `pending`, `generating`, `done` or `failed`; questions are `done`. Older stored values (`completed`) are given as `done`; a missing or unknown one as `pending`, on every route |
+| `notEnoughEvidence` | `true` when the documents do not contain the answer: `citations` is empty and `content` says so |
+| `citations` | The sources, ordered by `marker`; empty for questions |
+| `modelUsed`, `createdAt` | The model that answered and when |
+
+A "not enough evidence" answer never shows or counts citations, shared answers included (`redactedCitationsCount` is 0).
+
+**A citation:** `marker` (the `n` of `[n]` in the text), `documentId`, `versionId`, `documentName`, `versionNumber`,
+`pageOrImageId` (`page_<n>` or an image id), `excerpt`, `zone` and `available` (false once the document is deleted or
+the cited version is no longer available; the citation stays so the answer keeps making sense).
+
+`zone` is where the excerpt is on the page: `{ x, y, width, height }` as fractions of the page (0 to 1, from the
+top-left corner), or `null` when unknown. It is stored as that JSON in `message_references.coordinates`; anything else
+there (such as older pixel coordinates) is given as `null`, so a client never draws a zone it cannot place.
+
+```json
+{
+  "id": "3f6c...", "conversationId": "9a1b...", "role": "assistant",
+  "content": "Backpropagation applies the chain rule layer by layer [1], starting from the loss [2].",
+  "modelUsed": "mock-rag-v1", "parameters": null, "status": "done", "notEnoughEvidence": false,
+  "citations": [
+    { "id": "c1...", "marker": 1, "documentId": "d1...", "versionId": "v1...", "documentName": "Neural Networks Lecture 4",
+      "versionNumber": 2, "pageOrImageId": "page_14", "excerpt": "The chain rule applied to...",
+      "zone": { "x": 0.1, "y": 0.42, "width": 0.8, "height": 0.12 }, "available": true },
+    { "id": "c2...", "marker": 2, "documentId": "d2...", "versionId": "v2...", "documentName": "Course notes",
+      "versionNumber": 1, "pageOrImageId": "page_3", "excerpt": "The loss function measures...",
+      "zone": null, "available": true }
+  ],
+  "createdAt": "2026-11-21T10:00:05.000Z", "updatedAt": "2026-11-21T10:00:05.000Z"
+}
+```
+
+A "not enough evidence" answer: `{ ..., "content": "The documents available to you do not contain this information.",
+"status": "done", "notEnoughEvidence": true, "citations": [] }`.
+
+**Storage** (migration `13_chat_answer_contract`): `messages.not_enough_evidence` (false by default) and
+`message_references.marker` (unique per message). Existing references were numbered 1, 2, 3... per message in the
+order they were listed so far. Whoever stores an answer (#121) writes the markers that its text uses.
