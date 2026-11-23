@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from 'src/environments/environment';
 import { AccessOptions, AccessRule, AccessTarget } from '../models/document-access.model';
+import { apiErrorMessages } from '../../shared/api-error.util';
 
 export type AccessAction = 'load' | 'add' | 'remove';
 
@@ -42,8 +43,8 @@ export class DocumentAccessService {
   errorMessage(error: unknown, action: AccessAction): string {
     if (!(error instanceof HttpErrorResponse)) return this.fallback(action);
 
-    const messages = this.messagesOf(error);
-    if (messages.length > 0) return messages.map(capitalize).join('. ');
+    const messages = apiErrorMessages(error);
+    if (messages.length > 0) return messages.join('. ');
 
     switch (error.status) {
       case 0:
@@ -72,15 +73,4 @@ export class DocumentAccessService {
   private url(documentId: string): string {
     return `${this.baseUrl}/${encodeURIComponent(documentId)}`;
   }
-
-  private messagesOf(error: HttpErrorResponse): string[] {
-    if (!error.error || typeof error.error !== 'object') return [];
-    const message = (error.error as { message?: unknown }).message;
-    const list = Array.isArray(message) ? message : [message];
-    return list.filter((m): m is string => typeof m === 'string' && m !== '');
-  }
-}
-
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
