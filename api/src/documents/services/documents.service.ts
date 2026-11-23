@@ -1417,14 +1417,14 @@ export class DocumentsService {
     if (actorIds.length > 0) {
       const users = await this.prisma.user.findMany({
         where: { id: { in: actorIds } },
-        select: { id: true, name: true, email: true },
+        select: { id: true, fullName: true, email: true },
       });
       for (const u of users) {
         userMap.set(
           u.id,
           new DocumentVersionUploaderEntity({
             id: u.id,
-            name: u.name,
+            name: u.fullName,
             email: u.email,
           }),
         );

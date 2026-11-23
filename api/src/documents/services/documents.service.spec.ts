@@ -2372,8 +2372,8 @@ describe('DocumentsService', () => {
       ]);
 
       mockPrisma.user.findMany.mockResolvedValueOnce([
-        { id: 'usr-admin', name: 'Admin Alice', email: 'admin@school1.edu' },
-        { id: 'usr-prof', name: 'Prof Bob', email: 'prof@school1.edu' },
+        { id: 'usr-admin', fullName: 'Admin Alice', email: 'admin@school1.edu' },
+        { id: 'usr-prof', fullName: 'Prof Bob', email: 'prof@school1.edu' },
       ]);
 
       const result = await service.listDocumentVersions('doc-1', schoolAdmin);
