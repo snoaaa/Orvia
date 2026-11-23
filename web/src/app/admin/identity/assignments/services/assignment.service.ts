@@ -1,6 +1,6 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, map } from 'rxjs';
+import { EMPTY, Observable, expand, map, reduce } from 'rxjs';
 import { environment } from 'src/environments/environment';
 import {
   AssignmentEntity,
@@ -21,12 +21,19 @@ export class AssignmentService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
 
-  /** Groups of one school. */
+  /** Groups of one school (all pages). */
   getGroups(schoolId: string): Observable<GroupOption[]> {
-    const params = new HttpParams().set('schoolId', schoolId).set('limit', '100');
-    return this.http
-      .get<{ data: GroupOption[] }>(`${this.apiUrl}/groups`, { params })
-      .pipe(map((page) => page.data));
+    const fetchPage = (page: number) => {
+      const params = new HttpParams().set('schoolId', schoolId).set('page', String(page)).set('limit', '100');
+      return this.http.get<{ data: GroupOption[]; page?: number; totalPages?: number }>(`${this.apiUrl}/groups`, {
+        params
+      });
+    };
+
+    return fetchPage(1).pipe(
+      expand((res) => (res.page && res.totalPages && res.page < res.totalPages ? fetchPage(res.page + 1) : EMPTY)),
+      reduce((all, res) => [...all, ...(res.data ?? [])], [] as GroupOption[])
+    );
   }
 
   createAssignment(payload: CreateAssignmentPayload): Observable<AssignmentEntity> {

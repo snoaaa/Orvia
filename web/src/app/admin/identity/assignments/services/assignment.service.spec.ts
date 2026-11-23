@@ -28,6 +28,22 @@ describe('AssignmentService', () => {
     expect(result).toEqual([{ id: 'g1', schoolId: 's1', name: 'G1', type: 'class' }]);
   });
 
+  it('paginates through all pages when loading groups beyond limit 100', () => {
+    let result: unknown;
+    service.getGroups('s1').subscribe((g) => (result = g));
+
+    const p1 = httpMock.expectOne((r) => r.url === `${api}/groups` && r.params.get('page') === '1');
+    p1.flush({ data: [{ id: 'g1', schoolId: 's1', name: 'G1', type: 'class' }], page: 1, totalPages: 2 });
+
+    const p2 = httpMock.expectOne((r) => r.url === `${api}/groups` && r.params.get('page') === '2');
+    p2.flush({ data: [{ id: 'g2', schoolId: 's1', name: 'G2', type: 'team' }], page: 2, totalPages: 2 });
+
+    expect(result).toEqual([
+      { id: 'g1', schoolId: 's1', name: 'G1', type: 'class' },
+      { id: 'g2', schoolId: 's1', name: 'G2', type: 'team' }
+    ]);
+  });
+
   it('creates, updates and removes an assignment', () => {
     service.createAssignment({ userId: 'u', schoolId: 's', role: 'STAFF' }).subscribe();
     const post = httpMock.expectOne(`${api}/assignments`);

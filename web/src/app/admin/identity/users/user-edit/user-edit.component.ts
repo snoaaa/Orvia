@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, effect, inject, signal, untracked } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
@@ -126,9 +126,23 @@ export class UserEditComponent implements OnInit {
   });
 
   /** Name of the school the form works on, shown as a badge when the school select is hidden. */
+  readonly activeFormSchoolId = signal<string>('');
+
   readonly formSchoolName = computed<string | null>(() => {
     const editing = this.editingAssignment();
-    return editing ? this.getAssignmentSchoolName(editing) : this.session.activeSchoolName();
+    if (editing) return this.getAssignmentSchoolName(editing);
+    const schoolId = this.activeFormSchoolId();
+    if (schoolId && schoolId === this.session.activeSchoolId()) {
+      return this.session.activeSchoolName();
+    }
+    if (schoolId) {
+      return (
+        this.schools().find((s) => s.id === schoolId)?.name ??
+        this.session.schools().find((s) => s.id === schoolId)?.name ??
+        schoolId
+      );
+    }
+    return this.session.activeSchoolName();
   });
 
   readonly successMessage = signal<string>('');
@@ -146,11 +160,23 @@ export class UserEditComponent implements OnInit {
   });
 
   constructor() {
+    effect(() => {
+      const nextSchoolId = this.session.activeSchoolId();
+      untracked(() => {
+        if (!this.session.isPlatformAdmin() && this.assignmentMode() === 'create') {
+          const canUseNext =
+            Boolean(nextSchoolId) && this.availableSchools().some((s) => s.id === nextSchoolId);
+          this.assignmentForm.controls.schoolId.setValue(canUseNext ? nextSchoolId! : '');
+        }
+      });
+    });
+
     // The groups and the assignable roles follow the school; switchMap drops stale answers when it changes quickly.
     this.assignmentForm.controls.schoolId.valueChanges
       .pipe(
         takeUntilDestroyed(),
-        tap(() => {
+        tap((schoolId) => {
+          this.activeFormSchoolId.set(schoolId ?? '');
           this.groups.set([]);
           this.rawRoles.set([]);
           this.assignmentForm.patchValue({ groupId: '', role: '' }, { emitEvent: false });
@@ -273,7 +299,12 @@ export class UserEditComponent implements OnInit {
   }
 
   getAssignmentSchoolName(a: UserSchoolAssignment): string {
-    return a.schoolName || a.school?.name || this.session.activeSchoolName() || a.schoolId;
+    return (
+      a.schoolName ||
+      a.school?.name ||
+      this.schools().find((s) => s.id === a.schoolId)?.name ||
+      a.schoolId
+    );
   }
 
   /**
@@ -332,6 +363,7 @@ export class UserEditComponent implements OnInit {
    * Toggles document-management rights (`documents:manage`) on a staff assignment (#88, #94).
    */
   toggleDocumentManagement(assignment: UserSchoolAssignment, granted: boolean): void {
+    if (this.assignmentMode() !== null) return;
     if (this.isTogglingDocMgmt() || !this.canTouchCurrentUser()) return;
 
     this.isTogglingDocMgmt.set(true);
@@ -412,6 +444,7 @@ export class UserEditComponent implements OnInit {
     if (!this.canManageAssignments()) return;
     this.editingAssignment.set(null);
     this.pendingEdit = null;
+    this.activeFormSchoolId.set('');
     this.assignmentForm.controls.schoolId.enable({ emitEvent: false });
     this.assignmentForm.reset({ schoolId: '', groupId: '', role: '' }, { emitEvent: false });
     this.groups.set([]);

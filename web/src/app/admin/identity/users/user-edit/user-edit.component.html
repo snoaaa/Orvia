@@ -283,7 +283,7 @@
                             role="switch"
                             [id]="'doc-mgmt-' + assignment.schoolId"
                             [checked]="hasDocumentManagement(assignment)"
-                            [disabled]="isTogglingDocMgmt() || !canManageAssignments()"
+                            [disabled]="isTogglingDocMgmt() || !canManageAssignments() || assignmentMode() !== null"
                             (change)="toggleDocumentManagement(assignment, $any($event.target).checked)"
                           />
                           <label class="form-check-label text-sm" [for]="'doc-mgmt-' + assignment.schoolId">

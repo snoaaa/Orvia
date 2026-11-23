@@ -638,6 +638,72 @@ describe('UserEditComponent', () => {
         expect(component.assignmentMode()).toBe('create');
         expect(component.editingAssignment()).toBeNull();
       });
+
+      it('disables the document-management toggle while an assignment form is open', () => {
+        const staffRow: UserSchoolAssignment = {
+          id: 'as-staff',
+          schoolId: 's1',
+          schoolName: 'School A',
+          role: 'STAFF',
+          groupId: null,
+          groupName: null
+        };
+        component.user.set({ ...mockUser, assignments: [staffRow] });
+        fixture.detectChanges();
+
+        const toggle = () => fixture.nativeElement.querySelector('.doc-management-toggle') as HTMLInputElement;
+        expect(toggle().disabled).toBe(false);
+
+        component.openCreateAssignmentForm();
+        fixture.detectChanges();
+        expect(toggle().disabled).toBe(true);
+
+        mockUserService.setDocumentManagement.mockClear();
+        component.toggleDocumentManagement(staffRow, true);
+        expect(mockUserService.setDocumentManagement).not.toHaveBeenCalled();
+      });
+
+      it('falls back to schools() or schoolId in getAssignmentSchoolName instead of activeSchoolName', () => {
+        signIn(['users:assign_role'], false, ['s1', 's2']);
+        session.selectSchool('s1');
+        expect(
+          component.getAssignmentSchoolName({ id: 'a-missing', schoolId: 'unknown-school', role: 'STAFF' })
+        ).toBe('unknown-school');
+        expect(
+          component.getAssignmentSchoolName({ id: 'a-known', schoolId: 's2', role: 'STAFF' })
+        ).toBe('School B');
+      });
+
+      it('keeps formSchoolName aligned with assignmentForm schoolId if the active school changes', () => {
+        component.user.set({ ...mockUser, assignments: [] });
+        session.setUser({
+          id: 'admin-1',
+          email: 'admin@demo.test',
+          fullName: 'Admin',
+          status: 'ACTIVE',
+          role: 'SCHOOL_ADMIN',
+          permissions: ['users:assign_role'],
+          schoolIds: ['s1', 's2'],
+          schools: [
+            { id: 's1', name: 'School A' },
+            { id: 's2', name: 'School B' }
+          ],
+          isPlatformAdmin: false,
+          assignments: [
+            { role: 'SCHOOL_ADMIN', scope: 'school', schoolId: 's1', groupId: null, permissions: ['users:assign_role'] },
+            { role: 'SCHOOL_ADMIN', scope: 'school', schoolId: 's2', groupId: null, permissions: ['users:assign_role'] }
+          ]
+        });
+        session.selectSchool('s1');
+        component.openCreateAssignmentForm();
+        expect(component.assignmentForm.controls.schoolId.value).toBe('s1');
+        expect(component.formSchoolName()).toBe('School A');
+
+        session.selectSchool('s2');
+        fixture.detectChanges();
+        expect(component.assignmentForm.controls.schoolId.value).toBe('s2');
+        expect(component.formSchoolName()).toBe('School B');
+      });
     });
 
     describe('remove', () => {
