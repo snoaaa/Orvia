@@ -673,7 +673,7 @@ export const AuditEvents = {
       actor: {
         userId: p.actor.userId,
         role: p.actor.role ?? null,
-        schoolId: p.actor.schoolId ?? null,
+        schoolId: p.schoolId,
       },
       entity: { type: 'space', id: p.spaceId },
       details: {

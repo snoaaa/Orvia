@@ -806,7 +806,7 @@ mobile). Other staff and students get 403 and simply never see a deleted space. 
 school's space → 403, unknown **or already deleted** space → 404 (of two simultaneous deletes, one gets 404).
 Audited as `documents/space_deleted` with the original name and the number of documents hidden.
 
-- **The row stays**: `spaces.deleted_at` is set (migration `10_spaces_soft_delete`) and nothing is removed.
+- **The row stays**: `spaces.deleted_at` is set (migration `15_spaces_soft_delete`) and nothing is removed.
 - **The name is freed**: the row is renamed to `<name> [deleted <ISO date>]` (cut to the 191-character
   column), so the unique index `(school_id, name)` does not stop the school from creating a new space with
   the same name. The original name is kept in the audit event.

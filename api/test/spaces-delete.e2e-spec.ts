@@ -329,5 +329,37 @@ describe('Delete a space (e2e)', () => {
       expect(after.documents.total).toBe(before.total);
       expect((after.spaces as { id: string }[]).map((s) => s.id)).not.toContain(target.id);
     });
+
+    it('never leaves an active document in a deleted space under concurrent DELETE and POST /documents', async () => {
+      const target = await space('A', uniqueName('RaceDoc'));
+      const auth = await bearer(ids.AdminA);
+
+      const [delRes, postRes] = await Promise.all([
+        http().delete(`/documents/spaces/${target.id}`).set('Authorization', auth),
+        http().post('/documents').set('Authorization', auth).send({ spaceId: target.id, title: 'RaceDoc', url: 'e2e/race.pdf' }),
+      ]);
+
+      expect(delRes.status).toBe(204);
+      expect([201, 404]).toContain(postRes.status);
+      const docCount = await prisma.document.count({ where: { spaceId: target.id, deletedAt: null } });
+      const ev = await prisma.auditEvent.findFirstOrThrow({ where: { action: 'space_deleted', entityId: target.id } });
+      expect((ev.details as { documentsCount: number }).documentsCount).toBe(docCount);
+      if (postRes.status === 201) {
+        check(await get(ids.AdminA, `/documents/${postRes.body.id}`), 404);
+      }
+    });
+
+    it('rejects deleting a space of a deactivated school with 400 and stamps target schoolId on audit', async () => {
+      const off = await prisma.school.create({
+        data: { name: `Test E2E Spaces School Off ${stamp}`, status: 'deactivated' },
+      });
+      const frozen = await prisma.space.create({ data: { schoolId: off.id, name: uniqueName('FrozenDel') } });
+      check(await remove(platformAdminId, frozen.id), 400);
+
+      const live = await space('A', uniqueName('PlatformDel'));
+      check(await remove(platformAdminId, live.id), 204);
+      const ev = await prisma.auditEvent.findFirstOrThrow({ where: { action: 'space_deleted', entityId: live.id } });
+      expect(ev.schoolId).toBe(schools.A);
+    });
   });
 });

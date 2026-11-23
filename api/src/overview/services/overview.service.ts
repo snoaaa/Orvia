@@ -16,7 +16,6 @@ import {
   OverviewSpaceEntity,
   OverviewUsersEntity,
 } from '../entities/overview.entity.js';
-import { ACTIVE_ASSIGNMENT } from '../../auth/utils/active-assignment.util.js';
 import { ACTIVE_DOCUMENT, ACTIVE_SPACE } from '../../documents/utils/active-space.util.js';
 
 /** `all` = platform-wide; otherwise `schoolIds` restricts, and an empty list means "no school". */
@@ -162,7 +161,7 @@ export class OverviewService {
 
     const rows = await this.prisma.space.findMany({
       where: { ...ACTIVE_SPACE, ...(scope.all ? {} : { schoolId: { in: scope.schoolIds } }) },
-      select: { id: true, name: true, _count: { select: { documents: true } } },
+      select: { id: true, name: true, _count: { select: { documents: { where: { deletedAt: null } } } } },
       orderBy: { documents: { _count: 'desc' } },
       take: 7,
     });

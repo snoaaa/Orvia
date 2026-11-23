@@ -136,11 +136,11 @@ export class DocumentProcessingStatusService {
       where: { id: documentId },
       select: {
         deletedAt: true,
-        space: { select: { schoolId: true } },
+        space: { select: { schoolId: true, deletedAt: true } },
         access: { select: { targetType: true, roleId: true, groupId: true, userId: true } },
       },
     });
-    if (!doc || doc.deletedAt || doc.access.length === 0) return 0;
+    if (!doc || doc.deletedAt || doc.space.deletedAt || doc.access.length === 0) return 0;
     const earlier = await tx.documentVersion.count({ where: { documentId, status: 'available', id: { not: versionId } } });
     if (earlier > 0) return 0;
 

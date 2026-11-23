@@ -45,9 +45,18 @@ export class DocumentsDevController {
   ): Promise<StatusChangeResult> {
     const version = await this.prisma.documentVersion.findUnique({
       where: { id: versionId },
-      select: { document: { select: { space: { select: { schoolId: true } } } } },
+      select: {
+        document: {
+          select: {
+            deletedAt: true,
+            space: { select: { schoolId: true, deletedAt: true } },
+          },
+        },
+      },
     });
-    if (!version) throw new NotFoundException(`Document version ${versionId} not found`);
+    if (!version || version.document.deletedAt || version.document.space.deletedAt) {
+      throw new NotFoundException(`Document version ${versionId} not found`);
+    }
     assertSchoolAccess(actor, 'documents:manage', version.document.space.schoolId);
     return this.statuses.setStatus(versionId, dto.status, dto.reason);
   }

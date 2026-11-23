@@ -198,18 +198,21 @@ export class DocumentsService {
   }
 
   async createDocument(dto: CreateDocumentDto, actor: AuthenticatedUser): Promise<DocumentEntity> {
-    const space = await this.prisma.space.findFirst({
-      where: { id: dto.spaceId, ...ACTIVE_SPACE },
-      select: { schoolId: true },
-    });
-    if (!space) {
-      throw new NotFoundException(`Space with ID ${dto.spaceId} not found`);
-    }
-    assertSchoolAccess(actor, 'documents:manage', space.schoolId);
     const id = randomUUID();
     const data = DocumentMapper.fromDtoToCreateInput(dto, id);
-    const created = await this.prisma.document.create({
-      data,
+    const created = await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
+        SELECT id, deleted_at AS deletedAt FROM spaces WHERE id = ${dto.spaceId} FOR UPDATE
+      `;
+      const space = await tx.space.findFirst({
+        where: { id: dto.spaceId, ...ACTIVE_SPACE },
+        select: { schoolId: true },
+      });
+      if (!space || (locked[0] && locked[0].deletedAt !== null)) {
+        throw new NotFoundException(`Space with ID ${dto.spaceId} not found`);
+      }
+      assertSchoolAccess(actor, 'documents:manage', space.schoolId);
+      return tx.document.create({ data });
     });
     return DocumentMapper.toEntity(created);
   }
@@ -663,40 +666,50 @@ export class DocumentsService {
     actor: AuthenticatedUser,
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<void> {
-    const space = await this.prisma.space.findFirst({ where: { id, ...ACTIVE_SPACE } });
-    if (!space) {
-      throw new NotFoundException(`Space with ID ${id} not found`);
-    }
-    assertSchoolAccess(actor, 'spaces:delete', space.schoolId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM spaces WHERE id = ${id} FOR UPDATE`;
+      const space = await tx.space.findFirst({
+        where: { id, ...ACTIVE_SPACE },
+        include: { school: { select: { status: true } } },
+      });
+      if (!space) {
+        throw new NotFoundException(`Space with ID ${id} not found`);
+      }
+      assertSchoolAccess(actor, 'spaces:delete', space.schoolId);
+      if (space.school?.status?.toLowerCase() === 'deactivated') {
+        throw new BadRequestException('Cannot delete a space of a deactivated school');
+      }
 
-    const documentsCount = await this.prisma.document.count({ where: { spaceId: id, deletedAt: null } });
+      const documentsCount = await tx.document.count({ where: { spaceId: id, deletedAt: null } });
 
-    const deletedAt = new Date();
-    const suffix = ` [deleted ${deletedAt.toISOString()}]`;
-    // Array.from keeps multi-byte characters whole when an old, long name has to be shortened.
-    const name = Array.from(space.name).slice(0, SPACE_NAME_COLUMN_LENGTH - suffix.length).join('') + suffix;
+      const deletedAt = new Date();
+      const suffix = ` [deleted ${deletedAt.toISOString()}]`;
+      // Array.from keeps multi-byte characters whole when an old, long name has to be shortened.
+      const name = Array.from(space.name).slice(0, SPACE_NAME_COLUMN_LENGTH - suffix.length).join('') + suffix;
 
-    // Conditional on deleted_at: of two simultaneous deletes, only one goes through.
-    const { count } = await this.prisma.space.updateMany({
-      where: { id, ...ACTIVE_SPACE },
-      data: { deletedAt, name, updatedAt: deletedAt },
+      // Conditional on deleted_at: of two simultaneous deletes, only one goes through.
+      const { count } = await tx.space.updateMany({
+        where: { id, ...ACTIVE_SPACE },
+        data: { deletedAt, name, updatedAt: deletedAt },
+      });
+      if (count === 0) {
+        throw new NotFoundException(`Space with ID ${id} not found`);
+      }
+
+      await this.audit.record(
+        AuditEvents.spaceDeleted(
+          {
+            spaceId: id,
+            schoolId: space.schoolId,
+            name: space.name,
+            documentsCount,
+            actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+        tx,
+      );
     });
-    if (count === 0) {
-      throw new NotFoundException(`Space with ID ${id} not found`);
-    }
-
-    await this.audit.record(
-      AuditEvents.spaceDeleted(
-        {
-          spaceId: id,
-          schoolId: space.schoolId,
-          name: space.name,
-          documentsCount,
-          actor: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
-        },
-        auditContext,
-      ),
-    );
   }
 
   /** Clear 409 in the normal case; the unique index (school_id, name) still decides under concurrency. */
@@ -846,6 +859,13 @@ export class DocumentsService {
       const tags = normalizeTags(dto?.tags);
 
       const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
+        const lockedSpace = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
+          SELECT id, deleted_at AS deletedAt FROM spaces WHERE id = ${spaceId} FOR UPDATE
+        `;
+        if (lockedSpace.length === 0 || lockedSpace[0].deletedAt !== null) {
+          throw new NotFoundException(`Space with ID ${spaceId} not found`);
+        }
+
         const doc = await tx.document.create({
           data: {
             id: documentId,
@@ -1000,6 +1020,13 @@ export class DocumentsService {
       const tags = normalizeTags(dto?.tags);
 
       const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
+        const lockedSpace = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
+          SELECT id, deleted_at AS deletedAt FROM spaces WHERE id = ${spaceId} FOR UPDATE
+        `;
+        if (lockedSpace.length === 0 || lockedSpace[0].deletedAt !== null) {
+          throw new NotFoundException(`Space with ID ${spaceId} not found`);
+        }
+
         const doc = await tx.document.create({
           data: {
             id: documentId,
