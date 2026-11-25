@@ -1,5 +1,7 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
+import { auditContextFromRequest } from '../../audit/utils/audit-request-context.util.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { AddSchoolDomainDto } from '../dto/index.js';
@@ -50,8 +52,9 @@ export class SchoolDomainsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AddSchoolDomainDto,
     @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
   ): Promise<SchoolDomainEntity> {
-    return this.schoolDomainsService.addDomain(id, dto, actor);
+    return this.schoolDomainsService.addDomain(id, dto, actor, auditContextFromRequest(req));
   }
 
   @Delete(':domainId')
@@ -71,7 +74,8 @@ export class SchoolDomainsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('domainId', new ParseUUIDPipe()) domainId: string,
     @CurrentUser() actor: AuthenticatedUser,
+    @Req() req: Request,
   ): Promise<void> {
-    await this.schoolDomainsService.removeDomain(id, domainId, actor);
+    await this.schoolDomainsService.removeDomain(id, domainId, actor, auditContextFromRequest(req));
   }
 }

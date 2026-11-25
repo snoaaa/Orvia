@@ -51,12 +51,19 @@ describe('SchoolDomainsController (#32)', () => {
   it('delegates to SchoolDomainsService', async () => {
     service.listDomains.mockResolvedValueOnce([{ id: 'd1' }]);
     service.addDomain.mockResolvedValueOnce({ id: 'd2' });
+    const req = {
+      ip: '127.0.0.1',
+      header: () => undefined,
+      headers: {},
+      method: 'POST',
+      originalUrl: '/schools/school-a/domains',
+    } as never;
 
     expect(await controller.listDomains('school-a', actor)).toEqual([{ id: 'd1' }]);
     expect(service.listDomains).toHaveBeenCalledWith('school-a', actor);
-    expect(await controller.addDomain('school-a', { domain: 'school.edu' }, actor)).toEqual({ id: 'd2' });
-    expect(service.addDomain).toHaveBeenCalledWith('school-a', { domain: 'school.edu' }, actor);
-    await controller.removeDomain('school-a', 'd1', actor);
-    expect(service.removeDomain).toHaveBeenCalledWith('school-a', 'd1', actor);
+    expect(await controller.addDomain('school-a', { domain: 'school.edu' }, actor, req)).toEqual({ id: 'd2' });
+    expect(service.addDomain).toHaveBeenCalledWith('school-a', { domain: 'school.edu' }, actor, expect.anything());
+    await controller.removeDomain('school-a', 'd1', actor, req);
+    expect(service.removeDomain).toHaveBeenCalledWith('school-a', 'd1', actor, expect.anything());
   });
 });

@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Readable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
@@ -138,7 +139,12 @@ describe('DocumentsService', () => {
         findMany: vi.fn(),
         findFirst: vi.fn(),
         create: vi.fn(),
+        update: vi.fn(),
+        updateMany: vi.fn(),
         count: vi.fn(),
+      },
+      school: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'school-1' }),
       },
       document: {
         findUnique: vi.fn(),
@@ -179,6 +185,7 @@ describe('DocumentsService', () => {
           updatedAt: new Date(),
         })),
       },
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'space-1', deletedAt: null }]),
       $transaction: vi.fn().mockImplementation(async (cb) => cb(mockPrisma)),
     };
 
@@ -233,7 +240,7 @@ describe('DocumentsService', () => {
 
   describe('validateUploadedFile', () => {
     it('throws NotFoundException when space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       const mockFile = {
         buffer: Buffer.from('%PDF-1.4\nTest PDF'),
@@ -247,7 +254,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks documents:create permission in space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-school-2',
         schoolId: 'school-2', // Different school from schoolAdmin's school-1
       });
@@ -264,7 +271,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if no file or empty buffer provided', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -275,7 +282,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully validates an uploaded file and returns ValidatedFileEntity', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -312,7 +319,7 @@ describe('DocumentsService', () => {
 
   describe('findDocumentById', () => {
     it('throws NotFoundException if document does not exist', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
 
       await expect(service.findDocumentById('doc-unknown', platformAdmin)).rejects.toThrow(
         NotFoundException,
@@ -320,7 +327,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns document if user has school access', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
+      mockPrisma.document.findFirst.mockResolvedValueOnce({
         id: 'doc-1',
         title: 'Notes',
         author: 'Prof',
@@ -333,13 +340,13 @@ describe('DocumentsService', () => {
       const doc = await service.findDocumentById('doc-1', schoolAdmin);
       expect(doc.id).toBe('doc-1');
       expect(doc.title).toBe('Notes');
-      expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.document.findFirst).toHaveBeenCalledTimes(1);
       expect(doc.currentVersion).toBeNull();
     });
 
     it('returns the current version, like the list (#111)', async () => {
       const now = new Date();
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
+      mockPrisma.document.findFirst.mockResolvedValueOnce({
         id: 'doc-1', title: 'Notes', author: '', tags: '', space: { schoolId: 'school-1' }, currentVersionId: 'v2', createdAt: now, updatedAt: now,
       });
       mockPrisma.documentVersion.findUnique = vi.fn().mockResolvedValueOnce({
@@ -352,7 +359,7 @@ describe('DocumentsService', () => {
 
     it('gives a reader the latest available version instead, without the failure reason (#112)', async () => {
       const now = new Date();
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
+      mockPrisma.document.findFirst.mockResolvedValueOnce({
         id: 'doc-1', title: 'Notes', author: '', tags: '', space: { schoolId: 'school-1' }, currentVersionId: 'v2', createdAt: now, updatedAt: now,
       });
       mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-1' }); // published to the reader
@@ -388,13 +395,13 @@ describe('DocumentsService', () => {
       };
 
       it('returns a document published to them', async () => {
-        mockPrisma.document.findUnique.mockResolvedValueOnce(notes);
+        mockPrisma.document.findFirst.mockResolvedValueOnce(notes);
         mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-1' });
         expect((await service.findDocumentById('doc-1', reader)).id).toBe('doc-1');
       });
 
       it('answers 403 for a document not published to them', async () => {
-        mockPrisma.document.findUnique.mockResolvedValueOnce(notes);
+        mockPrisma.document.findFirst.mockResolvedValueOnce(notes);
         mockPrisma.document.findFirst.mockResolvedValueOnce(null);
         await expect(service.findDocumentById('doc-1', reader)).rejects.toThrow(
           /This document is not published to your school, role, class, group or account/,
@@ -402,16 +409,16 @@ describe('DocumentsService', () => {
       });
 
       it('answers 403 for a document of another school, before checking the rules', async () => {
-        mockPrisma.document.findUnique.mockResolvedValueOnce({ ...notes, space: { schoolId: 'school-2' } });
+        mockPrisma.document.findFirst.mockResolvedValueOnce({ ...notes, space: { schoolId: 'school-2' } });
         await expect(service.findDocumentById('doc-1', reader)).rejects.toThrow(ForbiddenException);
-        expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
+        expect(mockPrisma.document.findFirst).toHaveBeenCalledTimes(1);
       });
     });
   });
 
   describe('findSpaceById (#89)', () => {
     it('throws NotFoundException if space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       await expect(service.findSpaceById('space-missing', platformAdmin)).rejects.toThrow(
         NotFoundException,
@@ -419,7 +426,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns space when school admin has access to the space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
         name: 'Computer Science',
@@ -437,7 +444,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns space for platform admin regardless of school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-2',
         schoolId: 'school-other',
         name: 'Biology',
@@ -453,21 +460,490 @@ describe('DocumentsService', () => {
       expect(space.schoolId).toBe('school-other');
     });
 
-    it('throws ForbiddenException when caller accesses space of another school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
-        id: 'space-other',
-        schoolId: 'school-other',
-        name: 'Law',
-        privacy: 'public',
+    it('returns the stored language and privacy, not the defaults (#97)', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
+        id: 'space-3',
+        schoolId: 'school-1',
+        name: 'Droit',
         description: null,
+        language: 'fr',
+        privacy: 'restricted',
         createdAt: new Date(),
         updatedAt: new Date(),
-        school: { id: 'school-other', name: 'Law School' },
       });
 
-      await expect(service.findSpaceById('space-other', schoolAdmin)).rejects.toThrow(
+      const space = await service.findSpaceById('space-3', schoolAdmin);
+      expect(space.language).toBe('fr');
+      expect(space.privacy).toBe('restricted');
+    });
+
+    it('returns 404, not 403, for a space the caller may not see, and asks the database for visible spaces only (#99)', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
+
+      await expect(service.findSpaceById('space-other', schoolAdmin)).rejects.toThrow(NotFoundException);
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+        where: {
+          AND: [
+            { id: 'space-other' },
+            { deletedAt: null, AND: [{ OR: [{ schoolId: { in: ['school-1'] } }] }] },
+          ],
+        },
+      });
+    });
+  });
+
+  describe('createSpace (#97)', () => {
+    const row = (data: Record<string, unknown>) => ({ ...data, createdAt: new Date(), updatedAt: new Date() });
+
+    beforeEach(() => {
+      mockPrisma.space.findFirst.mockResolvedValue(null);
+      mockPrisma.space.create.mockImplementation(async ({ data }: any) => row(data));
+    });
+
+    it('creates the space in the given school with the defaults en / public', async () => {
+      const space = await service.createSpace({ schoolId: 'school-1', name: 'Mathematics' }, schoolAdmin);
+
+      expect(mockPrisma.space.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          schoolId: 'school-1',
+          name: 'Mathematics',
+          description: null,
+          language: 'en',
+          privacy: 'public',
+        }),
+      });
+      expect(space).toMatchObject({ schoolId: 'school-1', name: 'Mathematics', language: 'en', privacy: 'public' });
+    });
+
+    it('stores the given description, language and privacy', async () => {
+      const space = await service.createSpace(
+        { schoolId: 'school-1', name: 'Droit', description: 'Cours de droit', language: 'fr', privacy: 'restricted' },
+        schoolAdmin,
+      );
+      expect(space).toMatchObject({ description: 'Cours de droit', language: 'fr', privacy: 'restricted' });
+    });
+
+    it('records space_created with the school, name, language and privacy', async () => {
+      const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
+      const space = await service.createSpace({ schoolId: 'school-1', name: 'Droit', language: 'fr' }, schoolAdmin, context);
+
+      expect(mockAudit.record).toHaveBeenCalledTimes(1);
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        {
+          category: 'documents',
+          action: 'space_created',
+          actor: { userId: schoolAdmin.id, role: 'school_admin', schoolId: 'school-1' },
+          entity: { type: 'space', id: space.id },
+          details: { schoolId: 'school-1', name: 'Droit', language: 'fr', privacy: 'public' },
+          context,
+        },
+        expect.anything(),
+      );
+    });
+
+    it('records nothing when the creation is refused', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-existing' });
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Droit' }, schoolAdmin)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      await expect(service.createSpace({ schoolId: 'school-2', name: 'Droit' }, schoolAdmin)).rejects.toBeInstanceOf(
         ForbiddenException,
       );
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('lets a platform admin create a space in any school', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: 'school-9' });
+      const space = await service.createSpace({ schoolId: 'school-9', name: 'Physics' }, platformAdmin);
+      expect(space.schoolId).toBe('school-9');
+    });
+
+    it('rejects another school with 403 before looking the school up', async () => {
+      await expect(service.createSpace({ schoolId: 'school-2', name: 'Physics' }, schoolAdmin)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(mockPrisma.school.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.space.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['staff', staffUser],
+      ['student', studentUser],
+    ])('rejects a %s without space rights with 403', async (_label, actor) => {
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Physics' }, actor)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(mockPrisma.space.create).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 for an unknown school and never creates one', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce(null);
+      await expect(service.createSpace({ schoolId: 'school-404', name: 'Physics' }, platformAdmin)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(mockPrisma.space.create).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 when the school already has a space with this name', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ id: 'space-existing' });
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Mathematics' }, schoolAdmin)).rejects.toThrow(
+        new ConflictException("A space named 'Mathematics' already exists in this school"),
+      );
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+        where: { deletedAt: null, schoolId: 'school-1', name: 'Mathematics' },
+        select: { id: true },
+      });
+      expect(mockPrisma.space.create).not.toHaveBeenCalled();
+    });
+
+    it('maps the unique index violation (P2002) of a simultaneous request to the same 409', async () => {
+      mockPrisma.space.create.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }),
+      );
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Mathematics' }, schoolAdmin)).rejects.toThrow(
+        new ConflictException("A space named 'Mathematics' already exists in this school"),
+      );
+    });
+
+    it('rethrows other database errors unchanged', async () => {
+      const failure = new Error('connection lost');
+      mockPrisma.space.create.mockRejectedValueOnce(failure);
+      await expect(service.createSpace({ schoolId: 'school-1', name: 'Mathematics' }, schoolAdmin)).rejects.toBe(failure);
+    });
+  });
+
+  describe('updateSpace (#97)', () => {
+    const stored = {
+      id: 'space-1',
+      schoolId: 'school-1',
+      name: 'Mathematics',
+      description: 'Algebra and analysis',
+      language: 'en',
+      privacy: 'public',
+      createdAt: new Date('2026-11-01T00:00:00Z'),
+      updatedAt: new Date('2026-11-01T00:00:00Z'),
+    };
+    const updater: AuthenticatedUser = {
+      ...schoolAdmin,
+      permissions: ['spaces:read', 'spaces:update'],
+      assignments: [{ ...schoolAdmin.assignments[0], permissions: ['spaces:read', 'spaces:update'] }],
+    };
+    const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
+
+    beforeEach(() => {
+      // findFirst serves both the lookup by id and the name-conflict check (the only call filtering on `name`).
+      mockPrisma.space.findFirst.mockImplementation(async ({ where }: any) =>
+        where.name ? null : stored,
+      );
+      mockPrisma.space.update.mockImplementation(async ({ data }: any) => ({ ...stored, ...data }));
+    });
+
+    it('updates the given fields only and returns the new values', async () => {
+      const space = await service.updateSpace('space-1', { name: 'Maths', language: 'fr' }, updater, context);
+
+      expect(mockPrisma.space.update).toHaveBeenCalledWith({
+        where: { id: 'space-1' },
+        data: { name: 'Maths', language: 'fr' },
+      });
+      expect(space).toMatchObject({
+        id: 'space-1',
+        schoolId: 'school-1',
+        name: 'Maths',
+        description: 'Algebra and analysis',
+        language: 'fr',
+        privacy: 'public',
+      });
+    });
+
+    it('records space_updated with the previous and new value of each changed field', async () => {
+      await service.updateSpace('space-1', { name: 'Maths', privacy: 'private', language: 'en' }, updater, context);
+
+      expect(mockAudit.record).toHaveBeenCalledTimes(1);
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        {
+          category: 'documents',
+          action: 'space_updated',
+          actor: { userId: updater.id, role: 'school_admin', schoolId: 'school-1' },
+          entity: { type: 'space', id: 'space-1' },
+          details: {
+            schoolId: 'school-1',
+            changes: {
+              name: { from: 'Mathematics', to: 'Maths' },
+              privacy: { from: 'public', to: 'private' },
+            },
+          },
+          context,
+        },
+        expect.anything(),
+      );
+    });
+
+    it('rejects creating a space in a deactivated school with 400', async () => {
+      mockPrisma.school.findUnique.mockResolvedValueOnce({ id: 'school-off', status: 'deactivated' });
+      await expect(service.createSpace({ schoolId: 'school-off', name: 'Maths' }, platformAdmin)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('rejects updating a space of a deactivated school with 400', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, school: { status: 'deactivated' } });
+      await expect(service.updateSpace('space-1', { name: 'Maths' }, platformAdmin)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+    });
+
+    it.each([null, ''])('clears the description with %j', async (description) => {
+      const space = await service.updateSpace('space-1', { description }, updater);
+      expect(mockPrisma.space.update).toHaveBeenCalledWith({ where: { id: 'space-1' }, data: { description: null } });
+      expect(space.description).toBe('');
+    });
+
+    it('writes nothing and records nothing when no value changes', async () => {
+      const space = await service.updateSpace('space-1', { name: 'Mathematics', privacy: 'public' }, updater);
+
+      expect(space.name).toBe('Mathematics');
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty body with 400', async () => {
+      await expect(service.updateSpace('space-1', {}, updater)).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 for an unknown space', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
+      await expect(service.updateSpace('space-404', { name: 'Maths' }, platformAdmin)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('lets a platform admin update a space of any school', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
+      await service.updateSpace('space-1', { name: 'Maths' }, platformAdmin);
+      expect(mockPrisma.space.update).toHaveBeenCalled();
+    });
+
+    it('lets a holder of documents:manage update a space of their school', async () => {
+      const manager: AuthenticatedUser = {
+        ...staffUser,
+        permissions: ['documents:manage'],
+        assignments: [{ ...staffUser.assignments[0], permissions: ['documents:manage'] }],
+      };
+      await service.updateSpace('space-1', { name: 'Maths' }, manager);
+      expect(mockPrisma.space.update).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a space of another school', updater, 'school-2'],
+      ['a staff member without space rights', staffUser, 'school-1'],
+      ['a student', studentUser, 'school-1'],
+      ['a holder of spaces:create only', schoolAdmin, 'school-1'],
+    ])('rejects %s with 403', async (_label, actor, schoolId) => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, schoolId });
+      await expect(service.updateSpace('space-1', { name: 'Maths' }, actor)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 when another space of the school already has the new name', async () => {
+      // First call: the lookup of the space; second call: the name-conflict check.
+      mockPrisma.space.findFirst.mockResolvedValueOnce(stored).mockResolvedValueOnce({ id: 'space-2' });
+      await expect(service.updateSpace('space-1', { name: 'Physics' }, updater)).rejects.toThrow(
+        new ConflictException("A space named 'Physics' already exists in this school"),
+      );
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+        where: { deletedAt: null, schoolId: 'school-1', name: 'Physics', id: { not: 'space-1' } },
+        select: { id: true },
+      });
+      expect(mockPrisma.space.update).not.toHaveBeenCalled();
+    });
+
+    it('does not look for a name conflict when the name is unchanged', async () => {
+      await service.updateSpace('space-1', { privacy: 'restricted' }, updater);
+      for (const [args] of mockPrisma.space.findFirst.mock.calls) expect(args.where).not.toHaveProperty('name');
+    });
+
+    it('maps the unique index violation (P2002) to the same 409 and records nothing', async () => {
+      mockPrisma.space.update.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }),
+      );
+      await expect(service.updateSpace('space-1', { name: 'Physics' }, updater)).rejects.toThrow(
+        new ConflictException("A space named 'Physics' already exists in this school"),
+      );
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleted spaces are excluded from every query (#98)', () => {
+    const activeSpace = { deletedAt: null };
+    const activeDocument = { deletedAt: null, space: activeSpace };
+    const file = { buffer: Buffer.from('x'), originalname: 'a.pdf', mimetype: 'application/pdf', size: 1 } as UploadedFile;
+
+    it('lists only active spaces', async () => {
+      mockPrisma.space.count.mockResolvedValueOnce(0);
+      mockPrisma.space.findMany.mockResolvedValueOnce([]);
+      await service.findAllSpaces(platformAdmin);
+      expect(mockPrisma.space.findMany.mock.calls[0][0].where).toMatchObject(activeSpace);
+      expect(mockPrisma.space.count.mock.calls[0][0].where).toMatchObject(activeSpace);
+    });
+
+    it('lists only documents of active spaces, also when scoped to a school', async () => {
+      mockPrisma.document.count.mockResolvedValue(0);
+      mockPrisma.document.findMany.mockResolvedValue([]);
+      await service.findAllDocuments(platformAdmin);
+      expect(mockPrisma.document.findMany.mock.calls[0][0].where).toEqual({ AND: [activeDocument] });
+      await service.findAllDocuments(schoolAdmin);
+      expect(mockPrisma.document.findMany.mock.calls[1][0].where.AND).toContainEqual({
+        space: { deletedAt: null, schoolId: { in: ['school-1'] } },
+      });
+    });
+
+    it('returns 404 for a deleted space on get, and looks it up with the filter', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
+      await expect(service.findSpaceById('space-1', platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith({
+        where: { AND: [{ id: 'space-1' }, { deletedAt: null }] },
+      });
+    });
+
+    it('returns 404 for a deleted space on update', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
+      await expect(service.updateSpace('space-1', { name: 'X' }, platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'space-1', deletedAt: null } }),
+      );
+    });
+
+    it.each([
+      ['createDocument', () => service.createDocument({ spaceId: 'space-1', title: 'T' } as any, platformAdmin)],
+      ['validateUploadedFile', () => service.validateUploadedFile('space-1', file, platformAdmin)],
+      ['uploadPdf', () => service.uploadPdf('space-1', file, {} as any, platformAdmin)],
+      ['uploadImage', () => service.uploadImage('space-1', file, {} as any, platformAdmin)],
+    ])('%s returns 404 for a deleted space', async (_name, call) => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
+      await expect(call()).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.space.findFirst.mock.calls[0][0].where).toEqual({ id: 'space-1', deletedAt: null });
+    });
+
+    it.each([
+      ['findDocumentById', () => service.findDocumentById('doc-1', platformAdmin)],
+      ['updateDocument', () => service.updateDocument('doc-1', { title: 'T' }, platformAdmin)],
+      ['deleteDocument', () => service.deleteDocument('doc-1', platformAdmin)],
+      ['listDocumentVersions', () => service.listDocumentVersions('doc-1', platformAdmin)],
+      ['replaceDocumentVersion', () => service.replaceDocumentVersion('doc-1', file, platformAdmin)],
+      ['getDocumentVersionStream', () => service.getDocumentVersionStream({ documentId: 'doc-1', actor: platformAdmin })],
+    ])('%s returns 404 for a document of a deleted space', async (_name, call) => {
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
+      await expect(call()).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.document.findFirst.mock.calls[0][0].where).toEqual({ id: 'doc-1', ...activeDocument });
+    });
+  });
+
+  describe('deleteSpace (#98)', () => {
+    const stored = { id: 'space-1', schoolId: 'school-1', name: 'Mathematics' };
+    const deleter: AuthenticatedUser = {
+      ...schoolAdmin,
+      permissions: ['spaces:read', 'spaces:delete'],
+      assignments: [{ ...schoolAdmin.assignments[0], permissions: ['spaces:read', 'spaces:delete'] }],
+    };
+    const context = { ip: '10.0.0.1', deviceId: null, userAgent: null };
+
+    beforeEach(() => {
+      mockPrisma.space.findFirst.mockResolvedValue(stored);
+      mockPrisma.space.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.document.count.mockResolvedValue(3);
+    });
+
+    it('looks the space up with the active filter and soft-deletes it, renaming the row', async () => {
+      await service.deleteSpace('space-1', deleter, context);
+
+      expect(mockPrisma.space.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'space-1', deletedAt: null } }),
+      );
+      const call = mockPrisma.space.updateMany.mock.calls[0][0];
+      expect(call.where).toEqual({ id: 'space-1', deletedAt: null });
+      expect(call.data.deletedAt).toBeInstanceOf(Date);
+      expect(call.data.name).toBe(`Mathematics [deleted ${call.data.deletedAt.toISOString()}]`);
+    });
+
+    it('never modifies the documents of the space', async () => {
+      await service.deleteSpace('space-1', deleter, context);
+      expect(mockPrisma.document.update).not.toHaveBeenCalled();
+      expect(mockPrisma.document.count).toHaveBeenCalledWith({ where: { spaceId: 'space-1', deletedAt: null } });
+    });
+
+    it('keeps the renamed value inside the column size for a very long name', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, name: 'é'.repeat(191) });
+      await service.deleteSpace('space-1', deleter);
+      const { name } = mockPrisma.space.updateMany.mock.calls[0][0].data;
+      expect(Array.from(name).length).toBeLessThanOrEqual(191);
+      expect(name).toMatch(/ \[deleted .+\]$/);
+    });
+
+    it('records space_deleted with the original name and the number of hidden documents', async () => {
+      await service.deleteSpace('space-1', deleter, context);
+
+      expect(mockAudit.record).toHaveBeenCalledTimes(1);
+      expect(mockAudit.record).toHaveBeenCalledWith(
+        {
+          category: 'documents',
+          action: 'space_deleted',
+          actor: { userId: deleter.id, role: 'school_admin', schoolId: 'school-1' },
+          entity: { type: 'space', id: 'space-1' },
+          details: { schoolId: 'school-1', name: 'Mathematics', documentsCount: 3 },
+          context,
+        },
+        expect.anything(),
+      );
+    });
+
+    it('rejects deleting a space of a deactivated school with 400', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, school: { status: 'deactivated' } });
+      await expect(service.deleteSpace('space-1', platformAdmin)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 for an unknown or already deleted space', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
+      await expect(service.deleteSpace('space-404', platformAdmin)).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 and records nothing when a simultaneous request deleted the space first', async () => {
+      mockPrisma.space.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.deleteSpace('space-1', deleter)).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockAudit.record).not.toHaveBeenCalled();
+    });
+
+    it('lets a platform admin delete a space of any school', async () => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, schoolId: 'school-9' });
+      await service.deleteSpace('space-1', platformAdmin);
+      expect(mockPrisma.space.updateMany).toHaveBeenCalled();
+    });
+
+    it('lets a holder of documents:manage delete a space of their school', async () => {
+      const manager: AuthenticatedUser = {
+        ...staffUser,
+        permissions: ['documents:manage'],
+        assignments: [{ ...staffUser.assignments[0], permissions: ['documents:manage'] }],
+      };
+      await service.deleteSpace('space-1', manager);
+      expect(mockPrisma.space.updateMany).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a space of another school', deleter, 'school-2'],
+      ['a staff member without space rights', staffUser, 'school-1'],
+      ['a student', studentUser, 'school-1'],
+      ['a holder of spaces:update only', { ...deleter, permissions: ['spaces:update'], assignments: [{ ...deleter.assignments[0], permissions: ['spaces:update'] }] }, 'school-1'],
+    ])('rejects %s with 403', async (_label, actor, schoolId) => {
+      mockPrisma.space.findFirst.mockResolvedValueOnce({ ...stored, schoolId });
+      await expect(service.deleteSpace('space-1', actor as AuthenticatedUser)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.space.updateMany).not.toHaveBeenCalled();
+      expect(mockAudit.record).not.toHaveBeenCalled();
     });
   });
 
@@ -485,7 +961,7 @@ describe('DocumentsService', () => {
     };
 
     it('throws NotFoundException if document does not exist', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.updateDocument('doc-missing', { title: 'New Title' }, schoolAdmin),
@@ -493,10 +969,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws NotFoundException if document is soft-deleted', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
-        ...existingDoc,
-        deletedAt: new Date(),
-      });
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null); // a deleted document is excluded by the ACTIVE_DOCUMENT filter
 
       await expect(
         service.updateDocument('doc-1', { title: 'New Title' }, schoolAdmin),
@@ -504,7 +977,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks documents:update permission in space school', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
+      mockPrisma.document.findFirst.mockResolvedValueOnce({
         ...existingDoc,
         space: { schoolId: 'school-2' },
       });
@@ -515,7 +988,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if title is empty string or only whitespace', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       await expect(
         service.updateDocument('doc-1', { title: '   ' }, schoolAdmin),
@@ -523,7 +996,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if date format is invalid', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       await expect(
         service.updateDocument('doc-1', { date: 'invalid-date-string' }, schoolAdmin),
@@ -531,7 +1004,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully updates title, author, tags, and date, writing hash-chained audit event', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       const newDate = new Date('2026-10-15T09:00:00.000Z');
       const updatedDoc = {
@@ -599,7 +1072,7 @@ describe('DocumentsService', () => {
     });
 
     it('platform admin can update document metadata on any school space', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
+      mockPrisma.document.findFirst.mockResolvedValueOnce({
         ...existingDoc,
         space: { schoolId: 'school-arbitrary-99' },
       });
@@ -621,7 +1094,7 @@ describe('DocumentsService', () => {
     });
 
     it('does not write audit event if no values actually changed', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.document.update.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(null);
 
@@ -647,7 +1120,7 @@ describe('DocumentsService', () => {
     } as UploadedFile;
 
     it('throws NotFoundException if target space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.uploadPdf('space-missing', validPdfFile, {}, schoolAdmin),
@@ -655,7 +1128,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks documents:create permission in space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-2',
         schoolId: 'school-2', // Out of scope for schoolAdmin (school-1)
       });
@@ -666,7 +1139,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if file is missing or empty buffer', async () => {
-      mockPrisma.space.findUnique.mockResolvedValue({
+      mockPrisma.space.findFirst.mockResolvedValue({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -681,7 +1154,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if validated file is an image and directs to image endpoint', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -705,7 +1178,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads an enterprise Word document (.docx) and queues office_extraction', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -764,7 +1237,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads an enterprise PowerPoint (.pptx) and queues slide_extraction', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -798,7 +1271,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads an enterprise Excel (.xlsx) and queues tabular_extraction', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -832,7 +1305,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads a Markdown (.md) or Text document and queues text_chunking', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -866,7 +1339,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully uploads a native PDF, stores file, creates version with status pending, and enqueues job', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -946,7 +1419,7 @@ describe('DocumentsService', () => {
     });
 
     it('uploads a scanned PDF and sanitizes title from originalname when title not provided', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -985,7 +1458,7 @@ describe('DocumentsService', () => {
     });
 
     it('cleans up written storage file if database transaction fails', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1019,7 +1492,7 @@ describe('DocumentsService', () => {
     } as UploadedFile;
 
     it('throws NotFoundException if space does not exist', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.space.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.uploadImage('space-unknown', validJpegFile, {}, schoolAdmin),
@@ -1027,7 +1500,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks rights to space school', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-2',
         schoolId: 'school-2',
       });
@@ -1038,7 +1511,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if file is missing or empty buffer', async () => {
-      mockPrisma.space.findUnique.mockResolvedValue({
+      mockPrisma.space.findFirst.mockResolvedValue({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1053,7 +1526,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if file is not an image (e.g. PDF)', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1077,7 +1550,7 @@ describe('DocumentsService', () => {
     });
 
     it('uploads a JPEG image and queues it for OCR', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1150,7 +1623,7 @@ describe('DocumentsService', () => {
     });
 
     it('uploads a PNG image and queues it for OCR', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1197,7 +1670,7 @@ describe('DocumentsService', () => {
     });
 
     it('converts HEIC to JPEG for OCR and saves the converted format', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1249,7 +1722,7 @@ describe('DocumentsService', () => {
     });
 
     it('cleans up written storage file if database transaction fails', async () => {
-      mockPrisma.space.findUnique.mockResolvedValueOnce({
+      mockPrisma.space.findFirst.mockResolvedValueOnce({
         id: 'space-1',
         schoolId: 'school-1',
       });
@@ -1304,7 +1777,7 @@ describe('DocumentsService', () => {
     };
 
     it('throws NotFoundException if document does not exist', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.getDocumentVersionStream({
@@ -1315,10 +1788,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws NotFoundException if document is soft-deleted', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
-        ...mockDocument,
-        deletedAt: new Date(),
-      });
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null); // a deleted document is excluded by the ACTIVE_DOCUMENT filter
 
       await expect(
         service.getDocumentVersionStream({
@@ -1329,7 +1799,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws NotFoundException if requested version is not found', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(null);
 
       await expect(
@@ -1342,7 +1812,7 @@ describe('DocumentsService', () => {
     });
 
     it('platform admin can download any version of any document without restriction', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
       const result = await service.getDocumentVersionStream({
@@ -1363,7 +1833,7 @@ describe('DocumentsService', () => {
     });
 
     it('school admin can download any version (current or historical) of documents in their school', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       // Historical version 1 requested
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
@@ -1378,7 +1848,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user belongs to a different school', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion2);
 
       await expect(
@@ -1391,7 +1861,7 @@ describe('DocumentsService', () => {
 
     /** The student asks for the current version (v2), not cited in their answers. */
     const currentVersionNotCited = () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst
         .mockResolvedValueOnce(mockVersion2) // target version
         .mockResolvedValueOnce(mockVersion2); // latest version
@@ -1419,8 +1889,8 @@ describe('DocumentsService', () => {
       expect(mockPrisma.documentVersion.findFirst.mock.calls[1][0].where).toEqual({ documentId: 'doc-123', status: 'available' });
       expect(result.headers['Content-Disposition']).toContain('attachment');
       // The rules are checked in the database, on this document only, and never for a deleted one.
-      const where = mockPrisma.document.findFirst.mock.calls[0][0].where;
-      expect(where.AND[0]).toEqual({ id: 'doc-123', deletedAt: null });
+      const where = mockPrisma.document.findFirst.mock.calls[1][0].where;
+      expect(where.AND[0]).toEqual({ id: 'doc-123', deletedAt: null, space: { deletedAt: null } });
       expect(where.AND[1].OR).toContainEqual(expect.objectContaining({ access: expect.anything() }));
     });
 
@@ -1429,17 +1899,17 @@ describe('DocumentsService', () => {
         ...staffUser,
         assignments: [{ ...staffUser.assignments[0], permissions: ['documents:manage'] }],
       };
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
       const result = await service.getDocumentVersionStream({ documentId: 'doc-123', versionRef: '1', actor: manager });
 
       expect(result.statusCode).toBe(200);
-      expect(mockPrisma.document.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.document.findFirst).toHaveBeenCalledTimes(1);
     });
 
     it('a manager downloading "latest" gets the newest version, whatever its status (#112)', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion2);
       await service.getDocumentVersionStream({ documentId: 'doc-123', actor: schoolAdmin });
       expect(mockPrisma.documentVersion.findFirst.mock.calls[0][0].where).toEqual({ documentId: 'doc-123' });
@@ -1459,7 +1929,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if non-manager tries to download historical version not cited in their answers', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       // Requesting historical version 1:
       mockPrisma.documentVersion.findFirst
         .mockResolvedValueOnce(mockVersion1) // target version 1
@@ -1480,7 +1950,7 @@ describe('DocumentsService', () => {
     });
 
     it('student can download historical version when it is cited in their conversation answer', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
       // Cited in user's own answers!
@@ -1497,7 +1967,7 @@ describe('DocumentsService', () => {
     });
 
     it('handles HTTP range request with 206 Partial Content (bytes=0-499)', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
       const result = await service.getDocumentVersionStream({
@@ -1516,7 +1986,7 @@ describe('DocumentsService', () => {
     });
 
     it('handles open-ended range request (bytes=500-)', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
       const result = await service.getDocumentVersionStream({
@@ -1535,7 +2005,7 @@ describe('DocumentsService', () => {
     });
 
     it('handles suffix range request (bytes=-200)', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
       const result = await service.getDocumentVersionStream({
@@ -1554,7 +2024,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws RangeNotSatisfiableException when range is beyond file bounds', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
       await expect(
@@ -1567,7 +2037,7 @@ describe('DocumentsService', () => {
     });
 
     it('sets inline Content-Disposition when disposition is inline for viewer streaming', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(mockDocument);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(mockDocument);
       mockPrisma.documentVersion.findFirst.mockResolvedValueOnce(mockVersion1);
 
       const result = await service.getDocumentVersionStream({
@@ -1601,7 +2071,7 @@ describe('DocumentsService', () => {
     } as UploadedFile;
 
     it('throws NotFoundException if target document does not exist', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.replaceDocumentVersion('doc-missing', mockPdfFile, schoolAdmin),
@@ -1609,10 +2079,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws NotFoundException if target document is soft-deleted', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
-        ...existingDoc,
-        deletedAt: new Date(),
-      });
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null); // a deleted document is excluded by the ACTIVE_DOCUMENT filter
 
       await expect(
         service.replaceDocumentVersion('doc-1', mockPdfFile, schoolAdmin),
@@ -1620,7 +2087,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks documents:update permission in space school', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
+      mockPrisma.document.findFirst.mockResolvedValueOnce({
         ...existingDoc,
         space: { schoolId: 'school-2' },
       });
@@ -1631,7 +2098,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws BadRequestException if replacement file is missing or empty buffer', async () => {
-      mockPrisma.document.findUnique.mockResolvedValue(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValue(existingDoc);
 
       await expect(
         service.replaceDocumentVersion('doc-1', null as unknown as UploadedFile, schoolAdmin),
@@ -1643,7 +2110,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully replaces document with incremented version (v1 -> v2) for PDF, saves to storage, and queues ingestion job', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       mockFileValidationService.validateFile.mockResolvedValueOnce({
         checksum: 'v2-pdf-checksum-hex',
@@ -1733,7 +2200,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully replaces document with Word document (.docx) and queues office_extraction', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       const docxFile = {
         buffer: Buffer.from('PK\x03\x04...word/document.xml...'),
@@ -1776,7 +2243,7 @@ describe('DocumentsService', () => {
     });
 
     it('successfully replaces document with HEIC photo, converts to JPEG, and queues OCR', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       const heicFile = {
         buffer: Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]),
@@ -1818,7 +2285,7 @@ describe('DocumentsService', () => {
     });
 
     it('cleans up written storage file if database transaction fails', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       mockFileValidationService.validateFile.mockResolvedValueOnce({
         checksum: 'v2-pdf-checksum',
@@ -1884,7 +2351,7 @@ describe('DocumentsService', () => {
     ];
 
     it('lists versions ordered newest first with size, uploader, checksum, status, and isCurrent', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.findMany.mockResolvedValueOnce(mockVersions);
 
       mockStorageService.getMetadata
@@ -1946,7 +2413,7 @@ describe('DocumentsService', () => {
     });
 
     it('returns empty array if document has no versions', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.findMany.mockResolvedValueOnce([]);
 
       const result = await service.listDocumentVersions('doc-1', schoolAdmin);
@@ -1955,7 +2422,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws NotFoundException if document does not exist', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
 
       await expect(service.listDocumentVersions('nonexistent-doc', schoolAdmin)).rejects.toThrow(
         NotFoundException,
@@ -1963,10 +2430,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws NotFoundException if document is soft-deleted', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
-        ...existingDoc,
-        deletedAt: new Date(),
-      });
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null); // a deleted document is excluded by the ACTIVE_DOCUMENT filter
 
       await expect(service.listDocumentVersions('doc-1', schoolAdmin)).rejects.toThrow(
         NotFoundException,
@@ -1974,7 +2438,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if mobile student user tries to list versions', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       await expect(service.listDocumentVersions('doc-1', studentUser)).rejects.toThrow(
         ForbiddenException,
@@ -1982,7 +2446,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks documents:update in the space school', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       await expect(service.listDocumentVersions('doc-1', otherSchoolUser)).rejects.toThrow(
         ForbiddenException,
@@ -1990,7 +2454,7 @@ describe('DocumentsService', () => {
     });
 
     it('allows platform admin to list versions for any document', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.findMany.mockResolvedValueOnce([mockVersions[0]]);
       mockStorageService.getMetadata.mockResolvedValueOnce({ size: 5000 });
       mockPrisma.auditEvent.findMany.mockResolvedValueOnce([]);
@@ -2005,7 +2469,7 @@ describe('DocumentsService', () => {
     });
 
     it('handles missing storage metadata gracefully by defaulting size to 0', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.findMany.mockResolvedValueOnce([mockVersions[0]]);
       mockStorageService.getMetadata.mockRejectedValueOnce(new Error('ENOENT file not found'));
       mockPrisma.auditEvent.findMany.mockResolvedValueOnce([]);
@@ -2017,7 +2481,7 @@ describe('DocumentsService', () => {
     });
 
     it('handles versions without audit event uploader gracefully by setting uploader to null', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.findMany.mockResolvedValueOnce([mockVersions[0]]);
       mockStorageService.getMetadata.mockResolvedValueOnce({ size: 100 });
       mockPrisma.auditEvent.findMany.mockResolvedValueOnce([]);
@@ -2044,7 +2508,7 @@ describe('DocumentsService', () => {
 
     it('a platform admin gets every live document, with its current version', async () => {
       await service.findAllDocuments(platformAdmin);
-      expect(where()).toEqual({ AND: [{ deletedAt: null }] });
+      expect(where()).toEqual({ AND: [{ deletedAt: null, space: { deletedAt: null } }] });
       expect(mockPrisma.document.findMany.mock.calls[0][0]).toMatchObject({
         include: { currentVersion: true },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -2057,7 +2521,7 @@ describe('DocumentsService', () => {
       expect(visible.OR).toEqual([
         expect.objectContaining({ access: expect.anything(), versions: { some: { status: 'available' } } }),
       ]);
-      expect(where().AND).toContainEqual({ space: { schoolId: { in: ['school-1'] } } });
+      expect(where().AND).toContainEqual({ space: { deletedAt: null, schoolId: { in: ['school-1'] } } });
     });
 
     it('a document manager also gets every document of their school, any status', async () => {
@@ -2075,7 +2539,7 @@ describe('DocumentsService', () => {
         type: 'pdf',
       });
       expect(where().AND).toEqual([
-        { deletedAt: null },
+        { deletedAt: null, space: { deletedAt: null } },
         { spaceId: 'space-9' },
         { title: { contains: 'algebra' } },
         expect.objectContaining({ OR: expect.arrayContaining([{ tags: 'math' }]) }),
@@ -2150,7 +2614,7 @@ describe('DocumentsService', () => {
     const now = new Date();
 
     it('returns the current version status, its reason and its processing jobs, for managers', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: 'v2', space: { schoolId: 'school-1' } });
+      mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: 'v2', space: { schoolId: 'school-1' } });
       mockPrisma.documentVersion.findUnique = vi.fn().mockResolvedValueOnce({
         id: 'v2', versionNo: 2, status: 'error', statusError: 'Indexing timed out', statusChangedAt: now,
       });
@@ -2168,12 +2632,12 @@ describe('DocumentsService', () => {
     });
 
     it('answers null for a document registered without a file', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: null, space: { schoolId: 'school-1' } });
+      mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: null, space: { schoolId: 'school-1' } });
       expect(await service.getProcessingStatus('doc-1', platformAdmin)).toMatchObject({ currentVersion: null, steps: [] });
     });
 
     it('is refused to readers who do not manage documents', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: 'v1', space: { schoolId: 'school-1' } });
+      mockPrisma.document.findFirst.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, currentVersionId: 'v1', space: { schoolId: 'school-1' } });
       await expect(service.getProcessingStatus('doc-1', studentUser)).rejects.toThrow(ForbiddenException);
     });
   });
@@ -2192,7 +2656,7 @@ describe('DocumentsService', () => {
     };
 
     it('successfully soft-deletes a document and records an immutable audit event', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.count.mockResolvedValueOnce(3);
       mockPrisma.document.update.mockResolvedValueOnce({
         ...existingDoc,
@@ -2228,7 +2692,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws NotFoundException if document does not exist', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null);
 
       await expect(service.deleteDocument('nonexistent-doc', schoolAdmin)).rejects.toThrow(
         NotFoundException,
@@ -2236,10 +2700,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws NotFoundException if document is already soft-deleted', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
-        ...existingDoc,
-        deletedAt: new Date(),
-      });
+      mockPrisma.document.findFirst.mockResolvedValueOnce(null); // a deleted document is excluded by the ACTIVE_DOCUMENT filter
 
       await expect(service.deleteDocument('doc-1', schoolAdmin)).rejects.toThrow(
         NotFoundException,
@@ -2247,7 +2708,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if mobile student user attempts deletion', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       await expect(service.deleteDocument('doc-1', studentUser)).rejects.toThrow(
         ForbiddenException,
@@ -2255,7 +2716,7 @@ describe('DocumentsService', () => {
     });
 
     it('throws ForbiddenException if user lacks documents:delete in the space school', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       await expect(service.deleteDocument('doc-1', otherSchoolUser)).rejects.toThrow(
         ForbiddenException,
@@ -2263,7 +2724,7 @@ describe('DocumentsService', () => {
     });
 
     it('allows platform admin to delete document across any school', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.count.mockResolvedValueOnce(1);
       mockPrisma.document.update.mockResolvedValueOnce({
         ...existingDoc,
@@ -2285,7 +2746,10 @@ describe('DocumentsService', () => {
 
       await service.findAllDocuments(schoolAdmin);
 
-      expect(mockPrisma.document.findMany.mock.calls[0][0].where.AND).toContainEqual({ deletedAt: null });
+      expect(mockPrisma.document.findMany.mock.calls[0][0].where.AND).toContainEqual({
+        deletedAt: null,
+        space: { deletedAt: null },
+      });
     });
   });
 
@@ -2386,7 +2850,7 @@ describe('DocumentsService', () => {
     });
 
     it('allows staff with documents:manage to delete a document in their school', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
       mockPrisma.documentVersion.count.mockResolvedValueOnce(1);
       mockPrisma.document.update.mockResolvedValueOnce({
         ...existingDoc,
@@ -2398,7 +2862,7 @@ describe('DocumentsService', () => {
     });
 
     it('denies staff with documents:manage deleting a document in another school (403)', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce({
+      mockPrisma.document.findFirst.mockResolvedValueOnce({
         ...existingDoc,
         space: { schoolId: 'school-2' },
       });
@@ -2409,7 +2873,7 @@ describe('DocumentsService', () => {
     });
 
     it('denies staff without documents:manage deleting a document in their school (403)', async () => {
-      mockPrisma.document.findUnique.mockResolvedValueOnce(existingDoc);
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
 
       await expect(
         service.deleteDocument('doc-1', staffWithoutDocManage),

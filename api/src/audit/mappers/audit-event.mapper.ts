@@ -1,16 +1,26 @@
 import type { AuditEvent } from '@prisma/client';
 import { AuditEventEntity } from '../entities/audit-event.entity.js';
 
+/** Display names resolved by AuditQueryService (audit_events has no foreign keys). */
+export interface AuditEventNames {
+  actorName?: string | null;
+  actorEmail?: string | null;
+  schoolName?: string | null;
+}
+
 export class AuditEventMapper {
-  static toEntity(raw: AuditEvent): AuditEventEntity {
+  static toEntity(raw: AuditEvent, names: AuditEventNames = {}): AuditEventEntity {
     return new AuditEventEntity({
       id: raw.id,
       seq: raw.seq.toString(),
       category: raw.category,
       action: raw.action,
       actorId: raw.actorId,
+      actorName: names.actorName ?? null,
+      actorEmail: names.actorEmail ?? null,
       actorRole: raw.actorRole,
       schoolId: raw.schoolId,
+      schoolName: names.schoolName ?? null,
       entityType: raw.entityType,
       entityId: raw.entityId,
       ip: raw.ip,

@@ -151,58 +151,95 @@
   <div class="col-md-12 col-xl-7">
     @if (user()) {
       <app-card cardTitle="School Assignments &amp; Permissions">
-        @if (canTouchCurrentUser() && session.hasPermission('users:assign_role') && assignableRoles().length > 0) {
-          <div class="border rounded p-3 mb-4 bg-light" id="role-assignment-box">
+        <ng-template #headerOptionsTemplate>
+          @if (!assignmentMode() && canManageAssignments() && availableSchools().length > 0) {
+            <button
+              type="button"
+              id="btn-add-assignment"
+              class="btn btn-sm btn-primary d-inline-flex align-items-center gap-1"
+              (click)="openCreateAssignmentForm()"
+            >
+              <i class="ti ti-plus f-14"></i>
+              <span>Add Assignment</span>
+            </button>
+          }
+        </ng-template>
+
+        @if (assignmentMode() && canManageAssignments()) {
+          <form
+            [formGroup]="assignmentForm"
+            (ngSubmit)="saveAssignment()"
+            class="border rounded p-3 mb-4 bg-light"
+            id="role-assignment-box"
+          >
             <div class="d-flex align-items-center justify-content-between mb-2">
-              <h6 class="mb-0">Assign Role</h6>
-              @if (!session.isPlatformAdmin() && session.activeSchoolName()) {
+              <h6 class="mb-0">{{ assignmentMode() === 'edit' ? 'Edit Assignment' : 'New Assignment' }}</h6>
+              @if (!session.isPlatformAdmin() && formSchoolName()) {
                 <span class="badge bg-light-primary border border-primary" id="fixed-assign-school">
-                  {{ session.activeSchoolName() }}
+                  {{ formSchoolName() }}
                 </span>
               }
             </div>
             <div class="row g-2 align-items-end">
               @if (session.isPlatformAdmin()) {
-                <div class="col-sm-5">
+                <div class="col-sm-4">
                   <label class="form-label text-sm mb-1" for="assign-school-select">School</label>
-                  <select
-                    id="assign-school-select"
-                    class="form-select form-select-sm"
-                    [ngModel]="selectedAssignSchoolId()"
-                    (ngModelChange)="selectedAssignSchoolId.set($event)"
-                  >
-                    @for (s of schools(); track s.id) {
+                  <select id="assign-school-select" class="form-select form-select-sm" formControlName="schoolId">
+                    <option value="" disabled>Select a school</option>
+                    @for (s of schoolOptions(); track s.id) {
                       <option [value]="s.id">{{ s.name }}</option>
                     }
                   </select>
                 </div>
               }
-              <div [ngClass]="session.isPlatformAdmin() ? 'col-sm-4' : 'col-sm-8'">
+              <div [ngClass]="session.isPlatformAdmin() ? 'col-sm-4' : 'col-sm-6'">
+                <label class="form-label text-sm mb-1" for="assign-group-select">Group (optional)</label>
+                <select
+                  id="assign-group-select"
+                  class="form-select form-select-sm"
+                  formControlName="groupId"
+                >
+                  <option value="">No group</option>
+                  @for (g of groups(); track g.id) {
+                    <option [value]="g.id">{{ g.name }}</option>
+                  }
+                </select>
+              </div>
+              <div [ngClass]="session.isPlatformAdmin() ? 'col-sm-4' : 'col-sm-6'">
                 <label class="form-label text-sm mb-1" for="assign-role-select">Role</label>
                 <select
                   id="assign-role-select"
                   class="form-select form-select-sm"
-                  [ngModel]="selectedAssignRole()"
-                  (ngModelChange)="selectedAssignRole.set($event)"
+                  formControlName="role"
+                  (change)="onAssignmentRoleChange()"
                 >
+                  <option value="" disabled>{{ isLookupLoading() ? 'Loading roles...' : 'Select a role' }}</option>
                   @for (r of assignableRoles(); track r.name) {
                     <option [value]="r.name">{{ r.name }}</option>
                   }
                 </select>
               </div>
-              <div class="col-sm-3 d-grid">
-                <button
-                  type="button"
-                  id="btn-assign-role"
-                  class="btn btn-sm btn-primary"
-                  [disabled]="isAssigningRole() || !selectedAssignRole()"
-                  (click)="assignRoleInSchool()"
-                >
-                  {{ isAssigningRole() ? 'Saving...' : 'Assign' }}
-                </button>
-              </div>
             </div>
-          </div>
+            @if (groupDisabled) {
+              <small class="text-muted d-block mt-1">Platform roles cannot belong to a group.</small>
+            }
+            @if (assignmentForm.controls.schoolId.value && !isLookupLoading() && assignableRoles().length === 0) {
+              <small class="text-danger d-block mt-1">You cannot assign any role in this school.</small>
+            }
+            <div class="d-flex align-items-center justify-content-end gap-2 mt-3">
+              <button type="button" class="btn btn-sm btn-light" (click)="closeAssignmentForm()" [disabled]="isAssigningRole()">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                id="btn-assign-role"
+                class="btn btn-sm btn-primary"
+                [disabled]="assignmentForm.invalid || isAssigningRole() || isLookupLoading() || !hasAssignmentChanges()"
+              >
+                {{ isAssigningRole() ? 'Saving...' : assignmentMode() === 'edit' ? 'Save Changes' : 'Assign' }}
+              </button>
+            </div>
+          </form>
         }
 
         @if (visibleAssignments().length === 0) {
@@ -220,10 +257,13 @@
                   <th>ROLE</th>
                   <th>GROUP</th>
                   <th class="text-end">DOCUMENT MANAGEMENT</th>
+                  @if (canManageAssignments()) {
+                    <th class="text-end">ACTION</th>
+                  }
                 </tr>
               </thead>
               <tbody>
-                @for (assignment of visibleAssignments(); track assignment.schoolId) {
+                @for (assignment of visibleAssignments(); track assignment.id ?? assignment.schoolId) {
                   <tr>
                     @if (session.showSchoolColumn()) {
                       <td class="f-w-500 school-column">{{ getAssignmentSchoolName(assignment) }}</td>
@@ -243,7 +283,7 @@
                             role="switch"
                             [id]="'doc-mgmt-' + assignment.schoolId"
                             [checked]="hasDocumentManagement(assignment)"
-                            [disabled]="isTogglingDocMgmt() || !canTouchCurrentUser() || !session.hasPermission('users:assign_role')"
+                            [disabled]="isTogglingDocMgmt() || !canManageAssignments() || assignmentMode() !== null"
                             (change)="toggleDocumentManagement(assignment, $any($event.target).checked)"
                           />
                           <label class="form-check-label text-sm" [for]="'doc-mgmt-' + assignment.schoolId">
@@ -254,6 +294,32 @@
                         <span class="text-muted text-sm">—</span>
                       }
                     </td>
+                    @if (canManageAssignments()) {
+                      <td class="text-end">
+                        @if (assignment.id) {
+                          <button
+                            type="button"
+                            class="btn btn-sm btn-light-primary d-inline-flex align-items-center gap-1 me-1 btn-edit-assignment"
+                            [disabled]="assignmentMode() !== null"
+                            (click)="openEditAssignmentForm(assignment)"
+                            title="Edit assignment"
+                          >
+                            <i class="ti ti-edit f-14"></i>
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-1 btn-remove-assignment"
+                            [disabled]="assignmentMode() !== null"
+                            (click)="openRemoveAssignmentModal(assignment)"
+                            title="Remove assignment"
+                          >
+                            <i class="ti ti-trash f-14"></i>
+                            <span>Remove</span>
+                          </button>
+                        }
+                      </td>
+                    }
                   </tr>
                 }
               </tbody>
@@ -373,6 +439,18 @@
   message="Are you sure you want to revoke this session? The user will be immediately logged out from this device."
   [detailText]="'Session IP: ' + (selectedSessionToRevoke()?.ip || 'Unknown')"
   confirmText="Revoke Session"
+  confirmButtonClass="btn-danger"
+  [isLoading]="modalLoading()"
+  (confirmed)="handleModalConfirm()"
+  (cancelled)="closeModal()"
+/>
+
+<app-confirmation-modal
+  [isOpen]="modalType() === 'remove-assignment'"
+  title="Remove Assignment"
+  message="Are you sure you want to remove this assignment? The user loses this role in the school right away."
+  [detailText]="removeAssignmentDetail()"
+  confirmText="Remove Assignment"
   confirmButtonClass="btn-danger"
   [isLoading]="modalLoading()"
   (confirmed)="handleModalConfirm()"

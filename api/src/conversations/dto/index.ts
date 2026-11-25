@@ -1,5 +1,5 @@
 export * from './create-conversation.dto.js';
-export * from './create-message.dto.js';
+export * from './ask-question.dto.js';
 export * from './list-conversations-query.dto.js';
 export * from './list-reports-query.dto.js';
 export * from './list-saved-answers-query.dto.js';

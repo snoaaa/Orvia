@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service.js';
+import { ACTIVE_DOCUMENT } from '../utils/active-space.util.js';
 import {
   type ProcessingPipelineStep,
   determineInitialProcessingStep,
@@ -55,6 +56,16 @@ export class ProcessingQueueService {
    */
   private async processNext(job: EnqueueProcessingJobInput): Promise<void> {
     try {
+      // A space (#98) or document deleted while the job waited must not be ingested: skip the job.
+      const active = await this.prisma.document.findFirst({
+        where: { id: job.documentId, ...ACTIVE_DOCUMENT },
+        select: { id: true },
+      });
+      if (!active) {
+        this.logger.warn(`Skipped processing job ${job.jobId}: document ${job.documentId} or its space was deleted`);
+        return;
+      }
+
       const resolvedStep = job.targetStep ?? determineInitialProcessingStep(job.mimeType);
       const nextStep = `${resolvedStep}_queued`;
       // Transition processing job state to mark step received

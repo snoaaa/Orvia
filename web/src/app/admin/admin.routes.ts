@@ -5,6 +5,7 @@ import {
   portalLandingGuard,
   portalPermissionGuard
 } from './identity/guards/portal-permission.guard';
+import { apiPermissionGuard } from './documents/shared/api-permissions.util';
 import { AdminLayout } from './theme/layouts/admin-layout/admin-layout.component';
 import { PERMISSION_MENU_MAP } from './theme/layouts/admin-layout/navigation/navigation';
 import { GuestLayoutComponent } from './theme/layouts/guest-layout/guest-layout.component';
@@ -86,15 +87,36 @@ export const adminRoutes: Routes = [
       },
       {
         path: 'spaces',
-        canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['spaces'])],
-        data: {
-          sectionId: 'spaces',
-          title: 'Spaces',
-          description: 'Manage academic knowledge spaces within your school scope.'
-        },
+        // Read-only users (spaces:read) see the list without its actions; same rule as GET /documents/spaces.
+        canActivate: [apiPermissionGuard('spaces:read', 'documents:manage')],
         loadComponent: () =>
-          import('./identity/components/portal-section/portal-section.component').then(
-            (c) => c.PortalSectionComponent
+          import('./documents/spaces/space-list/space-list.component').then(
+            (c) => c.SpaceListComponent
+          )
+      },
+      {
+        path: 'spaces/new',
+        canActivate: [apiPermissionGuard('spaces:create')],
+        loadComponent: () =>
+          import('./documents/spaces/space-edit/space-edit.component').then(
+            (c) => c.SpaceEditComponent
+          )
+      },
+      {
+        path: 'spaces/:spaceId/documents',
+        // Readers open documents; managers also edit and delete them (same rules as the API).
+        canActivate: [apiPermissionGuard('documents:read', 'documents:manage')],
+        loadComponent: () =>
+          import('./documents/space-documents/space-document-list/space-document-list.component').then(
+            (c) => c.SpaceDocumentListComponent
+          )
+      },
+      {
+        path: 'spaces/:id/edit',
+        canActivate: [apiPermissionGuard('spaces:update')],
+        loadComponent: () =>
+          import('./documents/spaces/space-edit/space-edit.component').then(
+            (c) => c.SpaceEditComponent
           )
       },
       {
@@ -153,8 +175,8 @@ export const adminRoutes: Routes = [
           description: 'Inspect tamper-evident security and administrative events.'
         },
         loadComponent: () =>
-          import('./identity/components/portal-section/portal-section.component').then(
-            (c) => c.PortalSectionComponent
+          import('./identity/audit/audit-list/audit-list.component').then(
+            (c) => c.AuditListComponent
           )
       },
       {

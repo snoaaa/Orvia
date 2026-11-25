@@ -1,0 +1,326 @@
+<div class="row">
+  <div class="col-12">
+    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+      <a
+        routerLink="/admin/spaces"
+        class="btn btn-icon btn-link-secondary"
+        aria-label="Back to spaces"
+      >
+        <i class="ti ti-arrow-left f-18"></i>
+      </a>
+      <div class="min-w-0">
+        <h5 class="mb-0 text-truncate" id="space-documents-title">
+          {{ space()?.name ?? 'Documents' }}
+        </h5>
+        @if (space()?.description) {
+          <small class="text-muted d-block text-truncate">{{ space()?.description }}</small>
+        }
+      </div>
+    </div>
+
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <input
+          id="document-search"
+          type="search"
+          class="form-control form-control-sm filter-input"
+          placeholder="Search by title..."
+          aria-label="Search documents by title"
+          [maxlength]="searchMaxLength"
+          [ngModel]="searchInput()"
+          (ngModelChange)="onSearchChange($event)"
+        />
+        <div class="position-relative">
+          <input
+            id="document-tag-filter"
+            type="search"
+            class="form-control form-control-sm filter-input"
+            placeholder="Tags, e.g. math, exam"
+            aria-label="Filter by tags (comma-separated, all must match)"
+            aria-describedby="document-tag-filter-error"
+            [class.is-invalid]="tooManyTags()"
+            [ngModel]="tagInput()"
+            (ngModelChange)="onTagFilterChange($event)"
+          />
+          @if (tooManyTags()) {
+            <div class="invalid-tooltip d-block" id="document-tag-filter-error">
+              At most {{ maxTags }} tags.
+            </div>
+          }
+        </div>
+        <select
+          id="document-status-filter"
+          class="form-select form-select-sm filter-select"
+          aria-label="Filter by status"
+          [ngModel]="statusFilter()"
+          (ngModelChange)="onStatusFilterChange($event)"
+        >
+          <option value="">All statuses</option>
+          @for (option of statusOptions; track option.value) {
+            <option [value]="option.value">{{ option.label }}</option>
+          }
+        </select>
+        <select
+          id="document-type-filter"
+          class="form-select form-select-sm filter-select"
+          aria-label="Filter by type"
+          [ngModel]="typeFilter()"
+          (ngModelChange)="onTypeFilterChange($event)"
+        >
+          <option value="">All types</option>
+          @for (option of typeOptions; track option.value) {
+            <option [value]="option.value">{{ option.label }}</option>
+          }
+        </select>
+        @if (hasFilters()) {
+          <button type="button" class="btn btn-sm btn-link" (click)="clearFilters()">
+            Clear filters
+          </button>
+        }
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        @if (hasProcessing()) {
+          <span
+            class="text-muted text-sm d-inline-flex align-items-center gap-1"
+            id="document-live-status"
+          >
+            <span class="spinner-grow spinner-grow-sm text-primary" role="status"></span>
+            Processing: statuses update automatically
+          </span>
+        }
+        <button
+          id="document-refresh"
+          type="button"
+          class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-1"
+          (click)="loadDocuments()"
+        >
+          <i class="ti ti-refresh"></i>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </div>
+
+    @if (spaceError() || errorMessage()) {
+      <div
+        class="alert alert-danger d-flex align-items-center justify-content-between gap-2"
+        role="alert"
+        id="document-list-error"
+      >
+        <span>{{ spaceError() || errorMessage() }}</span>
+        <button type="button" class="btn btn-sm btn-outline-danger" (click)="retry()">Retry</button>
+      </div>
+    }
+
+    <!-- Without its space, the page cannot say whose documents it lists. -->
+    @if (!spaceError()) {
+      <div class="card tbl-card">
+        <div class="table-responsive" [class.table-updating]="isUpdating()">
+          @if (isUpdating()) {
+            <div class="table-loading-overlay">
+              <div class="table-loading-bar"></div>
+            </div>
+          }
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>TITLE</th>
+                <th class="text-nowrap type-column">TYPE</th>
+                <th class="text-nowrap version-column">VERSION</th>
+                <th class="text-nowrap status-column">STATUS</th>
+                <th class="text-nowrap date-column">UPDATED</th>
+                <th class="text-end text-nowrap pe-4 action-column">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody>
+              @if (isInitialLoading()) {
+                <tr>
+                  <td colspan="6" class="text-center py-5 text-muted">
+                    <div
+                      class="spinner-border spinner-border-sm text-primary me-2"
+                      role="status"
+                    ></div>
+                    Loading documents...
+                  </td>
+                </tr>
+              } @else if (documents().length === 0) {
+                <tr>
+                  <td colspan="6" class="text-center py-5 text-muted" id="document-list-empty">
+                    @if (hasFilters()) {
+                      <p class="mb-2">No document matches these filters.</p>
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-outline-secondary"
+                        (click)="clearFilters()"
+                      >
+                        Clear filters
+                      </button>
+                    } @else {
+                      <p class="mb-0">No document in this space yet.</p>
+                    }
+                  </td>
+                </tr>
+              } @else {
+                @for (doc of documents(); track doc.id) {
+                  <tr>
+                    <td class="title-cell">
+                      <div class="f-w-500 text-dark text-truncate" [title]="doc.title">
+                        {{ doc.title }}
+                      </div>
+                      @if (tagsOf(doc.tags).length > 0) {
+                        <div class="d-flex flex-wrap gap-1 mt-1">
+                          @for (tag of tagsOf(doc.tags); track tag) {
+                            <span class="badge bg-light-secondary text-secondary">{{ tag }}</span>
+                          }
+                        </div>
+                      }
+                    </td>
+                    <td class="text-nowrap">{{ typeLabel(doc.currentVersion?.mimeType) }}</td>
+                    <td class="text-nowrap">
+                      {{ doc.currentVersion ? 'v' + doc.currentVersion.versionNo : '—' }}
+                    </td>
+                    <td class="text-nowrap">
+                      @if (doc.currentVersion; as version) {
+                        <span
+                          class="badge status-badge"
+                          [ngClass]="
+                            statusOption(version.status)?.badgeClass ?? 'bg-light-secondary'
+                          "
+                          [attr.title]="version.statusError || null"
+                        >
+                          {{ statusOption(version.status)?.label ?? version.status }}
+                          @if (version.status === 'error' && version.statusError) {
+                            <i class="ti ti-info-circle ms-1" aria-hidden="true"></i>
+                          }
+                        </span>
+                        @if (version.status === 'error' && version.statusError) {
+                          <span class="visually-hidden">: {{ version.statusError }}</span>
+                        }
+                      } @else {
+                        <span class="text-muted">No file</span>
+                      }
+                    </td>
+                    <td class="text-nowrap">{{ doc.updatedAt | date: 'mediumDate' }}</td>
+                    <td class="text-end text-nowrap pe-4">
+                      <button
+                        type="button"
+                        class="btn btn-icon btn-link-secondary document-open-action"
+                        title="Open the current version"
+                        [attr.aria-label]="'Open ' + doc.title"
+                        [disabled]="!doc.currentVersion || isOpening(doc.id)"
+                        (click)="openDocument(doc)"
+                      >
+                        @if (isOpening(doc.id)) {
+                          <span class="spinner-border spinner-border-sm" role="status"></span>
+                        } @else {
+                          <i class="ti ti-external-link f-18"></i>
+                        }
+                      </button>
+                      @if (canManage()) {
+                        <button
+                          type="button"
+                          class="btn btn-icon btn-link-primary document-edit-action"
+                          title="Edit details"
+                          [attr.aria-label]="'Edit details of ' + doc.title"
+                          (click)="openEditModal(doc)"
+                        >
+                          <i class="ti ti-edit f-18"></i>
+                        </button>
+                        <!-- Version history (#116) and the access editor (#117) plug in here. -->
+                        <span title="Version history: coming with #116">
+                          <button
+                            type="button"
+                            class="btn btn-icon btn-link-secondary document-versions-action"
+                            aria-label="Version history (coming soon)"
+                            disabled
+                          >
+                            <i class="ti ti-history f-18"></i>
+                          </button>
+                        </span>
+                        <span title="Access rules: coming with #117">
+                          <button
+                            type="button"
+                            class="btn btn-icon btn-link-secondary document-access-action"
+                            aria-label="Access rules (coming soon)"
+                            disabled
+                          >
+                            <i class="ti ti-lock f-18"></i>
+                          </button>
+                        </span>
+                        <button
+                          type="button"
+                          class="btn btn-icon btn-link-danger document-delete-action"
+                          title="Delete document"
+                          [attr.aria-label]="'Delete ' + doc.title"
+                          (click)="openDeleteModal(doc)"
+                        >
+                          <i class="ti ti-trash f-18"></i>
+                        </button>
+                      }
+                    </td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <div
+          class="card-footer d-flex align-items-center justify-content-between flex-wrap gap-2 py-2"
+        >
+          <span class="text-muted text-sm">
+            Page {{ currentPage() }} of {{ totalPages() }} ({{ total() }}
+            {{ total() === 1 ? 'document' : 'documents' }})
+          </span>
+          <div class="d-flex align-items-center gap-2">
+            <select
+              class="form-select form-select-sm page-size-select"
+              aria-label="Documents per page"
+              [ngModel]="pageSize()"
+              (ngModelChange)="changePageSize($event)"
+            >
+              <option [ngValue]="10">10</option>
+              <option [ngValue]="25">25</option>
+              <option [ngValue]="50">50</option>
+            </select>
+            <div class="btn-group btn-group-sm">
+              <button
+                type="button"
+                class="btn btn-outline-secondary"
+                [disabled]="currentPage() <= 1"
+                (click)="goToPage(currentPage() - 1)"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                class="btn btn-outline-secondary"
+                [disabled]="currentPage() >= totalPages()"
+                (click)="goToPage(currentPage() + 1)"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+</div>
+
+<app-document-metadata-modal
+  [document]="editTarget()"
+  (saved)="onMetadataSaved($event)"
+  (cancelled)="closeEditModal()"
+/>
+
+<app-confirmation-modal
+  [isOpen]="deleteTarget() !== null"
+  title="Delete Document"
+  message="Delete this document? It will no longer be listed, downloadable or used in chat answers."
+  [detailText]="'Document: ' + (deleteTarget()?.title ?? '')"
+  confirmText="Delete Document"
+  confirmButtonClass="btn-danger"
+  [isLoading]="isDeleting()"
+  (confirmed)="confirmDelete()"
+  (cancelled)="closeDeleteModal()"
+/>
