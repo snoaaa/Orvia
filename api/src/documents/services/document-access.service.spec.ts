@@ -270,6 +270,52 @@ describe('DocumentAccessService (#109, #110)', () => {
     });
   });
 
+  describe('options of a document (#117)', () => {
+    beforeEach(() => {
+      prisma.school = { findUnique: vi.fn().mockResolvedValue({ id: 'school-a', name: 'Lycée A' }) };
+      prisma.role.findMany.mockResolvedValue([
+        { id: 'role-staff', name: 'STAFF' },
+        { id: 'role-student', name: 'STUDENT' },
+      ]);
+      prisma.group.findMany.mockResolvedValue([
+        { id: 'group-6a', name: '6e A', type: 'class' },
+        { id: 'group-science', name: 'Sciences', type: 'department' },
+        { id: 'group-team', name: 'Sport', type: 'team' },
+      ]);
+    });
+
+    it('lists the school, the non-platform roles, the classes and the other groups', async () => {
+      const options = await service.listOptions('doc-1', manager());
+      expect(options.school).toMatchObject({ id: 'school-a', name: 'Lycée A' });
+      expect(options.roles.map((r) => r.name)).toEqual(['STAFF', 'STUDENT']);
+      expect(options.classes.map((g) => g.name)).toEqual(['6e A']);
+      expect(options.groups.map((g) => g.name)).toEqual(['Sciences', 'Sport']);
+    });
+
+    it('excludes platform roles and deleted groups, and only reads the school of the document', async () => {
+      await service.listOptions('doc-1', manager());
+      expect(prisma.role.findMany.mock.calls[0][0]).toMatchObject({ where: { scope: { not: 'platform' } } });
+      expect(prisma.group.findMany.mock.calls[0][0]).toMatchObject({ where: { schoolId: 'school-a', deletedAt: null } });
+    });
+
+    it('answers 404 for a missing document and 403 for a document of another school', async () => {
+      prisma.document.findUnique.mockResolvedValueOnce(null);
+      await expect(service.listOptions('doc-1', manager())).rejects.toBeInstanceOf(NotFoundException);
+      prisma.document.findUnique.mockResolvedValueOnce({
+        id: 'doc-1',
+        spaceId: 'space-1',
+        deletedAt: null,
+        space: { schoolId: 'school-b' },
+      });
+      await expect(service.listOptions('doc-1', manager())).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('answers 404 with NotFoundException if the school is missing instead of Prisma P2025', async () => {
+      prisma.school.findUnique.mockResolvedValueOnce(null);
+      await expect(service.listOptions('doc-1', manager())).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('locking and access', () => {
     it('locks the live document row before reading its rules', async () => {
       await add([{ type: 'school', id: 'school-a' }]);

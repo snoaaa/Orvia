@@ -1,0 +1,195 @@
+<div class="row">
+  <div class="col-12">
+    <app-card [cardTitle]="heading()">
+      @if (!canManage()) {
+        <div class="alert alert-warning mb-0" id="access-no-access" role="alert">
+          <i class="ti ti-lock me-1"></i>You do not have permission to manage documents.
+        </div>
+      } @else {
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            @if (document()?.spaceId; as sid) {
+              <a
+                id="access-back-documents"
+                class="btn btn-sm btn-outline-secondary"
+                [routerLink]="['/admin/spaces', sid, 'documents']"
+              >
+                <i class="ti ti-arrow-left me-1"></i>Back to documents
+              </a>
+            } @else {
+              <a id="access-back-spaces" class="btn btn-sm btn-outline-secondary" routerLink="/admin/spaces">
+                <i class="ti ti-arrow-left me-1"></i>Spaces
+              </a>
+            }
+            <span class="text-muted text-sm">
+              Choose who can read this document. Targets always belong to the school of the document.
+            </span>
+          </div>
+          <a
+            class="btn btn-sm btn-light-secondary"
+            id="access-versions-link"
+            [routerLink]="['/admin/documents', documentId(), 'versions']"
+          >
+            <i class="ti ti-history me-1"></i>Versions
+          </a>
+        </div>
+
+        @if (error()) {
+          <div class="alert alert-danger d-flex align-items-center justify-content-between" id="access-error" role="alert">
+            <span>{{ error() }}</span>
+            <button type="button" class="btn btn-sm btn-light-danger" (click)="load()">Retry</button>
+          </div>
+        } @else if (loading()) {
+          <p class="text-muted mb-0" id="access-loading">Loading access rules…</p>
+        } @else {
+          @if (isDraft()) {
+            <div class="alert alert-info" id="access-draft" role="status">
+              <i class="ti ti-eye-off me-1"></i>Draft: visible only to managers. Add a rule to publish it.
+            </div>
+          } @else {
+            <div class="table-responsive mb-4">
+              <table class="table align-middle mb-0" id="access-list">
+                <thead>
+                  <tr>
+                    <th>TYPE</th>
+                    <th>TARGET</th>
+                    <th>ADDED</th>
+                    <th class="text-end">ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (rule of rules(); track rule.id) {
+                    <tr>
+                      <td><span class="badge bg-light-primary text-primary">{{ typeLabels[rule.type] }}</span></td>
+                      <td>{{ ruleLabel(rule) }}</td>
+                      <td>{{ rule.createdAt | date: 'medium' }}</td>
+                      <td class="text-end">
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-light-danger rule-remove"
+                          (click)="askRemove(rule)"
+                        >
+                          <i class="ti ti-trash me-1"></i>Remove
+                        </button>
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
+
+          <h6 class="mb-2">Add a rule</h6>
+          @if (options(); as opts) {
+            <p class="text-muted text-sm mb-2" id="access-school">
+              School: <strong>{{ opts.school.name }}</strong>
+            </p>
+          }
+          @if (addError()) {
+            <div class="alert alert-danger" id="access-add-error" role="alert">{{ addError() }}</div>
+          }
+          <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-3">
+              <label class="form-label" for="access-type">Type</label>
+              <select
+                id="access-type"
+                class="form-select"
+                [ngModel]="newType()"
+                (ngModelChange)="onTypeChange($event)"
+              >
+                @for (t of types(); track t) {
+                  <option [value]="t">{{ typeLabels[t] }}</option>
+                }
+              </select>
+            </div>
+            <div class="col-12 col-md-6">
+              @if (newType() === 'user') {
+                <label class="form-label" for="access-user-search">Search a user (name or email)</label>
+                <div class="input-group">
+                  <input
+                    id="access-user-search"
+                    class="form-control"
+                    type="search"
+                    [ngModel]="userSearch()"
+                    (ngModelChange)="onUserSearchInput($event)"
+                    (keydown.enter)="searchUsers()"
+                  />
+                  <button
+                    type="button"
+                    class="btn btn-light-secondary"
+                    id="access-user-search-btn"
+                    [disabled]="searchingUsers() || !userSearch().trim()"
+                    (click)="searchUsers()"
+                  >
+                    Search
+                  </button>
+                </div>
+                @if (userSearchError()) {
+                  <div class="text-danger text-sm mt-1">{{ userSearchError() }}</div>
+                }
+                @if (availableUserResults().length > 0) {
+                  <ul class="list-group mt-1" id="access-user-results">
+                    @for (u of availableUserResults(); track u.id) {
+                      <li class="list-group-item list-group-item-action p-0">
+                        <button type="button" class="btn btn-link text-start w-100 text-decoration-none" (click)="pickUser(u)">
+                          {{ u.fullName }} <span class="text-muted">({{ u.email }})</span>
+                        </button>
+                      </li>
+                    }
+                  </ul>
+                } @else if (userResults().length > 0) {
+                  <div class="text-muted text-sm mt-1" id="access-user-all-added">
+                    Every matching user already has access.
+                  </div>
+                }
+              } @else {
+                <label class="form-label" for="access-target">Target</label>
+                <select
+                  id="access-target"
+                  class="form-select"
+                  [ngModel]="newTargetId()"
+                  (ngModelChange)="onTargetChange($event)"
+                  [disabled]="choices().length === 0"
+                >
+                  <option value="">
+                    {{ choices().length === 0 ? 'Nothing left to add' : 'Select…' }}
+                  </option>
+                  @for (c of choices(); track c.id) {
+                    <option [value]="c.id">{{ c.name }}</option>
+                  }
+                </select>
+              }
+            </div>
+            <div class="col-12 col-md-3">
+              <button
+                type="button"
+                class="btn btn-primary w-100"
+                id="access-add"
+                [disabled]="!newTargetId() || adding()"
+                (click)="add()"
+              >
+                <i class="ti ti-plus me-1"></i>{{ adding() ? 'Adding…' : 'Add' }}
+              </button>
+            </div>
+          </div>
+          @if (!canPickUsers()) {
+            <p class="text-muted text-sm mt-2 mb-0" id="access-users-note">
+              Searching individual users needs the permission to view users, which you do not have.
+            </p>
+          }
+        }
+      }
+    </app-card>
+  </div>
+</div>
+
+<app-confirmation-modal
+  [isOpen]="ruleToRemove() !== null"
+  title="Remove access rule"
+  message="Readers reached only through this rule will lose access to the document."
+  [detailText]="removeDetail()"
+  confirmText="Remove"
+  [isLoading]="removing()"
+  (confirmed)="confirmRemove()"
+  (cancelled)="cancelRemove()"
+></app-confirmation-modal>

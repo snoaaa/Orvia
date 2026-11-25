@@ -33,6 +33,7 @@ import {
   UploadDocumentDto,
 } from '../dto/index.js';
 import {
+  DocumentAccessOptionsEntity,
   DocumentAccessRuleEntity,
   DocumentProcessingStatusEntity,
   DocumentEntity,
@@ -242,6 +243,26 @@ export class DocumentsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<DocumentAccessRuleEntity[]> {
     return this.documentAccessService.listRules(id, actor);
+  }
+
+  @Get(':id/access/options')
+  @RequirePermission('documents:manage')
+  @ApiOperation({
+    summary: 'List the targets a document can be published to (#117)',
+    description:
+      "For the access editor: the document's school, the roles of a school (platform roles excluded), and the " +
+      'non-deleted groups of the school, split into classes and other groups. Same scope as the other access routes.',
+  })
+  @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiResponse({ status: 200, description: 'Publication targets', type: DocumentAccessOptionsEntity })
+  @ApiResponse({ status: 400, description: 'Invalid document id' })
+  @ApiResponse({ status: 403, description: 'Missing permission, or a document of another school' })
+  @ApiResponse({ status: 404, description: 'Document not found or deleted' })
+  async listDocumentAccessOptions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<DocumentAccessOptionsEntity> {
+    return this.documentAccessService.listOptions(id, actor);
   }
 
   @Post(':id/access')

@@ -244,17 +244,14 @@
                         >
                           <i class="ti ti-history f-18"></i>
                         </a>
-                        <!-- The access editor (#117) plugs in here. -->
-                        <span title="Access rules: coming with #117">
-                          <button
-                            type="button"
-                            class="btn btn-icon btn-link-secondary document-access-action"
-                            aria-label="Access rules (coming soon)"
-                            disabled
-                          >
-                            <i class="ti ti-lock f-18"></i>
-                          </button>
-                        </span>
+                        <a
+                          class="btn btn-icon btn-link-secondary document-access-action"
+                          title="Access rules"
+                          [attr.aria-label]="'Access rules of ' + doc.title"
+                          [routerLink]="['/admin/documents', doc.id, 'access']"
+                        >
+                          <i class="ti ti-lock f-18"></i>
+                        </a>
                         <button
                           type="button"
                           class="btn btn-icon btn-link-danger document-delete-action"

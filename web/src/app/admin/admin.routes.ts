@@ -149,6 +149,14 @@ export const adminRoutes: Routes = [
           )
       },
       {
+        path: 'documents/:documentId/access',
+        canActivate: [apiPermissionGuard('documents:manage')],
+        loadComponent: () =>
+          import('./documents/document-access/document-access/document-access.component').then(
+            (c) => c.DocumentAccessComponent
+          )
+      },
+      {
         path: 'conversations',
         canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['conversations'])],
         data: {

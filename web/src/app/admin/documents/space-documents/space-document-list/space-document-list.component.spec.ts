@@ -345,7 +345,7 @@ describe('SpaceDocumentListComponent', () => {
   });
 
   describe('actions', () => {
-    it('shows every action to document managers; access waits for #117', () => {
+    it('shows every action to document managers', () => {
       create();
       const row = element().querySelector('tbody tr') as HTMLElement;
       expect(row.querySelector('.document-open-action')).not.toBeNull();
@@ -354,9 +354,9 @@ describe('SpaceDocumentListComponent', () => {
       expect(
         (row.querySelector('.document-versions-action') as HTMLAnchorElement).getAttribute('href')
       ).toContain('/admin/documents/d1/versions');
-      expect((row.querySelector('.document-access-action') as HTMLButtonElement).disabled).toBe(
-        true
-      );
+      expect(
+        (row.querySelector('.document-access-action') as HTMLAnchorElement).getAttribute('href')
+      ).toContain('/admin/documents/d1/access');
     });
 
     it('only lets other users open documents', () => {
@@ -365,6 +365,7 @@ describe('SpaceDocumentListComponent', () => {
       expect(row.querySelector('.document-open-action')).not.toBeNull();
       expect(row.querySelector('.document-edit-action')).toBeNull();
       expect(row.querySelector('.document-versions-action')).toBeNull();
+      expect(row.querySelector('.document-access-action')).toBeNull();
       expect(row.querySelector('.document-delete-action')).toBeNull();
     });
 
