@@ -1,8 +1,9 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
-import { of, throwError } from 'rxjs';
-import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
+import { Subject, of, throwError } from 'rxjs';
+import { PortalSessionService, PortalSessionUser } from 'src/app/admin/identity/services/portal-session.service';
 import { UserManagementService } from 'src/app/admin/identity/users/services/user-management.service';
 import { DocumentVersionService } from '../../document-versions/services/document-version.service';
 import { AccessOptions, AccessRule } from '../models/document-access.model';
@@ -61,10 +62,11 @@ describe('DocumentAccessComponent', () => {
     TestBed.configureTestingModule({
       imports: [DocumentAccessComponent],
       providers: [
+        provideRouter([]),
         { provide: DocumentAccessService, useValue: service },
         {
           provide: DocumentVersionService,
-          useValue: { getDocument: vi.fn().mockReturnValue(of({ id: 'doc-1', title: 'Notes' })) }
+          useValue: { getDocument: vi.fn().mockReturnValue(of({ id: 'doc-1', title: 'Notes', spaceId: 'sp-1' })) }
         },
         { provide: UserManagementService, useValue: users },
         { provide: GoeyToastService, useValue: toast },
@@ -192,5 +194,76 @@ describe('DocumentAccessComponent', () => {
     create();
     expect(component.types()).not.toContain('user');
     expect(el().querySelector('#access-users-note')).not.toBeNull();
+  });
+
+  it('picks a non-exhausted initial type when the school already has a rule and filters already-added users', () => {
+    service.list.mockReturnValue(
+      of([rule('r-school', 'school', 'Lycee A', 's1'), rule('r-user', 'user', 'Ada', 'u-taken')])
+    );
+    users.getUsers.mockReturnValue(
+      of({
+        data: [
+          { id: 'u-taken', fullName: 'Ada', email: 'ada@x.io' },
+          { id: 'u-free', fullName: 'Grace', email: 'grace@x.io' }
+        ],
+        total: 2,
+        page: 1,
+        limit: 10,
+        totalPages: 1
+      })
+    );
+    create();
+    expect(component.newType()).toBe('role');
+
+    component.onTypeChange('user');
+    component.onUserSearchInput('a');
+    component.searchUsers();
+    expect(component.availableUserResults().map((u) => u.id)).toEqual(['u-free']);
+  });
+
+  it('scopes user picking to the document school', () => {
+    const multiSchool: PortalSessionUser = {
+      id: 'mgr',
+      email: 'm@x.io',
+      fullName: 'Mgr',
+      status: 'ACTIVE',
+      role: null,
+      permissions: ['documents:manage', 'users:read'],
+      schoolIds: ['s1', 's2'],
+      isPlatformAdmin: false,
+      assignments: [
+        { role: 'STAFF', scope: 'school', schoolId: 's1', groupId: null, permissions: ['documents:manage'] },
+        { role: 'ADMIN', scope: 'school', schoolId: 's2', groupId: null, permissions: ['documents:manage', 'users:read'] }
+      ]
+    };
+    TestBed.overrideProvider(PortalSessionService, {
+      useValue: {
+        hasPermission: (p: string) => ['documents:manage', 'users:read'].includes(p),
+        activePermissions: () => ['documents:manage'],
+        user: () => multiSchool,
+        isPlatformAdmin: () => false,
+        activeSchoolId: () => 's1'
+      }
+    });
+    create();
+    expect(component.canManage()).toBe(true);
+    expect(component.canPickUsers()).toBe(false);
+  });
+
+  it('redirects to /admin/spaces on 403/404 and reloads when route paramMap emits', () => {
+    const paramMap$ = new Subject<ReturnType<typeof convertToParamMap>>();
+    TestBed.overrideProvider(ActivatedRoute, {
+      useValue: {
+        snapshot: { paramMap: convertToParamMap({ documentId: 'doc-1' }) },
+        paramMap: paramMap$.asObservable()
+      }
+    });
+    create();
+    const router = TestBed.inject(Router);
+    const navSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    service.list.mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 404 })));
+    paramMap$.next(convertToParamMap({ documentId: 'doc-missing' }));
+    expect(navSpy).toHaveBeenCalledWith(['/admin/spaces']);
   });
 });

@@ -88,7 +88,7 @@ export class DocumentAccessService {
     const doc = await this.findManagedDocument(documentId, actor);
     const schoolId = doc.space.schoolId;
     const [school, roles, groups] = await Promise.all([
-      this.prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { id: true, name: true } }),
+      this.prisma.school.findUnique({ where: { id: schoolId }, select: { id: true, name: true } }),
       this.prisma.role.findMany({
         where: { scope: { not: 'platform' } },
         select: { id: true, name: true },
@@ -100,6 +100,9 @@ export class DocumentAccessService {
         orderBy: { name: 'asc' },
       }),
     ]);
+    if (!school) {
+      throw new NotFoundException(`School with ID ${schoolId} not found`);
+    }
     const option = ({ id, name }: { id: string; name: string }) => new DocumentAccessOptionEntity({ id, name });
     return new DocumentAccessOptionsEntity({
       school: option(school),

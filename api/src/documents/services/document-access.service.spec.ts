@@ -272,7 +272,7 @@ describe('DocumentAccessService (#109, #110)', () => {
 
   describe('options of a document (#117)', () => {
     beforeEach(() => {
-      prisma.school = { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: 'school-a', name: 'Lycée A' }) };
+      prisma.school = { findUnique: vi.fn().mockResolvedValue({ id: 'school-a', name: 'Lycée A' }) };
       prisma.role.findMany.mockResolvedValue([
         { id: 'role-staff', name: 'STAFF' },
         { id: 'role-student', name: 'STUDENT' },
@@ -308,6 +308,11 @@ describe('DocumentAccessService (#109, #110)', () => {
         space: { schoolId: 'school-b' },
       });
       await expect(service.listOptions('doc-1', manager())).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('answers 404 with NotFoundException if the school is missing instead of Prisma P2025', async () => {
+      prisma.school.findUnique.mockResolvedValueOnce(null);
+      await expect(service.listOptions('doc-1', manager())).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 

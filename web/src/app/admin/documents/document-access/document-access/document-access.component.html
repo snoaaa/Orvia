@@ -7,9 +7,24 @@
         </div>
       } @else {
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-          <span class="text-muted text-sm">
-            Choose who can read this document. Targets always belong to the school of the document.
-          </span>
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            @if (document()?.spaceId; as sid) {
+              <a
+                id="access-back-documents"
+                class="btn btn-sm btn-outline-secondary"
+                [routerLink]="['/admin/spaces', sid, 'documents']"
+              >
+                <i class="ti ti-arrow-left me-1"></i>Back to documents
+              </a>
+            } @else {
+              <a id="access-back-spaces" class="btn btn-sm btn-outline-secondary" routerLink="/admin/spaces">
+                <i class="ti ti-arrow-left me-1"></i>Spaces
+              </a>
+            }
+            <span class="text-muted text-sm">
+              Choose who can read this document. Targets always belong to the school of the document.
+            </span>
+          </div>
           <a
             class="btn btn-sm btn-light-secondary"
             id="access-versions-link"
@@ -112,9 +127,9 @@
                 @if (userSearchError()) {
                   <div class="text-danger text-sm mt-1">{{ userSearchError() }}</div>
                 }
-                @if (userResults().length > 0) {
+                @if (availableUserResults().length > 0) {
                   <ul class="list-group mt-1" id="access-user-results">
-                    @for (u of userResults(); track u.id) {
+                    @for (u of availableUserResults(); track u.id) {
                       <li class="list-group-item list-group-item-action p-0">
                         <button type="button" class="btn btn-link text-start w-100 text-decoration-none" (click)="pickUser(u)">
                           {{ u.fullName }} <span class="text-muted">({{ u.email }})</span>
@@ -122,6 +137,10 @@
                       </li>
                     }
                   </ul>
+                } @else if (userResults().length > 0) {
+                  <div class="text-muted text-sm mt-1" id="access-user-all-added">
+                    Every matching user already has access.
+                  </div>
                 }
               } @else {
                 <label class="form-label" for="access-target">Target</label>
@@ -129,7 +148,7 @@
                   id="access-target"
                   class="form-select"
                   [ngModel]="newTargetId()"
-                  (ngModelChange)="newTargetId.set($event)"
+                  (ngModelChange)="onTargetChange($event)"
                   [disabled]="choices().length === 0"
                 >
                   <option value="">
