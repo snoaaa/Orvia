@@ -133,6 +133,14 @@ export const adminRoutes: Routes = [
           )
       },
       {
+        path: 'documents/upload',
+        canActivate: [apiPermissionGuard('documents:manage')],
+        loadComponent: () =>
+          import('./documents/document-upload/document-upload/document-upload.component').then(
+            (c) => c.DocumentUploadComponent
+          )
+      },
+      {
         path: 'conversations',
         canActivate: [portalPermissionGuard(PERMISSION_MENU_MAP['conversations'])],
         data: {

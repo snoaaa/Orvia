@@ -613,6 +613,16 @@ describe('SpaceDocumentListComponent', () => {
     it('offers the document actions exactly when the API accepts them', () => {
       create(user(['documents:publish', 'spaces:read']));
       expect(component.canManage()).toBe(true);
+      const uploadLink = element().querySelector('#document-upload') as HTMLAnchorElement | null;
+      expect(uploadLink).not.toBeNull();
+      expect(uploadLink?.getAttribute('href')).toContain('/admin/documents/upload');
+      expect(uploadLink?.getAttribute('href')).toContain('spaceId=sp1');
+    });
+
+    it('hides the upload link for read-only users', () => {
+      create(READER);
+      expect(component.canManage()).toBe(false);
+      expect(element().querySelector('#document-upload')).toBeNull();
     });
 
     it('scopes canManage to the loaded space school so permissions from another school do not leak', () => {
