@@ -29,6 +29,7 @@ export interface DocumentVersionItem {
   /** Size in bytes. */
   size: number;
   status: VersionStatus | string;
+  statusError?: string | null;
   mimeType: string;
   isCurrent: boolean;
 }
@@ -37,6 +38,8 @@ export interface DocumentVersionItem {
 export interface DocumentSummary {
   id: string;
   title: string;
+  spaceId?: string;
+  schoolId?: string;
 }
 
 export interface VersionStatusDisplay {

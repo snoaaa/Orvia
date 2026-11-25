@@ -142,7 +142,7 @@ export const adminRoutes: Routes = [
       },
       {
         path: 'documents/:documentId/versions',
-        canActivate: [portalPermissionGuard('documents:manage')],
+        canActivate: [apiPermissionGuard('documents:manage')],
         loadComponent: () =>
           import('./documents/document-versions/document-versions/document-versions.component').then(
             (c) => c.DocumentVersionsComponent

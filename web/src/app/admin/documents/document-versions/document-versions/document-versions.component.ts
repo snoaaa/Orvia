@@ -1,10 +1,14 @@
 import { CommonModule, DatePipe } from '@angular/common';
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
-import { ActivatedRoute, RouterModule } from '@angular/router';
+import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
+import { Subject, Subscription, catchError, forkJoin, of, switchMap, tap } from 'rxjs';
 import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
 import { CardComponent } from 'src/app/admin/theme/shared/components/card/card.component';
 import { formatFileSize } from '../../document-upload/models/upload.model';
+import { apiErrorStatus } from '../../shared/api-error.util';
+import { sessionGrants, sessionGrantsInSchool } from '../../shared/api-permissions.util';
 import {
   DocumentSummary,
   DocumentVersionItem,
@@ -13,7 +17,7 @@ import {
 } from '../models/document-version.model';
 import { DocumentVersionService } from '../services/document-version.service';
 
-/** Version history of one document (#116, §4.5): list the versions and download any of them. */
+/** Version history of one document (#116, §4.5): list the versions and download or replace them. */
 @Component({
   selector: 'app-document-versions',
   standalone: true,
@@ -23,7 +27,9 @@ import { DocumentVersionService } from '../services/document-version.service';
 export class DocumentVersionsComponent implements OnInit {
   private readonly versionService = inject(DocumentVersionService);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly toast = inject(GoeyToastService, { optional: true });
+  private readonly destroyRef = inject(DestroyRef);
   readonly session = inject(PortalSessionService);
 
   readonly formatFileSize = formatFileSize;
@@ -41,35 +47,90 @@ export class DocumentVersionsComponent implements OnInit {
   readonly replaceProgress = signal(0);
   readonly replaceError = signal<string | null>(null);
 
-  readonly canManage = computed(() => this.session.hasPermission('documents:manage'));
+  readonly canManage = computed(() => {
+    if (typeof this.session.user === 'function' && this.session.user() !== null && typeof this.session.isPlatformAdmin === 'function') {
+      const schoolId = this.document()?.schoolId ?? this.session.activeSchoolId?.() ?? null;
+      return sessionGrantsInSchool(this.session, schoolId, 'documents:manage');
+    }
+    if (typeof this.session.activePermissions === 'function') {
+      return sessionGrants(this.session, 'documents:manage');
+    }
+    return this.session.hasPermission('documents:manage');
+  });
   readonly heading = computed(() => {
     const doc = this.document();
     return doc ? `Version history - ${doc.title}` : 'Version history';
   });
 
+  private readonly loadTrigger$ = new Subject<void>();
+  private replaceSub?: Subscription;
+
+  constructor() {
+    this.destroyRef.onDestroy(() => this.replaceSub?.unsubscribe());
+
+    this.loadTrigger$
+      .pipe(
+        tap(() => {
+          this.loading.set(true);
+          this.error.set(null);
+        }),
+        switchMap(() => {
+          const id = this.documentId();
+          return forkJoin({
+            doc: this.versionService.getDocument(id).pipe(catchError(() => of(null))),
+            list: this.versionService.list(id)
+          }).pipe(
+            catchError((error: unknown) => {
+              const status = apiErrorStatus(error);
+              const msg = this.versionService.errorMessage(error, 'load');
+              this.loading.set(false);
+              if (status === 400 || status === 403 || status === 404) {
+                this.toast?.error(msg);
+                void this.router.navigate(['/admin/spaces']);
+                return of(null);
+              }
+              this.error.set(msg);
+              return of(null);
+            })
+          );
+        }),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe((result) => {
+        if (!result) return;
+        if (result.doc) this.document.set(result.doc);
+        this.versions.set(
+          [...result.list].sort((a, b) => b.versionNumber - a.versionNumber)
+        );
+        this.loading.set(false);
+      });
+  }
+
   ngOnInit(): void {
-    this.documentId.set(this.route.snapshot.paramMap.get('documentId') ?? '');
-    if (this.canManage() && this.documentId()) this.load();
+    const paramMap$ = (this.route as { paramMap?: ActivatedRoute['paramMap'] }).paramMap;
+    if (paramMap$ && typeof paramMap$.subscribe === 'function') {
+      paramMap$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((params) => {
+        this.applyDocumentId(params.get('documentId') ?? '');
+      });
+    } else {
+      this.applyDocumentId(this.route.snapshot.paramMap.get('documentId') ?? '');
+    }
+  }
+
+  private applyDocumentId(nextId: string): void {
+    if (!nextId) return;
+    if (nextId !== this.documentId()) {
+      this.document.set(null);
+      this.versions.set([]);
+      this.replaceError.set(null);
+    }
+    this.documentId.set(nextId);
+    if (this.canManage()) this.load();
   }
 
   load(): void {
-    this.loading.set(true);
-    this.error.set(null);
-    const id = this.documentId();
-    this.versionService.getDocument(id).subscribe({
-      next: (doc) => this.document.set(doc),
-      error: () => undefined // the title is only cosmetic; the list reports real errors
-    });
-    this.versionService.list(id).subscribe({
-      next: (list) => {
-        this.versions.set([...list].sort((a, b) => b.versionNumber - a.versionNumber));
-        this.loading.set(false);
-      },
-      error: (error: unknown) => {
-        this.error.set(this.versionService.errorMessage(error, 'load'));
-        this.loading.set(false);
-      }
-    });
+    if (!this.documentId()) return;
+    this.loadTrigger$.next();
   }
 
   /** Uploads the picked file as a new version, then reloads the list. */
@@ -82,7 +143,8 @@ export class DocumentVersionsComponent implements OnInit {
     this.replacing.set(true);
     this.replaceProgress.set(0);
     this.replaceError.set(null);
-    this.versionService.replace(this.documentId(), file).subscribe({
+    this.replaceSub?.unsubscribe();
+    this.replaceSub = this.versionService.replace(this.documentId(), file).subscribe({
       next: (e) => {
         if (e.type === 'progress') {
           this.replaceProgress.set(e.percent);
@@ -102,19 +164,22 @@ export class DocumentVersionsComponent implements OnInit {
   download(version: DocumentVersionItem): void {
     if (this.downloading() !== null) return;
     this.downloading.set(version.versionNumber);
-    this.versionService.download(this.documentId(), version.versionNumber).subscribe({
-      next: (blob) => {
-        const title = this.document()?.title ?? '';
-        this.versionService.saveFile(
-          blob,
-          versionFileName(title, version.versionNumber, version.mimeType)
-        );
-        this.downloading.set(null);
-      },
-      error: (error: unknown) => {
-        this.toast?.error(this.versionService.errorMessage(error, 'download'));
-        this.downloading.set(null);
-      }
-    });
+    this.versionService
+      .download(this.documentId(), version.versionNumber)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (blob) => {
+          const title = this.document()?.title ?? '';
+          this.versionService.saveFile(
+            blob,
+            versionFileName(title, version.versionNumber, version.mimeType)
+          );
+          this.downloading.set(null);
+        },
+        error: (error: unknown) => {
+          this.toast?.error(this.versionService.errorMessage(error, 'download'));
+          this.downloading.set(null);
+        }
+      });
   }
 }

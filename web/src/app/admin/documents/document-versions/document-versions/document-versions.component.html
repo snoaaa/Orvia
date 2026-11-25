@@ -7,9 +7,24 @@
         </div>
       } @else {
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-          <span class="text-muted text-sm">
-            Replacing the file adds a new version; earlier versions are kept.
-          </span>
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            @if (document()?.spaceId; as sid) {
+              <a
+                id="versions-back-documents"
+                class="btn btn-sm btn-outline-secondary"
+                [routerLink]="['/admin/spaces', sid, 'documents']"
+              >
+                <i class="ti ti-arrow-left me-1"></i>Back to documents
+              </a>
+            } @else {
+              <a id="versions-back-spaces" class="btn btn-sm btn-outline-secondary" routerLink="/admin/spaces">
+                <i class="ti ti-arrow-left me-1"></i>Spaces
+              </a>
+            }
+            <span class="text-muted text-sm">
+              Replacing the file adds a new version; earlier versions are kept.
+            </span>
+          </div>
           <label
             class="btn btn-sm btn-primary mb-0"
             [class.disabled]="replacing()"
@@ -79,9 +94,18 @@
                     <td>{{ version.uploader?.name ?? '—' }}</td>
                     <td>{{ formatFileSize(version.size) }}</td>
                     <td>
-                      <span class="badge" [ngClass]="statusDisplay(version.status).badgeClass">
+                      <span
+                        class="badge"
+                        [ngClass]="statusDisplay(version.status).badgeClass"
+                        [attr.title]="version.statusError || null"
+                      >
                         {{ statusDisplay(version.status).label }}
                       </span>
+                      @if (version.status === 'error' && version.statusError) {
+                        <small class="text-danger d-block mt-1 version-status-error">
+                          {{ version.statusError }}
+                        </small>
+                      }
                     </td>
                     <td class="text-end">
                       <button

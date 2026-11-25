@@ -1,5 +1,6 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
 import { Subject, of, throwError } from 'rxjs';
 import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
@@ -56,6 +57,7 @@ describe('DocumentVersionsComponent', () => {
     TestBed.configureTestingModule({
       imports: [DocumentVersionsComponent],
       providers: [
+        provideRouter([]),
         { provide: DocumentVersionService, useValue: service },
         { provide: GoeyToastService, useValue: toast },
         {
@@ -152,5 +154,38 @@ describe('DocumentVersionsComponent', () => {
     component.download(version(2));
     expect(toast.error).toHaveBeenCalledWith('gone');
     expect(service.saveFile).not.toHaveBeenCalled();
+  });
+
+  it('redirects to /admin/spaces on 403/404 when loading', () => {
+    const router = TestBed.inject(Router);
+    const navSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    service.list.mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 403 })));
+    create();
+    expect(navSpy).toHaveBeenCalledWith(['/admin/spaces']);
+  });
+
+  it('shows statusError on failed versions and reloads when route paramMap emits', () => {
+    const paramMap$ = new Subject<ReturnType<typeof convertToParamMap>>();
+    TestBed.overrideProvider(ActivatedRoute, {
+      useValue: {
+        snapshot: { paramMap: convertToParamMap({ documentId: 'doc-1' }) },
+        paramMap: paramMap$.asObservable()
+      }
+    });
+    service.list.mockReturnValue(
+      of([{ ...version(1), status: 'error', statusError: 'OCR timeout' }])
+    );
+    service.getDocument.mockReturnValue(of({ id: 'doc-1', title: 'Notes', spaceId: 'sp-9' }));
+    create();
+
+    paramMap$.next(convertToParamMap({ documentId: 'doc-1' }));
+    fixture.detectChanges();
+    expect(el().querySelector('.version-status-error')?.textContent).toContain('OCR timeout');
+    expect((el().querySelector('#versions-back-documents') as HTMLAnchorElement)?.getAttribute('href')).toContain(
+      '/admin/spaces/sp-9/documents'
+    );
+
+    paramMap$.next(convertToParamMap({ documentId: 'doc-2' }));
+    expect(service.list).toHaveBeenCalledWith('doc-2');
   });
 });

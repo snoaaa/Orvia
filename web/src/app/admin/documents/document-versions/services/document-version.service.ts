@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import { environment } from 'src/environments/environment';
 import { UploadEvent, UploadedDocument } from '../../document-upload/models/upload.model';
 import { toUploadEvents } from '../../document-upload/services/upload-events';
+import { apiErrorMessages } from '../../shared/api-error.util';
 import { DocumentSummary, DocumentVersionItem } from '../models/document-version.model';
 
 export type VersionAction = 'load' | 'download' | 'replace';
@@ -67,8 +68,11 @@ export class DocumentVersionService {
   errorMessage(error: unknown, action: VersionAction): string {
     if (!(error instanceof HttpErrorResponse)) return this.fallback(action);
 
-    const messages = this.messagesOf(error);
-    if (messages.length > 0) return messages.map(capitalize).join('. ');
+    // A blob error body (download) is not JSON-parsed; only object bodies carry a message.
+    if (!(error.error instanceof Blob)) {
+      const messages = apiErrorMessages(error);
+      if (messages.length > 0) return messages.join('. ');
+    }
 
     switch (error.status) {
       case 0:
@@ -99,16 +103,4 @@ export class DocumentVersionService {
   private url(documentId: string): string {
     return `${this.baseUrl}/${encodeURIComponent(documentId)}`;
   }
-
-  private messagesOf(error: HttpErrorResponse): string[] {
-    // A blob error body (download) is not JSON-parsed; only object bodies carry a message.
-    if (!error.error || typeof error.error !== 'object' || error.error instanceof Blob) return [];
-    const message = (error.error as { message?: unknown }).message;
-    const list = Array.isArray(message) ? message : [message];
-    return list.filter((m): m is string => typeof m === 'string' && m !== '');
-  }
-}
-
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }

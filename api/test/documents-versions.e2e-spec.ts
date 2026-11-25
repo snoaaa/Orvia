@@ -110,7 +110,47 @@ describe('Document version history (e2e) (#116)', () => {
     expect(res.body[0]).toMatchObject({
       versionNo: 1,
       isCurrent: true,
+      statusError: null,
       uploader: { id: managerId, name: 'Version Uploader' },
     });
+  });
+
+  it('serializes concurrent replace requests into distinct versions (no P2034)', async () => {
+    const token = await bearer(managerId);
+    const upload = await http()
+      .post(`/documents/spaces/${spaceId}/upload`)
+      .set('Authorization', token)
+      .field('title', `Concurrent Replace ${stamp}`)
+      .attach('file', Buffer.from(`# v1 ${stamp}`), 'conc-v1.md');
+    expect(upload.status).toBe(201);
+    const docId = upload.body.id as string;
+    if (upload.body.currentVersion?.storageKey) {
+      storageKeys.push(upload.body.currentVersion.storageKey);
+    }
+
+    const [r1, r2] = await Promise.all([
+      http()
+        .post(`/documents/${docId}/replace`)
+        .set('Authorization', token)
+        .attach('file', Buffer.from(`# v2a ${stamp}`), 'conc-v2a.md'),
+      http()
+        .post(`/documents/${docId}/replace`)
+        .set('Authorization', token)
+        .attach('file', Buffer.from(`# v2b ${stamp}`), 'conc-v2b.md'),
+    ]);
+    expect([r1.status, r2.status]).toEqual([201, 201]);
+
+    const versionsRes = await http()
+      .get(`/documents/${docId}/versions`)
+      .set('Authorization', token);
+    expect(versionsRes.status).toBe(200);
+    expect(versionsRes.body).toHaveLength(3);
+    for (const v of versionsRes.body as Array<{ storageKey: string }>) {
+      storageKeys.push(v.storageKey);
+    }
+    const numbers = (versionsRes.body as Array<{ versionNumber: number }>).map(
+      (v) => v.versionNumber,
+    );
+    expect(numbers).toEqual([3, 2, 1]);
   });
 });

@@ -2298,7 +2298,7 @@ describe('DocumentsService', () => {
         versionNo: 1,
       });
 
-      mockPrisma.$transaction.mockRejectedValueOnce(new Error('Prisma write deadlock'));
+      mockPrisma.documentVersion.create.mockRejectedValueOnce(new Error('Prisma write deadlock'));
 
       await expect(
         service.replaceDocumentVersion('doc-1', mockPdfFile, schoolAdmin),
@@ -2307,6 +2307,22 @@ describe('DocumentsService', () => {
       expect(mockStorageService.delete).toHaveBeenCalledWith(
         'spaces/space-1/docs/doc-1/v2.pdf',
       );
+    });
+
+    it('rejects replacement if the document was soft-deleted before FOR UPDATE acquired', async () => {
+      mockPrisma.document.findFirst.mockResolvedValueOnce(existingDoc);
+      mockFileValidationService.validateFile.mockResolvedValueOnce({
+        checksum: 'v2-pdf-checksum',
+        mimeType: 'application/pdf',
+        extension: 'pdf',
+        size: mockPdfFile.buffer.length,
+      });
+      mockPrisma.$queryRaw.mockResolvedValueOnce([{ id: 'doc-1', deletedAt: new Date() }]);
+
+      await expect(
+        service.replaceDocumentVersion('doc-1', mockPdfFile, schoolAdmin),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockStorageService.save).not.toHaveBeenCalled();
     });
   });
 
