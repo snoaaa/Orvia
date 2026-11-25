@@ -1,8 +1,9 @@
+import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, provideRouter } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
 import { Subject, of, throwError } from 'rxjs';
-import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
+import { PortalSessionService, PortalSessionUser } from 'src/app/admin/identity/services/portal-session.service';
 import { UploadEvent, UploadedDocument } from '../models/upload.model';
 import { DocumentUploadService } from '../services/document-upload.service';
 import { DocumentUploadComponent } from './document-upload.component';
@@ -19,6 +20,11 @@ describe('DocumentUploadComponent', () => {
   let toast: { success: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
   let canManage: boolean;
   let queryParams: Record<string, string>;
+  let sessionUser: ReturnType<typeof signal<PortalSessionUser | null>>;
+  let activeSchoolIdSig: ReturnType<typeof signal<string | null>>;
+  let isPlatformSig: ReturnType<typeof signal<boolean>>;
+  let showSchoolColSig: ReturnType<typeof signal<boolean>>;
+  let schoolsSig: ReturnType<typeof signal<{ id: string; name: string }[]>>;
 
   const doc = (id: string): UploadedDocument => ({ id, title: id });
   const pdf = (name: string) => new File(['%PDF'], name, { type: 'application/pdf' });
@@ -54,16 +60,28 @@ describe('DocumentUploadComponent', () => {
       errorMessage: vi.fn((e: { message?: string }) => e?.message ?? 'fallback')
     };
     toast = { success: vi.fn(), error: vi.fn() };
+    sessionUser = signal<PortalSessionUser | null>(null);
+    activeSchoolIdSig = signal<string | null>('school-1');
+    isPlatformSig = signal(false);
+    showSchoolColSig = signal(false);
+    schoolsSig = signal([{ id: 'school-1', name: 'School A' }]);
 
     TestBed.configureTestingModule({
       imports: [DocumentUploadComponent],
       providers: [
+        provideRouter([]),
         { provide: DocumentUploadService, useValue: service },
         { provide: GoeyToastService, useValue: toast },
         {
           provide: PortalSessionService,
           useValue: {
             hasPermission: (p: string) => canManage && p === 'documents:manage',
+            activePermissions: () => (canManage ? ['documents:manage'] : ['documents:read']),
+            user: sessionUser,
+            isPlatformAdmin: isPlatformSig,
+            showSchoolColumn: showSchoolColSig,
+            schools: schoolsSig,
+            activeSchoolId: activeSchoolIdSig,
             activeSchoolName: () => 'School A'
           }
         },
@@ -230,5 +248,63 @@ describe('DocumentUploadComponent', () => {
     component.onDrop(event([pdf('dropped.pdf')]));
     expect(component.isDragging()).toBe(false);
     expect(component.items().map((i) => i.file.name)).toEqual(['dropped.pdf']);
+  });
+
+  it('clears a stale ?spaceId= not present in writable spaces and hides read-only schools', () => {
+    sessionUser.set({
+      id: 'u1',
+      email: 'u1@x.edu',
+      fullName: 'Multi User',
+      status: 'ACTIVE',
+      role: null,
+      permissions: ['documents:manage'],
+      schoolIds: ['school-1', 'school-ro'],
+      isPlatformAdmin: false,
+      assignments: [
+        { role: 'STAFF', scope: 'school', schoolId: 'school-1', groupId: null, permissions: ['documents:manage'] },
+        { role: 'READER', scope: 'school', schoolId: 'school-ro', groupId: null, permissions: ['documents:read'] }
+      ]
+    });
+    service.getSpaces.mockReturnValue(
+      of({
+        data: [
+          { id: 's1', name: 'Maths', schoolId: 'school-1' },
+          { id: 's-ro', name: 'ReadOnly', schoolId: 'school-ro' }
+        ],
+        total: 2
+      })
+    );
+    queryParams = { spaceId: 's-ro' };
+    create();
+    expect(component.spaces().map((s) => s.id)).toEqual(['s1']);
+    expect(component.pickedSpaceId()).toBeNull();
+  });
+
+  it('reloads spaces for multi-school users when activeSchoolId changes and blocks invalid metadata', () => {
+    schoolsSig.set([
+      { id: 'school-1', name: 'School 1' },
+      { id: 'school-2', name: 'School 2' }
+    ]);
+    showSchoolColSig.set(true);
+    create();
+    expect(service.getSpaces).toHaveBeenCalledWith('school-1');
+
+    activeSchoolIdSig.set('school-2');
+    fixture.detectChanges();
+    expect(service.getSpaces).toHaveBeenLastCalledWith('school-2');
+
+    component.pickedSpaceId.set('s1');
+    component.addFiles([pdf('a.pdf')]);
+    const id = component.items()[0].id;
+    component.setMetadata(id, 'tags', {
+      target: { value: Array.from({ length: 11 }, (_, i) => `t${i}`).join(',') }
+    } as unknown as Event);
+    fixture.detectChanges();
+    expect(component.canStart()).toBe(false);
+    expect(el().querySelector('.upload-meta-error')?.textContent).toContain('At most 10 tags');
+
+    component.setMetadata(id, 'title', { target: { value: 'a'.repeat(192) } } as unknown as Event);
+    fixture.detectChanges();
+    expect(component.canStart()).toBe(false);
   });
 });

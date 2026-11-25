@@ -26,13 +26,31 @@ describe('DocumentUploadService', () => {
 
   afterEach(() => httpMock.verify());
 
-  it('loads the spaces with limit 100', () => {
+  it('loads the spaces with limit 100 and merges additional pages', () => {
     let total = 0;
-    service.getSpaces().subscribe((page) => (total = page.total));
-    const req = httpMock.expectOne((r) => r.url === base);
-    expect(req.request.params.get('limit')).toBe('100');
-    req.flush({ data: [], total: 3 });
-    expect(total).toBe(3);
+    let names: string[] = [];
+    service.getSpaces('school-1').subscribe((page) => {
+      total = page.total;
+      names = page.data.map((s) => s.name);
+    });
+    const req1 = httpMock.expectOne((r) => r.url === base && r.params.get('page') === '1');
+    expect(req1.request.params.get('limit')).toBe('100');
+    expect(req1.request.params.get('schoolId')).toBe('school-1');
+    req1.flush({
+      data: [{ id: 's1', name: 'First', schoolId: 'school-1' }],
+      total: 101,
+      limit: 100,
+      totalPages: 2
+    });
+    const req2 = httpMock.expectOne((r) => r.url === base && r.params.get('page') === '2');
+    req2.flush({
+      data: [{ id: 's2', name: 'Second', schoolId: 'school-1' }],
+      total: 101,
+      limit: 100,
+      totalPages: 2
+    });
+    expect(total).toBe(101);
+    expect(names).toEqual(['First', 'Second']);
   });
 
   it('sends documents to /upload with the file and the filled metadata only', () => {

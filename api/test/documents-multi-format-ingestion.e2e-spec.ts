@@ -357,5 +357,36 @@ describe('Multi-format document ingestion (e2e) (#150)', () => {
       expect(replacedStatus.body.currentVersion.versionNo).toBe(2);
       expect(replacedStatus.body.steps[0].step).toMatch(/^office_extraction(_queued)?$/);
     });
+
+    it('rejects upload metadata > 191 chars or > 10 tags with 400 (no MySQL P2000) and caps long default filenames', async () => {
+      const token = await bearer(managerId);
+      const long192 = 'x'.repeat(192);
+      const elevenTags = Array.from({ length: 11 }, (_, i) => `tag${i}`).join(',');
+      const txt = Buffer.from(`Bounds test content ${stamp}`);
+
+      for (const [field, value] of [
+        ['title', long192],
+        ['author', long192],
+        ['tags', long192],
+        ['tags', elevenTags],
+      ] as const) {
+        const bad = await http()
+          .post(`/documents/spaces/${spaceId}/upload`)
+          .set('Authorization', token)
+          .field(field, value)
+          .attach('file', txt, 'bounds.txt');
+        expect(bad.status).toBe(400);
+      }
+
+      const longNameRes = await http()
+        .post(`/documents/spaces/${spaceId}/upload`)
+        .set('Authorization', token)
+        .attach('file', Buffer.from(`Long filename ${stamp}`), `${'n'.repeat(210)}.txt`);
+      expect(longNameRes.status).toBe(201);
+      expect(longNameRes.body.title).toHaveLength(191);
+      if (longNameRes.body.currentVersion?.storageKey) {
+        storageKeys.push(longNameRes.body.currentVersion.storageKey);
+      }
+    });
   });
 });

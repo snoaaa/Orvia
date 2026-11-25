@@ -1,5 +1,6 @@
-/**
- * Document upload of the web portal (#115). Mirrors the API contract of
+import { normalizeTagList } from '../../shared/form-validators';
+
+/** Document upload of the web portal (#115). Mirrors the API contract of
  * `POST /documents/spaces/{spaceId}/upload` and `.../upload-image` (§4.1, #102, #103).
  */
 
@@ -29,10 +30,11 @@ export const UPLOAD_ACCEPT = [...DOCUMENT_EXTENSIONS, ...IMAGE_EXTENSIONS]
   .map((ext) => `.${ext}`)
   .join(',');
 
-/** Same limits as the API (`upload-document.dto.ts`). */
-export const UPLOAD_TITLE_MAX_LENGTH = 255;
-export const UPLOAD_AUTHOR_MAX_LENGTH = 255;
-export const UPLOAD_TAGS_MAX_LENGTH = 500;
+/** Same limits as the API (`upload-document.dto.ts`, MySQL VARCHAR(191)). */
+export const UPLOAD_TITLE_MAX_LENGTH = 191;
+export const UPLOAD_AUTHOR_MAX_LENGTH = 191;
+export const UPLOAD_TAGS_MAX_LENGTH = 191;
+export const UPLOAD_MAX_TAGS = 10;
 
 /** Number of files sent at the same time. */
 export const UPLOAD_CONCURRENCY = 3;
@@ -81,6 +83,8 @@ export interface UploadSpace {
 export interface UploadSpacePage {
   data: UploadSpace[];
   total: number;
+  limit?: number;
+  totalPages?: number;
 }
 
 /** Number of spaces loaded by the picker (a searchable picker is a follow-up). */
@@ -109,4 +113,23 @@ export function formatFileSize(bytes: number): string {
 export function defaultTitle(name: string): string {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/** First validation error on row metadata matching API limits, or null when valid. */
+export function metadataValidationError(meta: UploadMetadata): string | null {
+  if (meta.title.trim().length > UPLOAD_TITLE_MAX_LENGTH) {
+    return `Title must not exceed ${UPLOAD_TITLE_MAX_LENGTH} characters.`;
+  }
+  if (meta.author.trim().length > UPLOAD_AUTHOR_MAX_LENGTH) {
+    return `Author must not exceed ${UPLOAD_AUTHOR_MAX_LENGTH} characters.`;
+  }
+  const normalizedTags = normalizeTagList(meta.tags);
+  const tagCount = normalizedTags ? normalizedTags.split(',').length : 0;
+  if (tagCount > UPLOAD_MAX_TAGS) {
+    return `At most ${UPLOAD_MAX_TAGS} tags are allowed.`;
+  }
+  if (normalizedTags.length > UPLOAD_TAGS_MAX_LENGTH) {
+    return `Tags must not exceed ${UPLOAD_TAGS_MAX_LENGTH} characters.`;
+  }
+  return null;
 }

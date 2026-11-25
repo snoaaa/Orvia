@@ -4,20 +4,24 @@ import {
   DestroyRef,
   OnInit,
   computed,
+  effect,
   inject,
   input,
   output,
   signal
 } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterModule } from '@angular/router';
 import { GoeyToastService } from 'goey-toast-angular';
-import { Subscription } from 'rxjs';
+import { Subject, Subscription, catchError, of, switchMap, tap } from 'rxjs';
 import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
 import { CardComponent } from 'src/app/admin/theme/shared/components/card/card.component';
+import { sessionGrants, sessionGrantsInSchool } from '../../shared/api-permissions.util';
 import {
   UPLOAD_ACCEPT,
   UPLOAD_AUTHOR_MAX_LENGTH,
   UPLOAD_CONCURRENCY,
+  UPLOAD_MAX_TAGS,
   UPLOAD_SPACE_LIMIT,
   UPLOAD_TAGS_MAX_LENGTH,
   UPLOAD_TITLE_MAX_LENGTH,
@@ -26,7 +30,8 @@ import {
   UploadSpace,
   UploadedDocument,
   defaultTitle,
-  formatFileSize
+  formatFileSize,
+  metadataValidationError
 } from '../models/upload.model';
 import { DocumentUploadService } from '../services/document-upload.service';
 
@@ -60,9 +65,11 @@ export class DocumentUploadComponent implements OnInit {
   readonly titleMax = UPLOAD_TITLE_MAX_LENGTH;
   readonly authorMax = UPLOAD_AUTHOR_MAX_LENGTH;
   readonly tagsMax = UPLOAD_TAGS_MAX_LENGTH;
+  readonly maxTags = UPLOAD_MAX_TAGS;
   readonly spaceLimit = UPLOAD_SPACE_LIMIT;
   readonly formatFileSize = formatFileSize;
   readonly defaultTitle = defaultTitle;
+  readonly rowValidationError = metadataValidationError;
 
   readonly spaces = signal<UploadSpace[]>([]);
   readonly spacesTotal = signal(0);
@@ -72,8 +79,16 @@ export class DocumentUploadComponent implements OnInit {
   readonly items = signal<UploadItem[]>([]);
   readonly isDragging = signal(false);
 
-  /** Documents may be uploaded only with the `documents:manage` permission. */
-  readonly canUpload = computed(() => this.session.hasPermission('documents:manage'));
+  /** Documents may be uploaded when the user holds `documents:manage` (with API permission rules). */
+  readonly canUpload = computed(() => {
+    if (typeof this.session.user === 'function' && typeof this.session.isPlatformAdmin === 'function') {
+      if (sessionGrants(this.session, 'documents:manage')) return true;
+      return (this.session.schools?.() ?? []).some((s) =>
+        sessionGrantsInSchool(this.session, s.id, 'documents:manage')
+      );
+    }
+    return this.session.hasPermission('documents:manage');
+  });
   readonly targetSpaceId = computed(() => this.spaceId() ?? this.pickedSpaceId());
   readonly showPicker = computed(() => !this.spaceId());
 
@@ -85,21 +100,71 @@ export class DocumentUploadComponent implements OnInit {
   readonly isBusy = computed(() =>
     this.items().some((i) => i.status === 'queued' || i.status === 'uploading')
   );
+  readonly hasInvalidMetadata = computed(() =>
+    this.items().some((i) => i.status === 'ready' && metadataValidationError(i) !== null)
+  );
   readonly canStart = computed(
-    () => this.readyCount() > 0 && this.targetSpaceId() !== null && !this.spacesLoading()
+    () =>
+      this.readyCount() > 0 &&
+      this.targetSpaceId() !== null &&
+      !this.spacesLoading() &&
+      !this.spacesError() &&
+      !this.hasInvalidMetadata()
   );
 
   private nextId = 1;
   private readonly running = new Map<number, Subscription>();
+  private readonly loadSpacesTrigger$ = new Subject<void>();
+  private initialized = false;
+  private lastSchoolId: string | null | undefined;
   /** Counts of the current batch, for the final toast. */
   private batchDone = 0;
   private batchFailed = 0;
 
   constructor() {
     this.destroyRef.onDestroy(() => this.running.forEach((sub) => sub.unsubscribe()));
+
+    this.loadSpacesTrigger$
+      .pipe(
+        tap(() => {
+          this.spacesLoading.set(true);
+          this.spacesError.set(null);
+        }),
+        switchMap(() =>
+          this.uploadService.getSpaces(this.scopedSchoolFilter()).pipe(
+            catchError((error: unknown) => {
+              this.spacesError.set(this.uploadService.errorMessage(error));
+              this.spacesLoading.set(false);
+              return of(null);
+            })
+          )
+        ),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe((page) => {
+        if (!page) return;
+        const writable = page.data.filter((s) => this.canManageInSchool(s.schoolId));
+        this.spaces.set(writable);
+        this.spacesTotal.set(writable.length);
+        const picked = this.pickedSpaceId();
+        if (picked && !writable.some((s) => s.id === picked)) {
+          this.pickedSpaceId.set(null);
+        }
+        this.spacesLoading.set(false);
+      });
+
+    effect(() => {
+      const schoolId = this.scopedSchoolFilter() ?? null;
+      if (!this.initialized || !this.canUpload() || !this.showPicker() || this.isBusy()) return;
+      if (schoolId === this.lastSchoolId) return;
+      this.lastSchoolId = schoolId;
+      this.loadSpaces();
+    });
   }
 
   ngOnInit(): void {
+    this.lastSchoolId = this.scopedSchoolFilter() ?? null;
+    this.initialized = true;
     if (!this.canUpload()) return;
     if (this.showPicker()) {
       const fromQuery = this.route?.snapshot?.queryParamMap?.get('spaceId');
@@ -108,20 +173,32 @@ export class DocumentUploadComponent implements OnInit {
     }
   }
 
+  private scopedSchoolFilter(): string | undefined {
+    if (typeof this.session.isPlatformAdmin !== 'function' || this.session.isPlatformAdmin()) {
+      return undefined;
+    }
+    if (typeof this.session.showSchoolColumn === 'function' && !this.session.showSchoolColumn()) {
+      return undefined;
+    }
+    return this.session.activeSchoolId?.() ?? undefined;
+  }
+
+  private canManageInSchool(schoolId: string | null): boolean {
+    if (
+      typeof this.session.user === 'function' &&
+      this.session.user() !== null &&
+      typeof this.session.isPlatformAdmin === 'function'
+    ) {
+      return sessionGrantsInSchool(this.session, schoolId, 'documents:manage');
+    }
+    if (typeof this.session.activePermissions === 'function') {
+      return sessionGrants(this.session, 'documents:manage');
+    }
+    return this.session.hasPermission('documents:manage');
+  }
+
   loadSpaces(): void {
-    this.spacesLoading.set(true);
-    this.spacesError.set(null);
-    this.uploadService.getSpaces().subscribe({
-      next: (page) => {
-        this.spaces.set(page.data);
-        this.spacesTotal.set(page.total);
-        this.spacesLoading.set(false);
-      },
-      error: (error: unknown) => {
-        this.spacesError.set(this.uploadService.errorMessage(error));
-        this.spacesLoading.set(false);
-      }
-    });
+    this.loadSpacesTrigger$.next();
   }
 
   onSpaceChange(event: Event): void {
@@ -197,7 +274,8 @@ export class DocumentUploadComponent implements OnInit {
 
   /** Sends a failed file again. */
   retry(id: number): void {
-    if (this.targetSpaceId() === null) return;
+    const item = this.items().find((i) => i.id === id);
+    if (!item || this.targetSpaceId() === null || metadataValidationError(item) !== null) return;
     this.patch(id, { status: 'queued', progress: 0, error: null });
     this.pump();
   }

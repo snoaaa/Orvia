@@ -26,7 +26,7 @@ import type { UploadedFile } from '../interfaces/index.js';
 import { DocumentMapper, SpaceMapper } from '../mappers/index.js';
 import { ACTIVE_DOCUMENT, ACTIVE_SPACE } from '../utils/active-space.util.js';
 import { formatContentDispositionFilename, parseHttpRange } from '../utils/http-range.util.js';
-import { normalizeTags, tagWhere } from '../utils/document-filters.util.js';
+import { normalizeTags, parseTags, tagWhere } from '../utils/document-filters.util.js';
 import { isDocumentVisibleTo, versionFiltersWhere, visibleDocumentsWhere } from '../utils/document-visibility.util.js';
 import { determineInitialProcessingStep, isImageMimeType } from '../utils/magic-bytes.util.js';
 import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
@@ -40,8 +40,10 @@ import { ProcessingQueueService } from './processing-queue.service.js';
 /** 403 message when a document of the reader's school is not published to them (#109). */
 const NOT_PUBLISHED_TO_YOU = 'This document is not published to your school, role, class, group or account';
 
-/** Column size of `spaces.name` (VARCHAR(191)); the API limit for new names is lower (SPACE_NAME_MAX_LENGTH). */
+/** Column size of `spaces.name` and `documents.title`/`author`/`tags` (VARCHAR(191)). */
 const SPACE_NAME_COLUMN_LENGTH = 191;
+const DOCUMENT_FIELD_COLUMN_LENGTH = 191;
+const DOCUMENT_MAX_TAGS = 10;
 
 const spaceNameTakenMessage = (name: string) => `A space named '${name}' already exists in this school`;
 
@@ -844,6 +846,8 @@ export class DocumentsService {
       );
     }
 
+    const { title, author, tags } = this.resolveUploadMetadata(file, dto, actor, 'Untitled Document');
+
     const documentId = randomUUID();
     const versionId = randomUUID();
     const jobId = randomUUID();
@@ -863,13 +867,6 @@ export class DocumentsService {
 
     // 3. Perform DB transaction
     try {
-      const defaultTitle = file.originalname
-        ? file.originalname.replace(/\.[^/.]+$/, '').trim()
-        : 'Untitled Document';
-      const title = dto?.title?.trim() || defaultTitle || 'Untitled Document';
-      const author = dto?.author?.trim() || actor.fullName || '';
-      const tags = normalizeTags(dto?.tags);
-
       const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
         const lockedSpace = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
           SELECT id, deleted_at AS deletedAt FROM spaces WHERE id = ${spaceId} FOR UPDATE
@@ -1008,6 +1005,8 @@ export class DocumentsService {
       validated.mimeType,
     );
 
+    const { title, author, tags } = this.resolveUploadMetadata(file, dto, actor, 'Untitled Image');
+
     const documentId = randomUUID();
     const versionId = randomUUID();
     const jobId = randomUUID();
@@ -1024,13 +1023,6 @@ export class DocumentsService {
 
     // 2. Perform DB transaction
     try {
-      const defaultTitle = file.originalname
-        ? file.originalname.replace(/\.[^/.]+$/, '').trim()
-        : 'Untitled Image';
-      const title = dto?.title?.trim() || defaultTitle || 'Untitled Image';
-      const author = dto?.author?.trim() || actor.fullName || '';
-      const tags = normalizeTags(dto?.tags);
-
       const { createdDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
         const lockedSpace = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
           SELECT id, deleted_at AS deletedAt FROM spaces WHERE id = ${spaceId} FOR UPDATE
@@ -1115,6 +1107,43 @@ export class DocumentsService {
       await this.storageService.delete(storageKey).catch(() => {});
       throw err;
     }
+  }
+
+  private resolveUploadMetadata(
+    file: UploadedFile,
+    dto: UploadDocumentDto | undefined,
+    actor: AuthenticatedUser,
+    fallbackTitle: string,
+  ): { title: string; author: string; tags: string } {
+    const rawTitle = dto?.title?.trim() ?? '';
+    const rawAuthor = dto?.author?.trim() ?? '';
+    if (rawTitle.length > DOCUMENT_FIELD_COLUMN_LENGTH) {
+      throw new BadRequestException(
+        `title must be shorter than or equal to ${DOCUMENT_FIELD_COLUMN_LENGTH} characters`,
+      );
+    }
+    if (rawAuthor.length > DOCUMENT_FIELD_COLUMN_LENGTH) {
+      throw new BadRequestException(
+        `author must be shorter than or equal to ${DOCUMENT_FIELD_COLUMN_LENGTH} characters`,
+      );
+    }
+    const parsedTags = parseTags(dto?.tags);
+    if (parsedTags.length > DOCUMENT_MAX_TAGS) {
+      throw new BadRequestException(`tags must contain at most ${DOCUMENT_MAX_TAGS} tags`);
+    }
+    const tags = parsedTags.join(',');
+    if (tags.length > DOCUMENT_FIELD_COLUMN_LENGTH) {
+      throw new BadRequestException(
+        `tags must be shorter than or equal to ${DOCUMENT_FIELD_COLUMN_LENGTH} characters`,
+      );
+    }
+
+    const defaultTitle = (
+      file.originalname ? file.originalname.replace(/\.[^/.]+$/, '').trim() : ''
+    ).slice(0, DOCUMENT_FIELD_COLUMN_LENGTH);
+    const title = rawTitle || defaultTitle || fallbackTitle;
+    const author = (rawAuthor || actor.fullName || '').slice(0, DOCUMENT_FIELD_COLUMN_LENGTH);
+    return { title, author, tags };
   }
 
   /**

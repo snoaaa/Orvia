@@ -3,6 +3,7 @@ import { Component, inject } from '@angular/core';
 import { ActivatedRoute, RouterModule } from '@angular/router';
 import { CardComponent } from 'src/app/admin/theme/shared/components/card/card.component';
 import { PortalSessionService } from 'src/app/admin/identity/services/portal-session.service';
+import { sessionGrants } from 'src/app/admin/documents/shared/api-permissions.util';
 
 @Component({
   selector: 'app-portal-section',
@@ -33,7 +34,7 @@ import { PortalSessionService } from 'src/app/admin/identity/services/portal-ses
                   <i class="ti ti-trash me-1"></i>Delete School
                 </button>
               }
-              @if (sectionId === 'documents' && session.hasPermission('documents:manage')) {
+              @if (sectionId === 'documents' && canManageDocuments()) {
                 <a
                   id="btn-upload-document"
                   class="btn btn-sm btn-primary"
@@ -74,6 +75,12 @@ import { PortalSessionService } from 'src/app/admin/identity/services/portal-ses
 export class PortalSectionComponent {
   readonly session = inject(PortalSessionService);
   private readonly route = inject(ActivatedRoute, { optional: true });
+
+  canManageDocuments(): boolean {
+    return typeof this.session.activePermissions === 'function'
+      ? sessionGrants(this.session, 'documents:manage')
+      : this.session.hasPermission('documents:manage');
+  }
 
   get sectionId(): string {
     return (this.route?.snapshot?.data?.['sectionId'] as string) || 'spaces';

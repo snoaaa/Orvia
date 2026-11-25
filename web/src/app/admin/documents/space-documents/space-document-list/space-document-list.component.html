@@ -88,6 +88,17 @@
             Processing: statuses update automatically
           </span>
         }
+        @if (canManage()) {
+          <a
+            id="document-upload"
+            class="btn btn-sm btn-primary d-inline-flex align-items-center gap-1"
+            routerLink="/admin/documents/upload"
+            [queryParams]="{ spaceId: spaceId }"
+          >
+            <i class="ti ti-upload"></i>
+            <span>Upload</span>
+          </a>
+        }
         <button
           id="document-refresh"
           type="button"

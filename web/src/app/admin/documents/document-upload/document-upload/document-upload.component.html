@@ -12,11 +12,28 @@
             separately; the API refuses files that are too large, unsupported, infected or
             already in the space.
           </span>
-          @if (session.activeSchoolName()) {
-            <span class="badge bg-light-primary border border-primary">
-              Scope: {{ session.activeSchoolName() }}
-            </span>
-          }
+          <div class="d-flex align-items-center gap-2">
+            @if (session.activeSchoolName()) {
+              <span class="badge bg-light-primary border border-primary">
+                Scope: {{ session.activeSchoolName() }}
+              </span>
+            }
+            @if (showPicker()) {
+              @if (targetSpaceId(); as sid) {
+                <a
+                  id="upload-back-space"
+                  class="btn btn-sm btn-outline-secondary"
+                  [routerLink]="['/admin/spaces', sid, 'documents']"
+                >
+                  <i class="ti ti-arrow-left me-1"></i>Back to documents
+                </a>
+              } @else {
+                <a id="upload-back-spaces" class="btn btn-sm btn-outline-secondary" routerLink="/admin/spaces">
+                  <i class="ti ti-arrow-left me-1"></i>Spaces
+                </a>
+              }
+            }
+          </div>
         </div>
 
         @if (showPicker()) {
@@ -49,11 +66,6 @@
               @if (!spacesLoading() && spaces().length === 0) {
                 <div class="form-text" id="upload-no-spaces">
                   No space available. Create a space first.
-                </div>
-              }
-              @if (spacesTotal() > spaceLimit) {
-                <div class="form-text">
-                  Showing the first {{ spaceLimit }} of {{ spacesTotal() }} spaces.
                 </div>
               }
             }
@@ -130,6 +142,9 @@
                           [value]="item.author"
                           (input)="setMetadata(item.id, 'author', $event)"
                         />
+                        @if (rowValidationError(item); as metaErr) {
+                          <div class="text-danger text-sm mt-1 upload-meta-error">{{ metaErr }}</div>
+                        }
                       } @else {
                         <div class="text-break">{{ item.title || defaultTitle(item.file.name) }}</div>
                         @if (item.tags) {
@@ -176,7 +191,7 @@
                         <button
                           type="button"
                           class="btn btn-sm btn-light-primary me-1 upload-retry"
-                          [disabled]="targetSpaceId() === null"
+                          [disabled]="targetSpaceId() === null || rowValidationError(item) !== null"
                           (click)="retry(item.id)"
                         >
                           <i class="ti ti-refresh me-1"></i>Retry

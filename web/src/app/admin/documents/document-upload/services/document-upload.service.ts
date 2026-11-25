@@ -5,8 +5,9 @@ import {
   HttpParams
 } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, filter, map } from 'rxjs';
+import { Observable, filter, forkJoin, map, of, switchMap } from 'rxjs';
 import { environment } from 'src/environments/environment';
+import { apiErrorMessages } from '../../shared/api-error.util';
 import {
   UPLOAD_SPACE_LIMIT,
   UploadEvent,
@@ -24,10 +25,34 @@ export class DocumentUploadService {
   private readonly http = inject(HttpClient);
   private readonly baseUrl = `${environment.apiUrl}/documents/spaces`;
 
-  /** The spaces the caller may see, for the space picker. */
-  getSpaces(): Observable<UploadSpacePage> {
-    const params = new HttpParams().set('page', '1').set('limit', String(UPLOAD_SPACE_LIMIT));
-    return this.http.get<UploadSpacePage>(this.baseUrl, { params });
+  /** Every accessible space (fetches remaining pages in parallel when `totalPages > 1`). */
+  getSpaces(schoolId?: string): Observable<UploadSpacePage> {
+    const fetchPage = (page: number) => {
+      let params = new HttpParams()
+        .set('page', String(page))
+        .set('limit', String(UPLOAD_SPACE_LIMIT));
+      if (schoolId) {
+        params = params.set('schoolId', schoolId);
+      }
+      return this.http.get<UploadSpacePage>(this.baseUrl, { params });
+    };
+
+    return fetchPage(1).pipe(
+      switchMap((first) => {
+        const limit = first.limit || UPLOAD_SPACE_LIMIT;
+        const pages = first.totalPages ?? (Math.ceil(first.total / limit) || 1);
+        if (pages <= 1 || first.data.length >= first.total) {
+          return of(first);
+        }
+        const rest = Array.from({ length: pages - 1 }, (_, i) => fetchPage(i + 2));
+        return forkJoin(rest).pipe(
+          map((others) => ({
+            ...first,
+            data: [first, ...others].flatMap((p) => p.data)
+          }))
+        );
+      })
+    );
   }
 
   /**
@@ -67,8 +92,8 @@ export class DocumentUploadService {
   errorMessage(error: unknown): string {
     if (!(error instanceof HttpErrorResponse)) return 'The file could not be uploaded.';
 
-    const messages = this.messagesOf(error);
-    if (messages.length > 0) return messages.map(capitalize).join('. ');
+    const messages = apiErrorMessages(error);
+    if (messages.length > 0) return messages.join('. ');
 
     switch (error.status) {
       case 0:
@@ -86,15 +111,4 @@ export class DocumentUploadService {
     }
     return 'The file could not be uploaded.';
   }
-
-  private messagesOf(error: HttpErrorResponse): string[] {
-    if (!error.error || typeof error.error !== 'object') return [];
-    const message = (error.error as { message?: unknown }).message;
-    const list = Array.isArray(message) ? message : [message];
-    return list.filter((m): m is string => typeof m === 'string' && m !== '');
-  }
-}
-
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
