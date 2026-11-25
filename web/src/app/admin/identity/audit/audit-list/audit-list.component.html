@@ -1,0 +1,321 @@
+<div class="row">
+  <div class="col-12">
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+      <div class="d-flex align-items-center gap-2">
+        <h5 class="mb-0">Audit Trail</h5>
+        @if (!session.isPlatformAdmin() && activeAuditSchoolName()) {
+          <span class="badge bg-light-primary border border-primary" id="audit-fixed-school">
+            {{ activeAuditSchoolName() }}
+          </span>
+        }
+        <span class="badge bg-light-secondary border border-secondary">Read-only</span>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="d-flex align-items-end gap-2 flex-wrap mb-3">
+      <div class="form-group mb-0">
+        <label class="form-label mb-1 text-sm" for="audit-from">From</label>
+        <input
+          id="audit-from"
+          type="date"
+          class="form-control form-control-sm"
+          [max]="dateTo() || null"
+          [ngModel]="dateFrom()"
+          (ngModelChange)="onDateFromChange($event)"
+        />
+      </div>
+      <div class="form-group mb-0">
+        <label class="form-label mb-1 text-sm" for="audit-to">To</label>
+        <input
+          id="audit-to"
+          type="date"
+          class="form-control form-control-sm"
+          [min]="dateFrom() || null"
+          [ngModel]="dateTo()"
+          (ngModelChange)="onDateToChange($event)"
+        />
+      </div>
+
+      <div class="form-group mb-0 actor-picker">
+        <label class="form-label mb-1 text-sm" for="audit-actor">Actor</label>
+        @if (selectedActor(); as actor) {
+          <div class="d-flex align-items-center justify-content-between form-control form-control-sm" id="audit-actor-chip">
+            <span class="text-truncate" [title]="actor.email">{{ actor.fullName }}</span>
+            <button
+              type="button"
+              class="btn btn-link btn-sm p-0 ms-2 text-muted"
+              aria-label="Clear actor filter"
+              (click)="clearActor()"
+            >
+              <i class="ti ti-x"></i>
+            </button>
+          </div>
+        } @else {
+          <input
+            id="audit-actor"
+            type="text"
+            class="form-control form-control-sm"
+            placeholder="Search name or email..."
+            autocomplete="off"
+            [ngModel]="actorSearch()"
+            (ngModelChange)="onActorSearchChange($event)"
+          />
+          @if (actorMenuOpen()) {
+            <div class="actor-menu" id="audit-actor-menu">
+              @if (actorSearching()) {
+                <div class="text-muted text-sm p-2">Searching...</div>
+              } @else if (actorResults().length === 0) {
+                <div class="text-muted text-sm p-2">No user found.</div>
+              } @else {
+                @for (u of actorResults(); track u.id) {
+                  <button type="button" class="actor-option" (click)="selectActor(u)">
+                    <span class="d-block f-w-500">{{ u.fullName }}</span>
+                    <span class="d-block text-muted text-sm">{{ u.email }}</span>
+                  </button>
+                }
+              }
+            </div>
+          }
+        }
+      </div>
+
+      <div class="form-group mb-0">
+        <label class="form-label mb-1 text-sm" for="audit-action">Action</label>
+        <select
+          id="audit-action"
+          class="form-select form-select-sm"
+          [ngModel]="selectedAction()"
+          (ngModelChange)="onActionChange($event)"
+        >
+          <option value="">All actions</option>
+          @for (a of actions; track a) {
+            <option [value]="a">{{ actionLabel(a) }}</option>
+          }
+        </select>
+      </div>
+
+      @if (session.isPlatformAdmin()) {
+        <div class="form-group mb-0">
+          <label class="form-label mb-1 text-sm" for="audit-school">School</label>
+          <select
+            id="audit-school"
+            class="form-select form-select-sm"
+            [ngModel]="selectedSchoolId()"
+            (ngModelChange)="onSchoolFilterChange($event)"
+          >
+            <option value="">All Schools</option>
+            @for (s of schools(); track s.id) {
+              <option [value]="s.id">{{ s.name }}</option>
+            }
+          </select>
+        </div>
+      }
+
+      @if (hasActiveFilters) {
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="audit-reset" (click)="resetFilters()">
+          Reset filters
+        </button>
+      }
+    </div>
+
+    @if (errorMessage()) {
+      <div class="alert alert-danger py-2" role="alert">{{ errorMessage() }}</div>
+    }
+
+    <div class="card tbl-card">
+      <div class="table-responsive" [class.table-updating]="isUpdating()">
+        @if (isUpdating()) {
+          <div class="table-loading-overlay">
+            <div class="table-loading-bar"></div>
+          </div>
+        }
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th class="text-nowrap">DATE</th>
+              <th>ACTOR</th>
+              <th>ACTION</th>
+              <th>TARGET</th>
+              @if (session.showSchoolColumn()) {
+                <th class="text-nowrap">SCHOOL</th>
+              }
+              <th class="text-nowrap">IP / DEVICE</th>
+              <th class="text-end text-nowrap pe-4" style="width: 90px;">DETAILS</th>
+            </tr>
+          </thead>
+          <tbody>
+            @if (isInitialLoading()) {
+              <tr>
+                <td [attr.colspan]="session.showSchoolColumn() ? 7 : 6" class="text-center py-5 text-muted">
+                  <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                  Loading audit events...
+                </td>
+              </tr>
+            } @else if (events().length === 0) {
+              <tr>
+                <td [attr.colspan]="session.showSchoolColumn() ? 7 : 6" class="text-center py-5 text-muted">
+                  No audit events found matching current filters.
+                </td>
+              </tr>
+            } @else {
+              @for (e of events(); track e.id) {
+                <tr class="cursor-pointer" (click)="openDetail(e)">
+                  <td class="text-nowrap">{{ e.createdAt | date: 'medium' }}</td>
+                  <td>
+                    <span class="d-block f-w-500 text-truncate" [title]="e.actorId || ''">{{ actorLabel(e) }}</span>
+                    @if (e.actorEmail) {
+                      <span class="d-block text-muted text-sm text-truncate">{{ e.actorEmail }}</span>
+                    } @else if (e.actorName === null && e.actorId) {
+                      <span class="d-block text-muted text-sm">User not found</span>
+                    }
+                  </td>
+                  <td>
+                    <span class="badge bg-light-primary text-nowrap">{{ actionLabel(e.action) }}</span>
+                  </td>
+                  <td class="text-truncate" [title]="e.entityId || ''">{{ targetLabel(e) }}</td>
+                  @if (session.showSchoolColumn()) {
+                    <td class="text-nowrap">{{ e.schoolName || '—' }}</td>
+                  }
+                  <td class="text-nowrap">
+                    <span class="d-block">{{ e.ip || '—' }}</span>
+                    @if (e.deviceId) {
+                      <span class="d-block text-muted text-sm" [title]="e.deviceId">{{ shortId(e.deviceId) }}</span>
+                    }
+                  </td>
+                  <td class="text-end pe-4">
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline-secondary"
+                      (click)="openDetail(e); $event.stopPropagation()"
+                    >
+                      View
+                    </button>
+                  </td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination footer -->
+      <div class="card-footer d-flex align-items-center justify-content-between flex-wrap gap-2 py-2">
+        <span class="text-muted text-sm">
+          Showing page {{ currentPage() }} of {{ totalPages() }} ({{ totalEvents() }} total events)
+        </span>
+        <div class="d-flex align-items-center gap-2">
+          <select
+            class="form-select form-select-sm"
+            style="width: 75px;"
+            aria-label="Events per page"
+            [ngModel]="pageSize()"
+            (ngModelChange)="changePageSize($event)"
+          >
+            <option [ngValue]="10">10</option>
+            <option [ngValue]="25">25</option>
+            <option [ngValue]="50">50</option>
+          </select>
+
+          <div class="btn-group btn-group-sm">
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              [disabled]="currentPage() <= 1"
+              (click)="goToPage(currentPage() - 1)"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              [disabled]="currentPage() >= totalPages()"
+              (click)="goToPage(currentPage() + 1)"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Event detail (read-only) -->
+@if (selectedEvent(); as ev) {
+  <div class="detail-backdrop" (click)="closeDetail()" role="presentation">
+    <div
+      class="card detail-dialog mb-0"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Audit event detail"
+      (click)="$event.stopPropagation()"
+    >
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <h5 class="mb-0">{{ actionLabel(ev.action) }}</h5>
+        <button type="button" class="btn-close" aria-label="Close" (click)="closeDetail()"></button>
+      </div>
+      <div class="card-body">
+        <dl class="row mb-3">
+          <dt class="col-sm-3">Date</dt>
+          <dd class="col-sm-9">{{ ev.createdAt | date: 'medium' }}</dd>
+          <dt class="col-sm-3">Actor</dt>
+          <dd class="col-sm-9">
+            {{ actorLabel(ev) }}
+            @if (ev.actorEmail) {
+              <span class="text-muted">({{ ev.actorEmail }})</span>
+            }
+            @if (ev.actorRole) {
+              <span class="badge bg-light-secondary ms-1">{{ ev.actorRole }}</span>
+            }
+          </dd>
+          <dt class="col-sm-3">Category</dt>
+          <dd class="col-sm-9">{{ ev.category }}</dd>
+          <dt class="col-sm-3">Target</dt>
+          <dd class="col-sm-9 detail-value">{{ ev.entityType || '—' }}{{ ev.entityId ? ' · ' + ev.entityId : '' }}</dd>
+          <dt class="col-sm-3">School</dt>
+          <dd class="col-sm-9">{{ ev.schoolName || ev.schoolId || '—' }}</dd>
+          <dt class="col-sm-3">IP</dt>
+          <dd class="col-sm-9">{{ ev.ip || '—' }}</dd>
+          <dt class="col-sm-3">Device</dt>
+          <dd class="col-sm-9 detail-value">{{ ev.deviceId || '—' }}</dd>
+        </dl>
+
+        <h6>Details</h6>
+        @if (detailRows().length === 0) {
+          <p class="text-muted mb-0">This event carries no extra details.</p>
+        } @else {
+          <div class="table-responsive">
+            <table class="table table-sm mb-0" id="audit-detail-table">
+              @if (hasBeforeAfter()) {
+                <thead>
+                  <tr>
+                    <th>FIELD</th>
+                    <th>BEFORE</th>
+                    <th>AFTER</th>
+                  </tr>
+                </thead>
+              }
+              <tbody>
+                @for (r of detailRows(); track r.key) {
+                  <tr>
+                    <td class="f-w-500">{{ r.key }}@if (r.previous) { <span class="badge bg-light-warning ms-1">previous</span> }</td>
+                    @if (r.value !== undefined) {
+                      <td [attr.colspan]="hasBeforeAfter() ? 2 : 1" class="detail-value">{{ r.value }}</td>
+                    } @else {
+                      <td class="detail-value">{{ r.from }}</td>
+                      <td class="detail-value">{{ r.to }}</td>
+                    }
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </div>
+      <div class="card-footer text-end">
+        <button type="button" class="btn btn-sm btn-outline-secondary" (click)="closeDetail()">Close</button>
+      </div>
+    </div>
+  </div>
+}

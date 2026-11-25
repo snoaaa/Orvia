@@ -16,11 +16,20 @@ export class AuditEventEntity {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000', required: false, nullable: true, description: 'Actor user UUID' })
   actorId: string | null;
 
+  @ApiProperty({ example: 'Jane Doe', required: false, nullable: true, description: 'Actor full name (null if anonymous or the user no longer exists)' })
+  actorName: string | null;
+
+  @ApiProperty({ example: 'jane@school.edu', required: false, nullable: true, description: 'Actor email (null if anonymous or the user no longer exists)' })
+  actorEmail: string | null;
+
   @ApiProperty({ example: 'PLATFORM_ADMIN', required: false, nullable: true, description: 'Actor role at event time' })
   actorRole: string | null;
 
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174001', required: false, nullable: true, description: 'School UUID' })
   schoolId: string | null;
+
+  @ApiProperty({ example: 'Demo School A', required: false, nullable: true, description: 'School name (null if the event has no school or it no longer exists)' })
+  schoolName: string | null;
 
   @ApiProperty({ example: 'user', required: false, nullable: true, description: 'Target entity type' })
   entityType: string | null;
@@ -49,4 +58,21 @@ export class AuditEventEntity {
   constructor(partial: Partial<AuditEventEntity>) {
     Object.assign(this, partial);
   }
+}
+
+export class PaginatedAuditEventsEntity {
+  @ApiProperty({ type: [AuditEventEntity] })
+  data: AuditEventEntity[];
+
+  @ApiProperty({ example: 120 })
+  total: number;
+
+  @ApiProperty({ example: 1 })
+  page: number;
+
+  @ApiProperty({ example: 10 })
+  limit: number;
+
+  @ApiProperty({ example: 12 })
+  totalPages: number;
 }

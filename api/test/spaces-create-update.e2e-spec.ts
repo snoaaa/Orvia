@@ -401,10 +401,10 @@ describe('Create and update a space (e2e)', () => {
         expect(events.map((e) => e.schoolId)).toEqual([schools.A, schools.A]);
 
         const admAAudit = check(
-          await http().get(`/audit/events?entityType=space`).set('Authorization', await bearer(ids.AdminA)),
+          await http().get('/audit/events').query({ entityType: 'space', limit: 50 }).set('Authorization', await bearer(ids.AdminA)),
           200,
-        ).body;
-        expect(admAAudit.some((e: { entityId: string }) => e.entityId === created.id)).toBe(true);
+        ).body as { data: Array<{ entityId: string }> };
+        expect(admAAudit.data.some((e) => e.entityId === created.id)).toBe(true);
       });
 
       it('serializes concurrent PATCH requests on the same space without dropping diffs or audit events', async () => {

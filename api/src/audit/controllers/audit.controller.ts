@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { QueryAuditEventsDto } from '../dto/index.js';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
-import { AuditEventEntity } from '../entities/index.js';
+import { PaginatedAuditEventsEntity } from '../entities/index.js';
 import { AuditQueryService } from '../services/audit-query.service.js';
 
 /**
@@ -19,17 +19,17 @@ export class AuditController {
 
   @Get('events')
   @ApiOperation({
-    summary: 'List audit events, newest first (school-scoped)',
+    summary: 'List audit events, newest first (school-scoped, paginated)',
     description:
       'A platform administrator reads every event; a school administrator only reads events whose ' +
-      'school is one of their own. Events without a school (platform actions, unknown-user login ' +
+      'school is one of their own (asking for another school with `schoolId` is a 403). Events without a school (platform actions, unknown-user login ' +
       'failures) are only visible to platform administrators.',
   })
-  @ApiResponse({ status: 200, description: 'Audit events list', type: [AuditEventEntity] })
+  @ApiResponse({ status: 200, description: 'Audit events list', type: PaginatedAuditEventsEntity })
   async getEvents(
     @Query() query: QueryAuditEventsDto,
     @CurrentUser() actor: AuthenticatedUser,
-  ): Promise<AuditEventEntity[]> {
+  ): Promise<PaginatedAuditEventsEntity> {
     return this.auditQuery.findAll(query, actor);
   }
 

@@ -283,8 +283,8 @@ describe('School and domain audit (e2e)', () => {
           .query({ entityType: 'school', limit: 50 })
           .set('Authorization', adminToken),
         200,
-      ).body as Array<{ action: string; entityId: string; schoolId: string | null }>;
-      expect(listed.some((e) => e.action === 'school_created' && e.entityId === otherSchool.id && e.schoolId === otherSchool.id)).toBe(true);
+      ).body as { data: Array<{ action: string; entityId: string; schoolId: string | null }> };
+      expect(listed.data.some((e) => e.action === 'school_created' && e.entityId === otherSchool.id && e.schoolId === otherSchool.id)).toBe(true);
 
       const otherOnlyAdmin = await prisma.user.create({
         data: {
@@ -303,9 +303,9 @@ describe('School and domain audit (e2e)', () => {
             .query({ entityType: 'school', limit: 50 })
             .set('Authorization', await bearer(otherOnlyAdmin.id)),
           200,
-        ).body as Array<{ action: string; entityId: string; schoolId: string | null }>;
-        expect(otherListed.some((e) => e.action === 'school_created' && e.entityId === otherSchool.id)).toBe(true);
-        expect(otherListed.some((e) => e.entityId === schoolId || e.schoolId === schoolId)).toBe(false);
+        ).body as { data: Array<{ action: string; entityId: string; schoolId: string | null }> };
+        expect(otherListed.data.some((e) => e.action === 'school_created' && e.entityId === otherSchool.id)).toBe(true);
+        expect(otherListed.data.some((e) => e.entityId === schoolId || e.schoolId === schoolId)).toBe(false);
       } finally {
         await prisma.user.deleteMany({ where: { id: otherOnlyAdmin.id } });
       }
