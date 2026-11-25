@@ -1,7 +1,10 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, effect, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { GoeyToastService } from 'goey-toast-angular';
+import { Subject, catchError, debounceTime, of, switchMap, tap } from 'rxjs';
+import { sessionGrantsInSchool } from '../../../documents/shared/api-permissions.util';
 import { PortalSessionService } from '../../services/portal-session.service';
 import { SchoolSummaryOption, UserEntity } from '../../users/models/user.model';
 import { UserManagementService } from '../../users/services/user-management.service';
@@ -20,16 +23,20 @@ export interface AuditDetailRow {
 /**
  * Read-only audit trail (#96, section 4.5). Filters, server-side pagination and an event detail
  * view; there is no edit or delete action. The school filter exists for platform admins only, a
- * school admin is scoped to their school by the API.
+ * school admin is scoped to their active school.
  */
 @Component({
   selector: 'app-audit-list',
   standalone: true,
   imports: [CommonModule, FormsModule],
   templateUrl: './audit-list.component.html',
-  styleUrls: ['./audit-list.component.scss']
+  styleUrls: ['./audit-list.component.scss'],
+  host: {
+    '(document:keydown.escape)': 'onEscape()'
+  }
 })
 export class AuditListComponent implements OnInit {
+  private readonly destroyRef = inject(DestroyRef);
   private readonly auditService = inject(AuditEventsService);
   private readonly userService = inject(UserManagementService);
   private readonly toast = inject(GoeyToastService);
@@ -61,6 +68,29 @@ export class AuditListComponent implements OnInit {
   readonly actions = AUDIT_ACTIONS;
   readonly schools = signal<SchoolSummaryOption[]>([]);
 
+  /** Active school ID in which a non-platform admin holds `audit:read`. */
+  readonly scopedAuditSchoolId = computed<string | undefined>(() => {
+    if (this.session.isPlatformAdmin()) {
+      return this.selectedSchoolId() || undefined;
+    }
+    const active = this.session.activeSchoolId();
+    if (active && sessionGrantsInSchool(this.session, active, 'audit:read')) {
+      return active;
+    }
+    const granted = this.session
+      .schools()
+      .find((s) => sessionGrantsInSchool(this.session, s.id, 'audit:read'));
+    return granted?.id ?? active ?? undefined;
+  });
+
+  /** Human-readable name for the fixed/active audit school badge shown to non-platform admins. */
+  readonly activeAuditSchoolName = computed<string | null>(() => {
+    if (this.session.isPlatformAdmin()) return null;
+    const id = this.scopedAuditSchoolId();
+    if (!id) return this.session.activeSchoolName();
+    return this.session.schools().find((s) => s.id === id)?.name ?? this.session.activeSchoolName();
+  });
+
   // Detail view
   readonly selectedEvent = signal<AuditEvent | null>(null);
   readonly detailRows = computed<AuditDetailRow[]>(() => {
@@ -71,63 +101,138 @@ export class AuditListComponent implements OnInit {
     this.detailRows().some((r) => r.from !== undefined || r.to !== undefined)
   );
 
-  private actorDebounceTimer?: ReturnType<typeof setTimeout>;
+  private readonly loadTrigger$ = new Subject<void>();
+  private readonly actorSearch$ = new Subject<string>();
+  private initialized = false;
+  private lastAuditSchoolId: string | undefined;
+
+  constructor() {
+    this.setupEventLoader();
+    this.setupActorSearch();
+    effect(() => {
+      const nextSchoolId = this.session.isPlatformAdmin() ? undefined : this.eventsSchoolId;
+      if (!this.initialized || this.session.isPlatformAdmin()) return;
+      if (nextSchoolId === this.lastAuditSchoolId) return;
+      this.lastAuditSchoolId = nextSchoolId;
+      this.clearActor(false);
+      this.applyFilters();
+    });
+  }
 
   ngOnInit(): void {
+    this.lastAuditSchoolId = this.session.isPlatformAdmin() ? undefined : this.eventsSchoolId;
+    this.initialized = true;
     if (this.session.isPlatformAdmin()) {
-      this.userService.getSchools().subscribe({
-        next: (schools) => this.schools.set(schools),
-        error: () => {}
-      });
+      this.userService
+        .getSchools()
+        .pipe(takeUntilDestroyed(this.destroyRef))
+        .subscribe({
+          next: (schools) => this.schools.set(schools),
+          error: () => {}
+        });
     }
     this.loadEvents();
   }
 
-  /** School used to scope the actor search: the admin's school, or the one picked by a platform admin. */
+  /** School used to scope the actor search: the admin's active audit school, or the one picked by a platform admin. */
   private get actorSearchSchoolId(): string | undefined {
-    if (!this.session.isPlatformAdmin()) {
-      return this.session.activeSchoolId() ?? undefined;
+    return this.scopedAuditSchoolId();
+  }
+
+  /** School filter sent to GET /audit/events (omitted for single-school admins so API handles default scoping). */
+  private get eventsSchoolId(): string | undefined {
+    if (this.session.isPlatformAdmin()) {
+      return this.selectedSchoolId() || undefined;
     }
-    return this.selectedSchoolId() || undefined;
+    return this.session.schools().length > 1 ? this.scopedAuditSchoolId() : undefined;
+  }
+
+  private setupEventLoader(): void {
+    this.loadTrigger$
+      .pipe(
+        tap(() => {
+          if (this.events().length === 0) {
+            this.isInitialLoading.set(true);
+          } else {
+            this.isUpdating.set(true);
+          }
+          this.errorMessage.set('');
+        }),
+        switchMap(() =>
+          this.auditService
+            .getEvents({
+              page: this.currentPage(),
+              limit: this.pageSize(),
+              from: this.toStartOfDay(this.dateFrom()),
+              to: this.toEndOfDay(this.dateTo()),
+              actorId: this.selectedActor()?.id,
+              action: this.selectedAction() || undefined,
+              schoolId: this.eventsSchoolId
+            })
+            .pipe(
+              catchError((error) => {
+                this.isInitialLoading.set(false);
+                this.isUpdating.set(false);
+                const msg = this.userService.extractErrorMessage(error, 'Failed to retrieve audit events.');
+                this.errorMessage.set(msg);
+                this.toast.error('Failed to load audit events', { description: msg });
+                return of(null);
+              })
+            )
+        ),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe((res: PaginatedAuditEvents | null) => {
+        if (!res) return;
+        const computedTotalPages = Math.max(1, res.totalPages || Math.ceil(res.total / res.limit) || 1);
+        if (res.data.length === 0 && res.total > 0 && res.page > computedTotalPages) {
+          this.currentPage.set(computedTotalPages);
+          this.loadTrigger$.next();
+          return;
+        }
+        this.events.set(res.data);
+        this.totalEvents.set(res.total);
+        this.currentPage.set(res.page);
+        this.pageSize.set(res.limit);
+        this.totalPages.set(computedTotalPages);
+        this.isInitialLoading.set(false);
+        this.isUpdating.set(false);
+      });
+  }
+
+  private setupActorSearch(): void {
+    this.actorSearch$
+      .pipe(
+        tap((term) => {
+          if (!term.trim()) {
+            this.actorResults.set([]);
+            this.actorSearching.set(false);
+            this.actorMenuOpen.set(false);
+          }
+        }),
+        debounceTime(300),
+        switchMap((term) => {
+          if (!term.trim()) {
+            return of(null);
+          }
+          this.actorSearching.set(true);
+          this.actorMenuOpen.set(true);
+          const schoolId = this.actorSearchSchoolId;
+          return this.userService
+            .getUsers({ search: term, limit: 8, ...(schoolId ? { schoolId } : {}) })
+            .pipe(catchError(() => of({ data: [] as UserEntity[] })));
+        }),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe((res) => {
+        if (!res) return;
+        this.actorResults.set(res.data);
+        this.actorSearching.set(false);
+      });
   }
 
   loadEvents(): void {
-    if (this.events().length === 0) {
-      this.isInitialLoading.set(true);
-    } else {
-      this.isUpdating.set(true);
-    }
-    this.errorMessage.set('');
-
-    this.auditService
-      .getEvents({
-        page: this.currentPage(),
-        limit: this.pageSize(),
-        from: this.toStartOfDay(this.dateFrom()),
-        to: this.toEndOfDay(this.dateTo()),
-        actorId: this.selectedActor()?.id,
-        action: this.selectedAction() || undefined,
-        // Only platform admins choose a school; for school admins the API already scopes the list.
-        schoolId: this.session.isPlatformAdmin() ? this.selectedSchoolId() || undefined : undefined
-      })
-      .subscribe({
-        next: (res: PaginatedAuditEvents) => {
-          this.events.set(res.data);
-          this.totalEvents.set(res.total);
-          this.currentPage.set(res.page);
-          this.pageSize.set(res.limit);
-          this.totalPages.set(res.totalPages || Math.ceil(res.total / res.limit) || 1);
-          this.isInitialLoading.set(false);
-          this.isUpdating.set(false);
-        },
-        error: (error) => {
-          this.isInitialLoading.set(false);
-          this.isUpdating.set(false);
-          const msg = this.userService.extractErrorMessage(error, 'Failed to retrieve audit events.');
-          this.errorMessage.set(msg);
-          this.toast.error('Failed to load audit events', { description: msg });
-        }
-      });
+    this.loadTrigger$.next();
   }
 
   // ---- Filters ----
@@ -156,38 +261,13 @@ export class AuditListComponent implements OnInit {
 
   onActorSearchChange(term: string): void {
     this.actorSearch.set(term);
-    if (this.actorDebounceTimer) {
-      clearTimeout(this.actorDebounceTimer);
-    }
-    if (!term.trim()) {
-      this.actorResults.set([]);
-      this.actorMenuOpen.set(false);
-      return;
-    }
-    this.actorDebounceTimer = setTimeout(() => this.searchActors(), 300);
-  }
-
-  private searchActors(): void {
-    this.actorSearching.set(true);
-    this.actorMenuOpen.set(true);
-    const schoolId = this.actorSearchSchoolId;
-    this.userService
-      .getUsers({ search: this.actorSearch(), limit: 8, ...(schoolId ? { schoolId } : {}) })
-      .subscribe({
-        next: (res) => {
-          this.actorResults.set(res.data);
-          this.actorSearching.set(false);
-        },
-        error: () => {
-          this.actorResults.set([]);
-          this.actorSearching.set(false);
-        }
-      });
+    this.actorSearch$.next(term);
   }
 
   selectActor(user: UserEntity): void {
     this.selectedActor.set(user);
     this.actorSearch.set('');
+    this.actorSearch$.next('');
     this.actorResults.set([]);
     this.actorMenuOpen.set(false);
     this.applyFilters();
@@ -196,6 +276,7 @@ export class AuditListComponent implements OnInit {
   clearActor(reload = true): void {
     this.selectedActor.set(null);
     this.actorSearch.set('');
+    this.actorSearch$.next('');
     this.actorResults.set([]);
     this.actorMenuOpen.set(false);
     if (reload) {
@@ -243,6 +324,14 @@ export class AuditListComponent implements OnInit {
 
   // ---- Detail view ----
 
+  onEscape(): void {
+    if (this.selectedEvent()) {
+      this.closeDetail();
+    } else if (this.actorMenuOpen()) {
+      this.actorMenuOpen.set(false);
+    }
+  }
+
   openDetail(event: AuditEvent): void {
     this.selectedEvent.set(event);
   }
@@ -251,14 +340,19 @@ export class AuditListComponent implements OnInit {
     this.selectedEvent.set(null);
   }
 
-  /** `changes: { field: { from, to } }` becomes before/after rows; every other key is shown as is. */
+  /** `changes: { field: { from, to } | { before, after } }` becomes before/after rows; every other key is shown as is. */
   buildDetailRows(details: Record<string, unknown> | null | undefined): AuditDetailRow[] {
     const rows: AuditDetailRow[] = [];
     for (const [key, value] of Object.entries(details ?? {})) {
       if (key === 'changes' && this.isRecord(value)) {
         for (const [field, change] of Object.entries(value)) {
-          if (this.isRecord(change) && ('from' in change || 'to' in change)) {
-            rows.push({ key: field, from: this.format(change['from']), to: this.format(change['to']) });
+          if (
+            this.isRecord(change) &&
+            ('from' in change || 'to' in change || 'before' in change || 'after' in change)
+          ) {
+            const from = 'before' in change ? change['before'] : change['from'];
+            const to = 'after' in change ? change['after'] : change['to'];
+            rows.push({ key: field, from: this.format(from), to: this.format(to) });
           } else {
             rows.push({ key: `changes.${field}`, value: this.format(change) });
           }

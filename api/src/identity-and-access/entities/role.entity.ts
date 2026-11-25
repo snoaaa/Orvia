@@ -13,6 +13,13 @@ export class RoleEntity {
   @ApiPropertyOptional({ example: ['users:read', 'users:invite'], description: 'Permission codes assigned to this role' })
   permissions?: string[];
 
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['3f2b8c1a-6d4e-4f5a-9b7c-1e2d3f4a5b6c'],
+    description: 'Permission ids granted by this role, same order as `permissions`',
+  })
+  permissionIds?: string[];
+
   @ApiPropertyOptional({ example: 5, description: 'Number of active user assignments with this role' })
   assignedUsersCount?: number;
 

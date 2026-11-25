@@ -158,7 +158,7 @@ describe('OverviewService (Issue #93 — Role-Adapted Dashboard Summary)', () =>
     expect(mockPrisma.document.count).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          space: { schoolId: { in: ['school-a'] } },
+          space: { deletedAt: null, schoolId: { in: ['school-a'] } },
         }),
       }),
     );

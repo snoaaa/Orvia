@@ -58,8 +58,8 @@ describe('IdentityAndAccessService - create role', () => {
           scope: 'school',
           createdAt: now,
           updatedAt: now,
-          rolePermissions: catalogue.map((p) => ({ permission: { code: p.code } })),
-          _count: { assignments: 0 },
+          rolePermissions: catalogue.map((p) => ({ permission: { id: p.id, code: p.code } })),
+          assignments: [],
         }),
       },
     };

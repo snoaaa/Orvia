@@ -11,12 +11,12 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequirePermission } from '../../auth/decorators/auth.decorators.js';
 import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import {
   CreateConversationDto,
-  CreateMessageDto,
+  AskQuestionDto,
   ListConversationsQueryDto,
   ListReportsQueryDto,
   ListSavedAnswersQueryDto,
@@ -252,14 +252,38 @@ export class ConversationsController {
 
   @Post(':id/messages')
   @RequirePermission('messages:send')
-  @ApiOperation({ summary: 'Post a new message or query to conversation' })
+  @ApiOperation({
+    summary: 'Ask a question in a conversation (#119)',
+    description:
+      'Body: the `question` and, optionally, `spaceIds` to search only some spaces. Answers 201 with the **pending ' +
+      'answer**: poll `GET /conversations/{id}/messages/{messageId}/status` with its `id` until `status` is ' +
+      '`done` (or `failed`); the final answer has its text with citation markers `[n]`, its `citations` and ' +
+      '`notEnoughEvidence`. See "Chat contract (#119)" in the API README. Storing the question and generating ' +
+      'the answer come with #120 and #121.',
+  })
   @ApiParam({ name: 'id', description: 'Conversation UUID' })
-  @ApiResponse({ status: 201, description: 'Message created', type: MessageEntity })
-  async addMessage(
+  @ApiBody({
+    type: AskQuestionDto,
+    examples: {
+      question: { summary: 'A question', value: { question: 'How does backpropagation use the chain rule?' } },
+      inSomeSpaces: {
+        summary: 'A question searched in some spaces only',
+        value: {
+          question: 'What is on the exam?',
+          spaceIds: ['123e4567-e89b-12d3-a456-426614174011', '123e4567-e89b-12d3-a456-426614174012'],
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Question accepted; the answer is pending', type: MessageEntity })
+  @ApiResponse({ status: 400, description: 'Invalid conversation id, empty or too long question, invalid spaceIds, or any other field' })
+  @ApiResponse({ status: 404, description: "Unknown or deleted conversation, or another user's" })
+  async askQuestion(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: CreateMessageDto,
+    @Body() dto: AskQuestionDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<MessageEntity> {
-    return this.conversationsService.addMessage(id, dto);
+    return this.conversationsService.askQuestion(id, dto, actor);
   }
 
   @Patch(':id')

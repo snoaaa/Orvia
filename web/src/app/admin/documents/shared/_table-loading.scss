@@ -1,0 +1,45 @@
+// Loading behaviour of the portal tables (same as the users list): the table keeps its height while
+// a page loads, fades, and shows a thin progress bar on top.
+@mixin table-loading($min-height: 360px) {
+  .table-responsive {
+    min-height: $min-height;
+    position: relative;
+  }
+
+  .table-updating {
+    opacity: 0.55;
+    transition: opacity 0.15s ease-in-out;
+    pointer-events: none;
+  }
+
+  .table-loading-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    overflow: hidden;
+    background-color: rgba(0, 0, 0, 0.08);
+    z-index: 10;
+
+    .table-loading-bar {
+      width: 100%;
+      height: 100%;
+      background-color: var(--bs-primary, #000000);
+      animation: tableLoadingIndeterminate 1.2s infinite ease-in-out;
+      transform-origin: 0% 50%;
+    }
+  }
+
+  @keyframes tableLoadingIndeterminate {
+    0% {
+      transform: translateX(-100%);
+    }
+    50% {
+      transform: translateX(0%);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+}

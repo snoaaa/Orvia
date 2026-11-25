@@ -3,9 +3,9 @@
     <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
       <div class="d-flex align-items-center gap-2">
         <h5 class="mb-0">Audit Trail</h5>
-        @if (!session.isPlatformAdmin() && session.activeSchoolName()) {
+        @if (!session.isPlatformAdmin() && activeAuditSchoolName()) {
           <span class="badge bg-light-primary border border-primary" id="audit-fixed-school">
-            {{ session.activeSchoolName() }}
+            {{ activeAuditSchoolName() }}
           </span>
         }
         <span class="badge bg-light-secondary border border-secondary">Read-only</span>

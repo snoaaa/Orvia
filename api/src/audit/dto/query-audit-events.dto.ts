@@ -15,7 +15,7 @@ export class QueryAuditEventsDto {
   action?: string;
 
   @ApiPropertyOptional({ example: '123e4567-e89b-12d3-a456-426614174000', description: 'Filter by actor UUID' })
-  @IsString()
+  @IsUUID()
   @IsOptional()
   actorId?: string;
 

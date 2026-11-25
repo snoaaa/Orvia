@@ -38,7 +38,7 @@ export interface AuditEventFilter {
   schoolId?: string;
 }
 
-/** Audited actions (mirrors `AuditAction` in the API). */
+/** Audited actions (mirrors `AuditAction` in `api/src/audit/constants/audit-events.constants.ts`). */
 export const AUDIT_ACTIONS: readonly string[] = [
   'login_success',
   'login_failure',
@@ -48,6 +48,14 @@ export const AUDIT_ACTIONS: readonly string[] = [
   'user_invited',
   'password_setup',
   'role_assigned',
+  'role_updated',
+  'role_deleted',
+  'school_created',
+  'school_updated',
+  'school_deactivated',
+  'school_reactivated',
+  'school_domain_added',
+  'school_domain_removed',
   'permission_granted',
   'permission_revoked',
   'assignment_updated',
@@ -59,5 +67,8 @@ export const AUDIT_ACTIONS: readonly string[] = [
   'document_replaced',
   'document_deleted',
   'document_published',
-  'document_access_changed'
+  'document_access_changed',
+  'space_created',
+  'space_updated',
+  'space_deleted'
 ];

@@ -1,0 +1,112 @@
+@if (document) {
+  <div class="modal-backdrop fade show"></div>
+  <div
+    class="modal fade show d-block"
+    tabindex="-1"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="document-metadata-title"
+    (click)="onBackdropClick($event)"
+  >
+    <div class="modal-dialog modal-dialog-centered" role="document">
+      <div class="modal-content shadow-lg border-0 rounded-3">
+        <form [formGroup]="form" (ngSubmit)="save()" novalidate>
+          <div class="modal-header">
+            <h5 class="modal-title" id="document-metadata-title">Edit document details</h5>
+            <button
+              type="button"
+              class="btn-close"
+              aria-label="Close"
+              [disabled]="isSaving()"
+              (click)="cancel()"
+            ></button>
+          </div>
+
+          <div class="modal-body">
+            @if (generalError()) {
+              <div class="alert alert-danger" role="alert" id="document-metadata-error">
+                {{ generalError() }}
+              </div>
+            }
+
+            <div class="form-group mb-3">
+              <label class="form-label" for="document-title">
+                Title <span class="text-danger">*</span>
+              </label>
+              <input
+                id="document-title"
+                type="text"
+                class="form-control"
+                formControlName="title"
+                autocomplete="off"
+                [class.is-invalid]="fieldError('title')"
+              />
+              @if (fieldError('title'); as message) {
+                <div class="invalid-feedback d-block">{{ message }}</div>
+              }
+            </div>
+
+            <div class="form-group mb-3">
+              <label class="form-label" for="document-author">Author</label>
+              <input
+                id="document-author"
+                type="text"
+                class="form-control"
+                formControlName="author"
+                autocomplete="off"
+                [class.is-invalid]="fieldError('author')"
+              />
+              @if (fieldError('author'); as message) {
+                <div class="invalid-feedback d-block">{{ message }}</div>
+              }
+            </div>
+
+            <div class="form-group mb-0">
+              <label class="form-label" for="document-tags">Tags</label>
+              <input
+                id="document-tags"
+                type="text"
+                class="form-control"
+                formControlName="tags"
+                placeholder="e.g. math, exam"
+                autocomplete="off"
+                [class.is-invalid]="fieldError('tags')"
+              />
+              @if (fieldError('tags'); as message) {
+                <div class="invalid-feedback d-block">{{ message }}</div>
+              } @else {
+                <small class="text-muted d-block mt-1">
+                  Separated by commas, up to {{ maxTags }} tags.
+                </small>
+              }
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn btn-light-secondary"
+              [disabled]="isSaving()"
+              (click)="cancel()"
+            >
+              Cancel
+            </button>
+            <button
+              id="document-metadata-save"
+              type="submit"
+              class="btn btn-primary d-inline-flex align-items-center gap-1"
+              [disabled]="isSaving() || !hasChanges()"
+            >
+              @if (isSaving()) {
+                <span class="spinner-border spinner-border-sm" role="status"></span>
+                <span>Saving...</span>
+              } @else {
+                <span>Save Changes</span>
+              }
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+}

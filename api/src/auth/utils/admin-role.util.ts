@@ -39,6 +39,9 @@ export function hasAdminAccess(roles: readonly ClassifiableRole[]): boolean {
   return roles.some(isAdminRole);
 }
 
+/** Permission that marks a platform administrator: only a platform-scoped role may hold it. */
+export const PLATFORM_ADMIN_PERMISSION = 'system:manage';
+
 /**
  * Permissions that grant web portal access for document management (§4.6, #88, #91).
  */

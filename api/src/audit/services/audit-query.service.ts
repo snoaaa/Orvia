@@ -27,7 +27,9 @@ export class AuditQueryService {
     if (query.schoolId && actor) {
       assertSchoolAccess(actor, 'audit:read', query.schoolId);
     }
-    if (query.from && query.to && new Date(query.from) > new Date(query.to)) {
+    const fromDate = query.from ? this.parseInstant(query.from, false) : undefined;
+    const toDate = query.to ? this.parseInstant(query.to, true) : undefined;
+    if (fromDate && toDate && fromDate > toDate) {
       throw new BadRequestException('`from` must not be after `to`');
     }
     const where: Prisma.AuditEventWhereInput = {
@@ -35,10 +37,10 @@ export class AuditQueryService {
       ...(query.action && { action: query.action }),
       ...(query.actorId && { actorId: query.actorId }),
       ...(query.entityType && { entityType: query.entityType }),
-      ...((query.from || query.to) && {
+      ...((fromDate || toDate) && {
         createdAt: {
-          ...(query.from && { gte: new Date(query.from) }),
-          ...(query.to && { lte: new Date(query.to) }),
+          ...(fromDate && { gte: fromDate }),
+          ...(toDate && { lte: toDate }),
         },
       }),
       // The caller's scope is always applied; an (already validated) schoolId narrows it further.
@@ -76,8 +78,16 @@ export class AuditQueryService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.max(1, Math.ceil(total / limit)),
     };
+  }
+
+  /** Treat date-only ISO inputs (`YYYY-MM-DD`) as whole UTC days so `to` is inclusive. */
+  private parseInstant(raw: string, endOfDay: boolean): Date {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return new Date(`${raw}T${endOfDay ? '23:59:59.999Z' : '00:00:00.000Z'}`);
+    }
+    return new Date(raw);
   }
 
   /** Re-computes every hash in insertion order. Reads in batches to bound memory. */

@@ -308,8 +308,10 @@ describe('DocumentAccessService (#109, #110)', () => {
     it('answers 404 for a missing or deleted document', async () => {
       prisma.document.findUnique.mockResolvedValueOnce(null);
       await expect(service.listRules('doc-1', manager())).rejects.toBeInstanceOf(NotFoundException);
-      prisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: new Date(), space: { schoolId: 'school-a' } });
+      prisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: new Date(), space: { schoolId: 'school-a', deletedAt: null } });
       await expect(replace([])).rejects.toBeInstanceOf(NotFoundException);
+      prisma.document.findUnique.mockResolvedValueOnce({ id: 'doc-1', deletedAt: null, space: { schoolId: 'school-a', deletedAt: new Date() } });
+      await expect(service.listRules('doc-1', manager())).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('answers 403 for a document of a school the actor does not manage; a platform admin manages all', async () => {

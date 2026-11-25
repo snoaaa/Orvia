@@ -1,0 +1,54 @@
+@use '../../shared/table-loading' as table;
+
+@include table.table-loading();
+
+.filter-input {
+  width: 200px;
+}
+
+.filter-select {
+  width: 150px;
+}
+
+.page-size-select {
+  width: 75px;
+}
+
+.min-w-0 {
+  min-width: 0;
+}
+
+.title-cell {
+  max-width: 420px;
+}
+
+.type-column {
+  width: 120px;
+}
+
+.version-column {
+  width: 90px;
+}
+
+.status-column {
+  width: 140px;
+}
+
+.date-column {
+  width: 130px;
+}
+
+.action-column {
+  width: 230px;
+}
+
+.status-badge {
+  cursor: default;
+}
+
+// The theme outlines disabled icon buttons; show them as faded icons instead.
+.btn-icon:disabled {
+  border-color: transparent;
+  background-color: transparent;
+  opacity: 0.4;
+}

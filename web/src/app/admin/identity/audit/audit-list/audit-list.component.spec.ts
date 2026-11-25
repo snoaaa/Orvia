@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { of } from 'rxjs';
+import { Subject, of } from 'rxjs';
 import { PortalSessionService } from '../../services/portal-session.service';
 import { UserManagementService } from '../../users/services/user-management.service';
 import { AuditEvent, PaginatedAuditEvents } from '../models/audit.model';
@@ -183,18 +183,53 @@ describe('AuditListComponent', () => {
       expect(component.selectedEvent()).toBeNull();
     });
 
-    it('builds before/after rows from details.changes and plain rows otherwise', () => {
+    it('builds before/after rows from details.changes ({from,to} and {before,after}) and plain rows otherwise', () => {
       const rows = component.buildDetailRows({
-        changes: { title: { from: 'Old', to: 'New' } },
+        changes: {
+          title: { from: 'Old', to: 'New' },
+          name: { before: 'Demo A', after: 'Demo B' }
+        },
         previousRole: 'STUDENT',
         role: 'STAFF',
         rules: [{ type: 'school' }]
       });
       expect(rows).toContainEqual({ key: 'title', from: 'Old', to: 'New' });
+      expect(rows).toContainEqual({ key: 'name', from: 'Demo A', to: 'Demo B' });
       expect(rows).toContainEqual({ key: 'previousRole', value: 'STUDENT', previous: true });
       expect(rows).toContainEqual({ key: 'role', value: 'STAFF', previous: false });
       expect(rows).toContainEqual({ key: 'rules', value: '[{"type":"school"}]', previous: false });
       expect(component.buildDetailRows({})).toEqual([]);
+    });
+
+    it('drops stale responses when filters change quickly (switchMap) and closes modal on Escape', () => {
+      const first$ = new Subject<PaginatedAuditEvents>();
+      const second$ = new Subject<PaginatedAuditEvents>();
+      mockAudit.getEvents.mockReturnValueOnce(first$).mockReturnValueOnce(second$);
+
+      component.onActionChange('login_success');
+      component.onActionChange('logout');
+
+      second$.next(page([event({ id: 'newer', action: 'logout' })]));
+      first$.next(page([event({ id: 'stale', action: 'login_success' })]));
+
+      expect(component.events().map((e) => e.id)).toEqual(['newer']);
+
+      component.openDetail(component.events()[0]);
+      expect(component.selectedEvent()?.id).toBe('newer');
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(component.selectedEvent()).toBeNull();
+    });
+
+    it('clamps back to the last page when a page turns out past the end', () => {
+      mockAudit.getEvents
+        .mockReturnValueOnce(of(page([], { total: 15, page: 5, limit: 10, totalPages: 2 })))
+        .mockReturnValueOnce(of(page([event()], { total: 15, page: 2, limit: 10, totalPages: 2 })));
+
+      component.currentPage.set(5);
+      component.loadEvents();
+
+      expect(component.currentPage()).toBe(2);
+      expect(mockAudit.getEvents).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }));
     });
   });
 
@@ -213,6 +248,37 @@ describe('AuditListComponent', () => {
       vi.advanceTimersByTime(300);
       vi.useRealTimers();
       expect(mockUsers.getUsers).toHaveBeenCalledWith(expect.objectContaining({ schoolId: 'school-a' }));
+    });
+
+    it('scopes to the active school and reloads when a multi-school admin switches schools', () => {
+      session.user.set({
+        id: 'multi',
+        email: 'multi@x.edu',
+        fullName: 'Multi Admin',
+        status: 'ACTIVE',
+        role: 'SCHOOL_ADMIN',
+        permissions: ['audit:read'],
+        schoolIds: ['school-a', 'school-b'],
+        schools: [
+          { id: 'school-a', name: 'Demo School A' },
+          { id: 'school-b', name: 'Demo School B' }
+        ],
+        isPlatformAdmin: false,
+        assignments: [
+          { role: 'SCHOOL_ADMIN', scope: 'school', schoolId: 'school-a', groupId: null, permissions: ['audit:read'] },
+          { role: 'SCHOOL_ADMIN', scope: 'school', schoolId: 'school-b', groupId: null, permissions: ['audit:read'] }
+        ]
+      });
+      fixture.detectChanges();
+
+      expect(mockAudit.getEvents).toHaveBeenLastCalledWith(expect.objectContaining({ schoolId: 'school-a' }));
+
+      component.selectedActor.set({ id: 'u1', fullName: 'Jane Doe', email: 'jane@school.edu' } as any);
+      session.selectedSchoolId.set('school-b');
+      fixture.detectChanges();
+
+      expect(component.selectedActor()).toBeNull();
+      expect(mockAudit.getEvents).toHaveBeenLastCalledWith(expect.objectContaining({ schoolId: 'school-b', page: 1 }));
     });
   });
 });

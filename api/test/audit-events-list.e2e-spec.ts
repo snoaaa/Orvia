@@ -116,14 +116,19 @@ describe('Audit events list (e2e)', () => {
     const future = new Date(Date.now() + 86_400_000).toISOString();
     const none = await events(platformAdminId, { schoolId: schools.A, from: future });
     expect(none.body.total).toBe(0);
+    expect(none.body.totalPages).toBe(1);
     const past = new Date(stamp - 60_000).toISOString();
     const some = await events(platformAdminId, { schoolId: schools.A, from: past, to: future });
     expect(some.body.total).toBe(3);
+    const todayDateOnly = new Date().toISOString().slice(0, 10);
+    const sameDay = await events(platformAdminId, { schoolId: schools.A, from: todayDateOnly, to: todayDateOnly });
+    expect(sameDay.body.total).toBe(3);
     expect((await events(platformAdminId, { from: future, to: past })).status).toBe(400);
   });
 
   it('validates its query', async () => {
     expect((await events(platformAdminId, { schoolId: 'nope' })).status).toBe(400);
+    expect((await events(platformAdminId, { actorId: 'not-a-uuid' })).status).toBe(400);
     expect((await events(platformAdminId, { from: 'yesterday' })).status).toBe(400);
     expect((await events(platformAdminId, { limit: 101 })).status).toBe(400);
     expect((await events(platformAdminId, { page: 0 })).status).toBe(400);
