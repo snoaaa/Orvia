@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { User, UserStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import argon2 from 'argon2';
-import { AuditEvents } from '../../audit/builders/audit-events.builder.js';
+import { AuditEvents, type SchoolChanges, type SchoolSnapshot } from '../../audit/builders/audit-events.builder.js';
 import { AuditService } from '../../audit/services/audit.service.js';
 import { SYSTEM_AUDIT_CONTEXT, type AuditRequestContext } from '../../audit/utils/audit-request-context.util.js';
 import { ActiveSessionEntity } from '../../auth/entities/index.js';
@@ -49,6 +49,53 @@ function roleGrantsAdmin(role: RoleWithPermissions): boolean {
     scope: role.scope,
     permissions: role.rolePermissions?.map((rp) => rp.permission.code) ?? [],
   });
+}
+
+/** JSON with sorted keys, so two objects with the same content but a different key order compare equal. */
+function stableJson(value: unknown): string {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+}
+
+/** The audited view of a school row (#50): its mutable fields, domains sorted. */
+function schoolSnapshot(school: {
+  name: string;
+  status: string;
+  allowedDomains?: string | null;
+  settings?: unknown;
+  domains?: Array<{ domain: string }>;
+}): SchoolSnapshot {
+  const domains = (
+    school.domains ? school.domains.map((d) => d.domain) : (school.allowedDomains ?? '').split(',')
+  )
+    .map((domain) => domain.trim())
+    .filter(Boolean)
+    .sort();
+  return {
+    name: school.name,
+    status: school.status,
+    domains,
+    settings: school.settings ?? null,
+  };
+}
+
+/** Fields of two school snapshots that differ, as `{ before, after }`; empty when nothing moved. */
+function schoolChanges(before: SchoolSnapshot, after: SchoolSnapshot): SchoolChanges {
+  const changes: SchoolChanges = {};
+  if (before.name !== after.name) changes.name = { before: before.name, after: after.name };
+  if (before.status !== after.status) changes.status = { before: before.status, after: after.status };
+  if (stableJson(before.domains) !== stableJson(after.domains)) {
+    changes.domains = { before: before.domains, after: after.domains };
+  }
+  if (stableJson(before.settings) !== stableJson(after.settings)) {
+    changes.settings = { before: before.settings ?? null, after: after.settings ?? null };
+  }
+  return changes;
 }
 
 @Injectable()
@@ -1099,60 +1146,79 @@ export class IdentityAndAccessService {
     id: string,
     dto: UpdateSchoolDto,
     actor: AuthenticatedUser,
-    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolEntity> {
     assertSchoolAccess(actor, 'schools:update', id);
 
-    const school = await this.prisma.school.findUnique({
-      where: { id },
-    });
-    if (!school) {
-      throw new NotFoundException(`School with ID '${id}' not found`);
-    }
-
+    let trimmedName: string | undefined;
     if (dto.name !== undefined) {
-      const trimmedName = dto.name.trim();
+      trimmedName = dto.name.trim();
       if (!trimmedName) {
         throw new BadRequestException('School name cannot be empty');
-      }
-
-      const duplicate = await this.prisma.school.findFirst({
-        where: { name: trimmedName },
-      });
-      if (duplicate && duplicate.id !== id) {
-        throw new ConflictException(`School with name '${trimmedName}' already exists`);
       }
     }
 
     // `undefined` = leave the domains untouched. `''` = clear them.
-    let domainList: string[] | null = null;
-    if (dto.allowedDomains !== undefined) {
-      // Same rules as POST /schools/:id/domains (#32): valid format, no overlap with another school.
-      domainList = parseDomainList(dto.allowedDomains);
-      await assertDomainsAvailable(this.prisma, domainList, id);
-    }
+    const domainList = dto.allowedDomains !== undefined ? parseDomainList(dto.allowedDomains) : null;
 
     const data = {
-      ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+      ...(trimmedName !== undefined ? { name: trimmedName } : {}),
       ...(dto.settings !== undefined ? { settings: dto.settings as object } : {}),
       ...(domainList !== null ? { allowedDomains: domainList.join(',') } : {}),
     };
 
-    // Only pay for a transaction when the domain rows actually change.
-    const updated =
-      domainList === null
-        ? await this.prisma.school.update({ where: { id }, data, include: { domains: true } })
-        : await this.prisma.$transaction(async (tx) => {
-            await tx.schoolDomain.deleteMany({ where: { schoolId: id } });
-            if (domainList.length > 0) {
-              await tx.schoolDomain.createMany({
-                data: domainList.map((domain) => ({ schoolId: id, domain })),
-              });
-            }
-            return tx.school.update({ where: { id }, data, include: { domains: true } });
-          });
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const school = await this.lockSchoolInTx(tx, id);
+        const before = schoolSnapshot(school);
 
-    return SchoolMapper.toEntity(updated);
+        if (trimmedName !== undefined) {
+          const duplicate = await tx.school.findFirst({ where: { name: trimmedName } });
+          if (duplicate && duplicate.id !== id) {
+            throw new ConflictException(`School with name '${trimmedName}' already exists`);
+          }
+        }
+
+        if (domainList !== null) {
+          // Same rules as POST /schools/:id/domains (#32): valid format, no overlap with another school.
+          await assertDomainsAvailable(tx, domainList, id);
+          await tx.schoolDomain.deleteMany({ where: { schoolId: id } });
+          if (domainList.length > 0) {
+            await tx.schoolDomain.createMany({
+              data: domainList.map((domain) => ({ schoolId: id, domain })),
+            });
+          }
+        }
+
+        const saved = await tx.school.update({ where: { id }, data, include: { domains: true } });
+
+        // #50: one row per edit, with the fields that actually moved (nothing at all for a no-op payload).
+        const changes = schoolChanges(before, schoolSnapshot(saved));
+        if (Object.keys(changes).length > 0) {
+          await this.audit.record(
+            AuditEvents.schoolUpdated(
+              {
+                schoolId: saved.id,
+                school: saved.name,
+                changes,
+                updatedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+              },
+              auditContext,
+            ),
+            tx,
+          );
+        }
+
+        return saved;
+      });
+
+      return SchoolMapper.toEntity(updated);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('School name or domain conflicts with another school');
+      }
+      throw error;
+    }
   }
 
   /**
@@ -1167,26 +1233,9 @@ export class IdentityAndAccessService {
   async deactivateSchool(
     id: string,
     actor?: AuthenticatedUser,
-    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolEntity> {
-    if (actor && schoolsWithPermission(actor, 'schools:delete') !== 'all') {
-      throw new ForbiddenException('Only platform administrators may deactivate schools');
-    }
-
-    const school = await this.prisma.school.findUnique({
-      where: { id },
-    });
-    if (!school) {
-      throw new NotFoundException(`School with ID '${id}' not found`);
-    }
-
-    const updated = await this.prisma.school.update({
-      where: { id },
-      data: { status: 'deactivated' },
-      include: { domains: true },
-    });
-
-    return SchoolMapper.toEntity(updated);
+    return this.setSchoolStatus(id, 'deactivated', actor, auditContext);
   }
 
   /**
@@ -1201,26 +1250,66 @@ export class IdentityAndAccessService {
   async reactivateSchool(
     id: string,
     actor?: AuthenticatedUser,
-    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolEntity> {
-    if (actor && schoolsWithPermission(actor, 'schools:delete') !== 'all') {
-      throw new ForbiddenException('Only platform administrators may reactivate schools');
-    }
+    return this.setSchoolStatus(id, 'active', actor, auditContext);
+  }
 
-    const school = await this.prisma.school.findUnique({
-      where: { id },
-    });
+  private async lockSchoolInTx(tx: Prisma.TransactionClient, id: string) {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM schools WHERE id = ${id} FOR UPDATE`;
+    if (locked.length === 0) {
+      throw new NotFoundException(`School with ID '${id}' not found`);
+    }
+    const school = await tx.school.findUnique({ where: { id }, include: { domains: true } });
     if (!school) {
       throw new NotFoundException(`School with ID '${id}' not found`);
     }
+    return school;
+  }
 
-    const updated = await this.prisma.school.update({
-      where: { id },
-      data: { status: 'active' },
-      include: { domains: true },
+  private async setSchoolStatus(
+    id: string,
+    targetStatus: 'active' | 'deactivated',
+    actor: AuthenticatedUser | undefined,
+    auditContext: AuditRequestContext,
+  ): Promise<SchoolEntity> {
+    if (actor && schoolsWithPermission(actor, 'schools:delete') !== 'all') {
+      throw new ForbiddenException(
+        `Only platform administrators may ${targetStatus === 'deactivated' ? 'deactivate' : 'reactivate'} schools`,
+      );
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const school = await this.lockSchoolInTx(tx, id);
+      // #50: idempotent endpoint — audit the transition, not a second call that changes nothing.
+      if (school.status === targetStatus) {
+        return school;
+      }
+
+      const updated = await tx.school.update({
+        where: { id },
+        data: { status: targetStatus },
+        include: { domains: true },
+      });
+
+      const actorRef = actor ? { userId: actor.id, role: actor.role, schoolId: actor.schoolId } : null;
+      const event =
+        targetStatus === 'deactivated'
+          ? AuditEvents.schoolDeactivated(
+              { schoolId: updated.id, school: updated.name, previousStatus: school.status, deactivatedBy: actorRef },
+              auditContext,
+            )
+          : AuditEvents.schoolReactivated(
+              { schoolId: updated.id, school: updated.name, previousStatus: school.status, reactivatedBy: actorRef },
+              auditContext,
+            );
+      await this.audit.record(event, tx);
+
+      return updated;
     });
 
-    return SchoolMapper.toEntity(updated);
+    return SchoolMapper.toEntity(result);
   }
 
   /**
@@ -1236,7 +1325,7 @@ export class IdentityAndAccessService {
   async createSchool(
     dto: CreateSchoolDto,
     actor?: AuthenticatedUser,
-    _auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
+    auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolEntity> {
     if (actor && schoolsWithPermission(actor, 'schools:create') !== 'all') {
       throw new ForbiddenException('Only a platform administrator can create a school');
@@ -1247,38 +1336,59 @@ export class IdentityAndAccessService {
       throw new BadRequestException('School name is required and cannot be empty');
     }
 
-    const existingByName = await this.prisma.school.findFirst({
-      where: { name: trimmedName },
-    });
-    if (existingByName) {
-      throw new ConflictException(`School with name '${trimmedName}' already exists`);
-    }
-
-    const id = randomUUID();
     // Same rules as POST /schools/:id/domains (#32): valid format, no overlap with another school.
     const domainList = parseDomainList(dto.allowedDomains || '');
-    await assertDomainsAvailable(this.prisma, domainList);
-
     const status = dto.status?.trim() || 'active';
 
-    const created = await this.prisma.school.create({
-      data: {
-        id,
-        name: trimmedName,
-        status,
-        allowedDomains: domainList.join(','),
-        settings: (dto.settings as object) || null,
-        domains:
-          domainList.length > 0
-            ? {
-                create: domainList.map((domain) => ({ domain })),
-              }
-            : undefined,
-      },
-      include: { domains: true },
-    });
+    try {
+      const created = await this.prisma.$transaction(async (tx) => {
+        const existingByName = await tx.school.findFirst({ where: { name: trimmedName } });
+        if (existingByName) {
+          throw new ConflictException(`School with name '${trimmedName}' already exists`);
+        }
 
-    return SchoolMapper.toEntity(created);
+        await assertDomainsAvailable(tx, domainList);
+
+        const row = await tx.school.create({
+          data: {
+            id: randomUUID(),
+            name: trimmedName,
+            status,
+            allowedDomains: domainList.join(','),
+            settings: (dto.settings as object) || null,
+            domains:
+              domainList.length > 0
+                ? {
+                    create: domainList.map((domain) => ({ domain })),
+                  }
+                : undefined,
+          },
+          include: { domains: true },
+        });
+
+        // #50: one row for the registration, with the snapshot the school started with.
+        await this.audit.record(
+          AuditEvents.schoolCreated(
+            {
+              schoolId: row.id,
+              snapshot: schoolSnapshot(row),
+              createdBy: actor ? { userId: actor.id, role: actor.role, schoolId: actor.schoolId } : null,
+            },
+            auditContext,
+          ),
+          tx,
+        );
+
+        return row;
+      });
+
+      return SchoolMapper.toEntity(created);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('School name or domain conflicts with another school');
+      }
+      throw error;
+    }
   }
 
   async findAllRoles(): Promise<RoleEntity[]> {

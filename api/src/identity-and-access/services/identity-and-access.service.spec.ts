@@ -118,6 +118,9 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
       },
       schoolDomain: {
         findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        createMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
       role: {
         findUnique: vi.fn().mockImplementation(({ where }: { where: { name: string } }) => {
@@ -198,8 +201,10 @@ describe('IdentityAndAccessService - User Invitation (Issue #9)', () => {
               }),
             ),
           },
-          // Role edits and invitations both write through these collections; reusing the same
-          // doubles keeps `expect(mockPrisma.role.update)` style assertions working.
+          // Role edits, school writes and invitations both write through these collections; reusing the
+          // same doubles keeps `expect(mockPrisma.<model>.update)` style assertions working.
+          school: mockPrisma.school,
+          schoolDomain: mockPrisma.schoolDomain,
           userAssignment: mockPrisma.userAssignment,
           role: mockPrisma.role,
           rolePermission: mockPrisma.rolePermission,

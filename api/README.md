@@ -903,11 +903,32 @@ SELECT school_id, name, COUNT(*) FROM spaces GROUP BY school_id, name HAVING COU
   across several API instances; `prev_hash` is also unique, so the chain can never fork.
 - **No secrets:** `details` goes through `redactSecrets()`, which replaces passwords, tokens,
   secrets, API keys, cookies, JWTs, bearer headers and legacy `$2b$` hashes with `[REDACTED]`. Do not
-  pass them anyway.
+  pass them anyway. This is what makes it safe to audit a school's free-form `settings` (#50): a
+  provider key stored there is recorded as `[REDACTED]`.
 - **One row per event:** the global exception filter records `access_denied` for a 403 only if the
   request has not already recorded its own event (e.g. a `login_failure`).
 - **No foreign keys** on `actor_id` / `school_id`: deleting a user or school must not modify
   audit rows.
+
+### Schools and their domains (#50)
+
+Every school write records one `identity_access` row inside the write transaction, with `school_id` set
+to the target school, `details.schoolId` and `details.school`, and what changed:
+
+- `school_created` — `PATCH`-free snapshot: `details.before` is `null` and `details.after` holds
+  `name`, `status`, `domains` and (redacted) `settings` (`null` when unset).
+- `school_updated` — `details.changes` holds **only the fields that moved**, each as
+  `{ before, after }` (`name`, `settings`, `domains`). A payload that changes nothing writes
+  nothing. Replacing the allowed-domain list through `PATCH /schools/{id}` is one `school_updated` row
+  with a `domains` change — it does not fabricate `school_domain_added`/`removed` rows.
+- `school_deactivated` / `school_reactivated` — `details.changes.status.before` → `after`. The
+  endpoints are idempotent, so a second call that does not change the status records nothing.
+- `school_domain_added` / `school_domain_removed` — `details.domain` names the domain, and
+  `details.changes.domains` carries the whole allowed-domain set before and after (the value invites and
+  Google login actually read).
+- The "who is assigned to which school, when" half of §4.5 is `role_assigned`
+  (`details.email`, `schoolId`, `role`, `previousRole`, `groupId`), already emitted by
+  `POST /assignments` and `PATCH /identity/users/{id}/role`.
 
 ### Event catalogue
 
@@ -922,6 +943,12 @@ SELECT school_id, name, COUNT(*) FROM spaces GROUP BY school_id, name HAVING COU
 | `identity_access` | `role_assigned` | A user's role in a school is created or replaced (`POST /assignments`, `PATCH /identity/users/{id}/role`) | the assigning admin | `user` | `email`, `schoolId`, `groupId` (`POST /assignments` only), `role`, `previousRole` |
 | `identity_access` | `role_updated` | A custom role is edited (`PATCH /roles/{id}`, #45); not recorded when nothing changes | the platform admin | `role` | `role`, `previousName`, `previousScope`, `scope`, `permissions`, `addedPermissions`, `removedPermissions` |
 | `identity_access` | `role_deleted` | An unused custom role is deleted (`DELETE /roles/{id}`, #46) | the platform admin | `role` | `role`, `scope`, `documentAccessRulesRemoved`, `assignmentRecordsRemoved` |
+| `identity_access` | `school_created` | A school is registered (`POST /schools`) | the creating admin | `school` | `schoolId`, `school`, `before: null`, `after` (`name`, `status`, `domains`, redacted `settings`) |
+| `identity_access` | `school_updated` | A school's name, settings or allowed domains change (`PATCH /schools/{id}`); not recorded when nothing changes | the admin | `school` | `schoolId`, `school`, `changes` (`name` / `settings` / `domains`, each `{ before, after }`) |
+| `identity_access` | `school_deactivated` | A school is deactivated (`PATCH /schools/{id}/deactivate`); a repeated call that changes nothing records nothing | the platform admin | `school` | `schoolId`, `school`, `changes.status: { before, after }` |
+| `identity_access` | `school_reactivated` | A school is reactivated (`PATCH /schools/{id}/reactivate`), same idempotence | the platform admin | `school` | `schoolId`, `school`, `changes.status: { before, after }` |
+| `identity_access` | `school_domain_added` | An email domain is allowed for a school (`POST /schools/{id}/domains`) | the admin | `school` | `schoolId`, `school`, `domain`, `changes.domains` (`before`/`after` sets) |
+| `identity_access` | `school_domain_removed` | An email domain is removed from a school (`DELETE /schools/{id}/domains/{domainId}`) | the admin | `school` | `schoolId`, `school`, `domain`, `changes.domains` (`before`/`after` sets) |
 | `identity_access` | `assignment_updated` | The role and/or group of an assignment changes (`PATCH /assignments/{id}`); not recorded when nothing changes | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `previousRole`, `groupId`, `previousGroupId` |
 | `identity_access` | `assignment_removed` | An assignment is removed (`DELETE /assignments/{id}`, soft delete) | the admin | `user` | `assignmentId`, `email`, `schoolId`, `role`, `groupId` |
 | `documents` | `document_published` | A document is published to new targets (`POST /documents/{id}/access`); not recorded when every target was already there | the admin or content manager | `document` | `spaceId`, `schoolId`, `rules` (the `type` and `targetId` of each target added) |
