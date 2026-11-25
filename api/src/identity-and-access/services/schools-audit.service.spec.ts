@@ -3,10 +3,10 @@ import type { AuthenticatedUser } from '../../auth/types/authenticated-user.js';
 import { IdentityAndAccessService } from './identity-and-access.service.js';
 
 /**
- * School audit hooks (#5): every school operation records exactly one `identity_access` row with the
- * actor and the before/after values, and a call that changes nothing records nothing.
+ * School audit hooks (#50): every school operation records exactly one `identity_access` row with the
+ * actor, target school scope, and the before/after values, and a call that changes nothing records nothing.
  */
-describe('IdentityAndAccessService - school audit (#5)', () => {
+describe('IdentityAndAccessService - school audit (#50)', () => {
   const actorWith = (scope: 'platform' | 'school'): AuthenticatedUser =>
     ({
       id: 'actor',
@@ -58,6 +58,7 @@ describe('IdentityAndAccessService - school audit (#5)', () => {
         deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
         createMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'school-1' }]),
       $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
     };
     const audit = { record: vi.fn().mockResolvedValue(undefined) };
@@ -81,15 +82,26 @@ describe('IdentityAndAccessService - school audit (#5)', () => {
       expect.objectContaining({
         category: 'identity_access',
         action: 'school_created',
-        actor: { userId: 'actor', role: 'PLATFORM_ADMIN', schoolId: 'school-1' },
+        actor: { userId: 'actor', role: 'PLATFORM_ADMIN', schoolId: 'new-school' },
         entity: { type: 'school', id: 'new-school' },
         details: {
+          schoolId: 'new-school',
           school: 'Demo School',
           before: null,
           after: { name: 'Demo School', status: 'active', domains: ['demo.edu'], settings: { maxStudents: 500 } },
         },
       }),
+      prisma,
     );
+  });
+
+  it('normalizes missing settings to null in school_created snapshot', async () => {
+    const { service, prisma, audit } = setup();
+    prisma.school.create.mockResolvedValueOnce(schoolRow({ id: 'new-school', settings: undefined }));
+
+    await service.createSchool({ name: 'Demo School', allowedDomains: 'demo.edu' }, platformAdmin);
+
+    expect(audit.record.mock.calls[0][0].details.after.settings).toBeNull();
   });
 
   it('records only the fields an edit really changed, once', async () => {
@@ -101,7 +113,12 @@ describe('IdentityAndAccessService - school audit (#5)', () => {
 
     expect(audit.record).toHaveBeenCalledTimes(1);
     const event = audit.record.mock.calls[0][0];
-    expect(event).toMatchObject({ action: 'school_updated', entity: { type: 'school', id: 'school-1' } });
+    expect(event).toMatchObject({
+      action: 'school_updated',
+      actor: { userId: 'actor', role: 'PLATFORM_ADMIN', schoolId: 'school-1' },
+      entity: { type: 'school', id: 'school-1' },
+    });
+    expect(event.details.schoolId).toBe('school-1');
     expect(event.details.changes).toEqual({
       name: { before: 'Demo School', after: 'Renamed School' },
       settings: { before: { maxStudents: 500 }, after: { maxStudents: 900 } },
@@ -145,16 +162,22 @@ describe('IdentityAndAccessService - school audit (#5)', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'school_deactivated',
-        details: { school: 'Demo School', changes: { status: { before: 'active', after: 'deactivated' } } },
+        actor: { userId: 'actor', role: 'PLATFORM_ADMIN', schoolId: 'school-1' },
+        details: {
+          schoolId: 'school-1',
+          school: 'Demo School',
+          changes: { status: { before: 'active', after: 'deactivated' } },
+        },
       }),
+      prisma,
     );
 
-    // Already deactivated: the endpoint succeeds but writes no second row.
+    // Already deactivated: the endpoint succeeds without updating or writing a second row.
     prisma.school.findUnique.mockResolvedValueOnce(schoolRow({ status: 'deactivated' }));
-    prisma.school.update.mockResolvedValueOnce(schoolRow({ status: 'deactivated' }));
     await service.deactivateSchool('school-1', platformAdmin);
 
     expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(prisma.school.update).toHaveBeenCalledTimes(1);
   });
 
   it('records a reactivation with its own action', async () => {
@@ -167,8 +190,14 @@ describe('IdentityAndAccessService - school audit (#5)', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'school_reactivated',
-        details: { school: 'Demo School', changes: { status: { before: 'deactivated', after: 'active' } } },
+        actor: { userId: 'actor', role: 'PLATFORM_ADMIN', schoolId: 'school-1' },
+        details: {
+          schoolId: 'school-1',
+          school: 'Demo School',
+          changes: { status: { before: 'deactivated', after: 'active' } },
+        },
       }),
+      prisma,
     );
   });
 });

@@ -60,29 +60,39 @@ describe('Permissions list (e2e)', () => {
     expect((await list(ids[role])).status).toBe(403);
   });
 
-  it('returns exactly the seeded permissions, with code, description and category', async () => {
+  it('returns exactly the seeded permissions, with their id, code, description and category', async () => {
     const res = await list(platformAdminId);
     expect(res.status).toBe(200);
 
-    const seeded = await prisma.permission.findMany({ select: { code: true, description: true } });
+    const seeded = await prisma.permission.findMany({ select: { id: true, code: true, description: true } });
     expect(res.body).toHaveLength(seeded.length);
     expect(res.body).toEqual(
       expect.arrayContaining(seeded.map((p) => ({ ...p, category: p.code.split(':')[0] }))),
     );
+    // `id` is what PATCH /roles/{id} takes in `permissionIds` (#45), so the catalogue exposes it too.
     for (const permission of res.body) {
-      expect(Object.keys(permission).sort()).toEqual(['category', 'code', 'description']);
+      expect(Object.keys(permission).sort()).toEqual(['category', 'code', 'description', 'id']);
+      expect(permission.id).toEqual(expect.any(String));
     }
     expect(res.body).toContainEqual({
       code: 'users:invite',
       description: 'Send invitations to new users',
       category: 'users',
+      id: expect.any(String),
     });
   });
 
   it('is sorted by category, then code', async () => {
     const res = await list(platformAdminId);
     expect(res.status).toBe(200);
-    const keys = res.body.map((p: { category: string; code: string }) => `${p.category}|${p.code}`);
-    expect(keys).toEqual([...keys].sort((a: string, b: string) => a.localeCompare(b)));
+
+    // Same two-level comparison the endpoint documents: category first, then code. Comparing a
+    // `category|code` string instead would order the legacy dotted codes (`documents.manage`, whose
+    // category is the code itself) differently from the per-field sort the API performs.
+    const rows = res.body as { category: string; code: string }[];
+    const sorted = [...rows].sort(
+      (a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code),
+    );
+    expect(rows.map((row) => row.code)).toEqual(sorted.map((row) => row.code));
   });
 });

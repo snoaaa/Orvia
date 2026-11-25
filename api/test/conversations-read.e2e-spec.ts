@@ -230,13 +230,15 @@ describe('Conversations read (e2e)', () => {
           references: {
             create: [
               {
+                marker: 1,
                 documentVersionId: docActiveVerId,
                 pageOrImageId: 'page_12',
                 excerpt: 'Wave-particle duality is central to quantum mechanics.',
-                coordinates: '{"x1":10,"y1":20,"x2":200,"y2":80}',
+                coordinates: '{"x":0.1,"y":0.2,"width":0.6,"height":0.15}',
                 createdAt: new Date('2026-11-20T10:00:05.000Z'),
               },
               {
+                marker: 2,
                 documentVersionId: docDeletedVerId,
                 pageOrImageId: 'page_3',
                 excerpt: 'Previously archived explanation.',
@@ -346,10 +348,12 @@ describe('Conversations read (e2e)', () => {
         role: 'user',
         content: 'Explain wave-particle duality.',
       });
+      // #119: the stored 'completed' is given as 'done', with the evidence flag.
       expect(res.body.messages[1]).toMatchObject({
         role: 'assistant',
         modelUsed: 'mock-rag-v1',
-        status: 'completed',
+        status: 'done',
+        notEnoughEvidence: false,
       });
       expect(res.body.messages[1].citations).toHaveLength(2);
       expect(res.body.messages[1].citations[0]).toMatchObject({
@@ -359,12 +363,16 @@ describe('Conversations read (e2e)', () => {
         versionNumber: 2,
         pageOrImageId: 'page_12',
         excerpt: 'Wave-particle duality is central to quantum mechanics.',
-        coordinates: '{"x1":10,"y1":20,"x2":200,"y2":80}',
+        marker: 1,
+        zone: { x: 0.1, y: 0.2, width: 0.6, height: 0.15 },
         available: true,
       });
+      expect(res.body.messages[1].citations[0]).not.toHaveProperty('coordinates');
       expect(res.body.messages[1].citations[1]).toMatchObject({
         documentId: docDeletedId,
         versionId: docDeletedVerId,
+        marker: 2,
+        zone: null,
         available: false,
       });
 

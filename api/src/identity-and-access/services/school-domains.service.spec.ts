@@ -18,6 +18,7 @@ describe('SchoolDomainsService (#32)', () => {
   const prisma = {
     school: { findUnique: vi.fn(), update: vi.fn() },
     schoolDomain: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
+    $queryRaw: vi.fn(),
     $transaction: vi.fn(),
   };
   const audit = { record: vi.fn().mockResolvedValue(undefined) };
@@ -27,6 +28,7 @@ describe('SchoolDomainsService (#32)', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    prisma.$queryRaw.mockResolvedValue([{ id: 'school-a' }]);
     prisma.school.findUnique.mockResolvedValue({ id: 'school-a', name: 'School A' });
     prisma.schoolDomain.findFirst.mockResolvedValue(null);
     prisma.schoolDomain.findMany.mockResolvedValue([{ domain: 'old.edu' }, { domain: 'school.edu' }]);
@@ -35,7 +37,7 @@ describe('SchoolDomainsService (#32)', () => {
     prisma.$transaction.mockImplementation((run: (tx: typeof prisma) => Promise<unknown>) => run(prisma));
   });
 
-  it('adds a domain, refreshes the allowed_domains text copy and audits it (#5)', async () => {
+  it('adds a domain, refreshes the allowed_domains text copy and audits it (#50)', async () => {
     expect(await service.addDomain('school-a', { domain: 'school.edu' }, admin)).toEqual(row);
     expect(prisma.schoolDomain.create).toHaveBeenCalledWith({ data: { schoolId: 'school-a', domain: 'school.edu' } });
     expect(prisma.school.update).toHaveBeenCalledWith({
@@ -45,8 +47,10 @@ describe('SchoolDomainsService (#32)', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'school_domain_added',
+        actor: expect.objectContaining({ userId: 'actor', schoolId: 'school-a' }),
         entity: { type: 'school', id: 'school-a' },
         details: expect.objectContaining({
+          schoolId: 'school-a',
           school: 'School A',
           domain: 'school.edu',
           changes: {
@@ -54,6 +58,7 @@ describe('SchoolDomainsService (#32)', () => {
           },
         }),
       }),
+      prisma,
     );
   });
 
@@ -109,7 +114,7 @@ describe('SchoolDomainsService (#32)', () => {
     expect(prisma.schoolDomain.findMany.mock.calls[0][0]).toEqual({ where: { schoolId: 'school-a' }, orderBy: { domain: 'asc' } });
   });
 
-  it('removes a domain of the school, refreshes the text copy and audits it (#5)', async () => {
+  it('removes a domain of the school, refreshes the text copy and audits it (#50)', async () => {
     prisma.schoolDomain.findFirst.mockResolvedValueOnce(row);
 
     await service.removeDomain('school-a', 'd1', admin);
@@ -119,9 +124,11 @@ describe('SchoolDomainsService (#32)', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'school_domain_removed',
+        actor: expect.objectContaining({ userId: 'actor', schoolId: 'school-a' }),
         entity: { type: 'school', id: 'school-a' },
-        details: expect.objectContaining({ school: 'School A', domain: 'school.edu' }),
+        details: expect.objectContaining({ schoolId: 'school-a', school: 'School A', domain: 'school.edu' }),
       }),
+      prisma,
     );
   });
 
@@ -131,11 +138,19 @@ describe('SchoolDomainsService (#32)', () => {
     expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('lets a platform admin act on any school', async () => {
+  it('lets a platform admin act on any school and stamps the target schoolId', async () => {
+    prisma.school.findUnique.mockResolvedValueOnce({ id: 'school-z', name: 'School Z' });
     prisma.schoolDomain.findFirst.mockResolvedValueOnce({ ...row, schoolId: 'school-z' });
 
     await service.removeDomain('school-z', 'd1', actor('platform'));
 
     expect(prisma.schoolDomain.deleteMany).toHaveBeenCalledWith({ where: { id: 'd1', schoolId: 'school-z' } });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ schoolId: 'school-z' }),
+        details: expect.objectContaining({ schoolId: 'school-z' }),
+      }),
+      prisma,
+    );
   });
 });

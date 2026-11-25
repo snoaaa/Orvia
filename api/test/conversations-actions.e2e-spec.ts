@@ -226,8 +226,8 @@ describe('Conversations save, share, and report (e2e)', () => {
         status: 'done',
         references: {
           create: [
-            { documentVersionId: docPublicAVerId, pageOrImageId: 'page_1', excerpt: 'Public excerpt' },
-            { documentVersionId: docStaffOnlyAVerId, pageOrImageId: 'page_4', excerpt: 'Confidential excerpt' },
+            { marker: 1, documentVersionId: docPublicAVerId, pageOrImageId: 'page_1', excerpt: 'Public excerpt' },
+            { marker: 2, documentVersionId: docStaffOnlyAVerId, pageOrImageId: 'page_4', excerpt: 'Confidential excerpt' },
           ],
         },
       },

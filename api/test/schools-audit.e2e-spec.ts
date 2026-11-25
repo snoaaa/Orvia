@@ -7,11 +7,11 @@ import { TokenService } from '../src/auth/services/token.service.js';
 import { PrismaService } from '../src/database/prisma.service.js';
 
 /**
- * School and domain audit trail (#5, §4.5 non-repudiation).
+ * School and domain audit trail (#50, §4.5 non-repudiation).
  *
  * The issue's acceptance criteria are the spine: every action (create, edit, deactivate, reactivate,
- * domain added, domain removed) writes **exactly one** `identity_access` row, with the actor, the school
- * and the before/after values in `details` — and no secret ever survives in `details`.
+ * domain added, domain removed) writes **exactly one** `identity_access` row, with the actor, target
+ * `schoolId`, and the before/after values in `details` — and no secret ever survives in `details`.
  */
 describe('School and domain audit (e2e)', () => {
   let app: INestApplication<App>;
@@ -87,8 +87,10 @@ describe('School and domain audit (e2e)', () => {
       entityId: schoolId,
       actorId: platformAdminId,
       actorRole: 'PLATFORM_ADMIN',
+      schoolId,
     });
     expect(rows[0].details).toMatchObject({
+      schoolId,
       school: schoolName,
       before: null,
       after: { name: schoolName, status: 'active', domains: [baseDomain] },
@@ -211,7 +213,155 @@ describe('School and domain audit (e2e)', () => {
       school_domain_added: 1,
       school_domain_removed: 1,
     });
-    // Every one of them is an identity_access row about this school.
-    expect(await prisma.auditEvent.count({ where: { entityId: schoolId, category: 'identity_access' } })).toBe(7);
+    // Every one of them is an identity_access row scoped to this target school.
+    expect(
+      await prisma.auditEvent.count({ where: { entityId: schoolId, schoolId, category: 'identity_access' } }),
+    ).toBe(7);
+  });
+
+  it('stamps target schoolId on audit rows when a multi-school admin updates another assigned school', async () => {
+    const otherSchool = check(
+      await post('/schools', { name: `${schoolName} Other`, allowedDomains: `other-${stamp}.edu` }),
+      201,
+    ).body as { id: string };
+    const schoolAdminRole = await prisma.role.findUniqueOrThrow({ where: { name: 'SCHOOL_ADMIN' } });
+    const multiAdmin = await prisma.user.create({
+      data: {
+        email: `multi-admin-${stamp}@audit.edu`,
+        fullName: 'Multi School Admin',
+        status: 'ACTIVE',
+      },
+    });
+    await prisma.userAssignment.createMany({
+      data: [
+        { userId: multiAdmin.id, roleId: schoolAdminRole.id, schoolId },
+        { userId: multiAdmin.id, roleId: schoolAdminRole.id, schoolId: otherSchool.id },
+      ],
+    });
+    const adminToken = await bearer(multiAdmin.id);
+
+    try {
+      check(
+        await http()
+          .patch(`/schools/${otherSchool.id}`)
+          .set('Authorization', adminToken)
+          .send({ name: `${schoolName} Other Updated` }),
+        200,
+      );
+      const added = check(
+        await http()
+          .post(`/schools/${otherSchool.id}/domains`)
+          .set('Authorization', adminToken)
+          .send({ domain: `multi-${stamp}.edu` }),
+        201,
+      ).body as { id: string };
+      check(
+        await http()
+          .delete(`/schools/${otherSchool.id}/domains/${added.id}`)
+          .set('Authorization', adminToken),
+        204,
+      );
+
+      const events = await prisma.auditEvent.findMany({
+        where: { actorId: multiAdmin.id, entityId: otherSchool.id },
+        orderBy: { seq: 'asc' },
+      });
+      expect(events.map((e) => e.action)).toEqual([
+        'school_updated',
+        'school_domain_added',
+        'school_domain_removed',
+      ]);
+      for (const ev of events) {
+        expect(ev.schoolId).toBe(otherSchool.id);
+        expect(ev.details).toMatchObject({ schoolId: otherSchool.id });
+      }
+      // Multi-school admin sees target school's events via /audit/events; an admin scoped strictly to
+      // `otherSchool` sees platform-admin creation of `otherSchool`, never events from `schoolId`.
+      const listed = check(
+        await http()
+          .get('/audit/events')
+          .query({ entityType: 'school', limit: 50 })
+          .set('Authorization', adminToken),
+        200,
+      ).body as Array<{ action: string; entityId: string; schoolId: string | null }>;
+      expect(listed.some((e) => e.action === 'school_created' && e.entityId === otherSchool.id && e.schoolId === otherSchool.id)).toBe(true);
+
+      const otherOnlyAdmin = await prisma.user.create({
+        data: {
+          email: `other-only-admin-${stamp}@audit.edu`,
+          fullName: 'Other School Admin',
+          status: 'ACTIVE',
+        },
+      });
+      await prisma.userAssignment.create({
+        data: { userId: otherOnlyAdmin.id, roleId: schoolAdminRole.id, schoolId: otherSchool.id },
+      });
+      try {
+        const otherListed = check(
+          await http()
+            .get('/audit/events')
+            .query({ entityType: 'school', limit: 50 })
+            .set('Authorization', await bearer(otherOnlyAdmin.id)),
+          200,
+        ).body as Array<{ action: string; entityId: string; schoolId: string | null }>;
+        expect(otherListed.some((e) => e.action === 'school_created' && e.entityId === otherSchool.id)).toBe(true);
+        expect(otherListed.some((e) => e.entityId === schoolId || e.schoolId === schoolId)).toBe(false);
+      } finally {
+        await prisma.user.deleteMany({ where: { id: otherOnlyAdmin.id } });
+      }
+    } finally {
+      await prisma.user.deleteMany({ where: { id: multiAdmin.id } });
+    }
+  });
+
+  it('serializes concurrent school updates, deactivations, reactivations, and domain mutations without deadlocks or duplicate rows', async () => {
+    const concurrentSchool = check(
+      await post('/schools', { name: `${schoolName} Concurrent`, allowedDomains: `conc0-${stamp}.edu` }),
+      201,
+    ).body as { id: string };
+    const cid = concurrentSchool.id;
+
+    // Concurrent duplicate deactivate calls: both return 200, exactly 1 audit event.
+    const [d1, d2] = await Promise.all([
+      patch(`/schools/${cid}/deactivate`),
+      patch(`/schools/${cid}/deactivate`),
+    ]);
+    expect(d1.status).toBe(200);
+    expect(d2.status).toBe(200);
+    expect(await countFor('school_deactivated', cid)).toBe(1);
+
+    // Concurrent duplicate reactivate calls: both return 200, exactly 1 audit event.
+    const [r1, r2] = await Promise.all([
+      patch(`/schools/${cid}/reactivate`),
+      patch(`/schools/${cid}/reactivate`),
+    ]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(await countFor('school_reactivated', cid)).toBe(1);
+
+    // Concurrent disjoint field edits: both persist cleanly with isolated diffs.
+    const [u1, u2] = await Promise.all([
+      patch(`/schools/${cid}`, { name: `${schoolName} Concurrent Renamed` }),
+      patch(`/schools/${cid}`, { settings: { maxStudents: 123 } }),
+    ]);
+    expect(u1.status).toBe(200);
+    expect(u2.status).toBe(200);
+    const finalSchool = await prisma.school.findUniqueOrThrow({ where: { id: cid } });
+    expect(finalSchool.name).toBe(`${schoolName} Concurrent Renamed`);
+    expect(finalSchool.settings).toEqual({ maxStudents: 123 });
+    expect(await countFor('school_updated', cid)).toBe(2);
+
+    // Concurrent domain additions on the same school: accurate serialized before/after snapshots.
+    const [a1, a2] = await Promise.all([
+      post(`/schools/${cid}/domains`, { domain: `conc1-${stamp}.edu` }),
+      post(`/schools/${cid}/domains`, { domain: `conc2-${stamp}.edu` }),
+    ]);
+    expect(a1.status).toBe(201);
+    expect(a2.status).toBe(201);
+    const addedEvents = await rowsFor('school_domain_added', cid);
+    expect(addedEvents).toHaveLength(2);
+    expect((addedEvents[0].details as { changes: { domains: { after: string[] } } }).changes.domains.after).toHaveLength(2);
+    expect((addedEvents[1].details as { changes: { domains: { before: string[]; after: string[] } } }).changes.domains.before).toHaveLength(2);
+    expect((addedEvents[1].details as { changes: { domains: { after: string[] } } }).changes.domains.after).toHaveLength(3);
   });
 });

@@ -20,8 +20,8 @@ import {
  * Allowed email domains of a school (#32, Section 4.6). Invitations and Google login read `school_domains`
  * on every request, so a change applies to the next one. A school without domains restricts nothing.
  *
- * Each addition and removal is audited (#5) with the school, the domain and the whole allowed-domain set
- * before and after, so the trail shows what the login/invitation rules actually became.
+ * Each addition and removal is audited (#50) with the school, the domain and the whole allowed-domain set
+ * before and after, inside the same transaction under a lock on the school row so concurrent edits never race.
  */
 @Injectable()
 export class SchoolDomainsService {
@@ -49,58 +49,55 @@ export class SchoolDomainsService {
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<SchoolDomainEntity> {
     assertSchoolAccess(actor, 'schools:update', schoolId);
-    const school = await this.findSchool(schoolId);
     // Also normalized here, for callers that do not go through the validation pipe.
     const domain = normalizeDomain(dto.domain);
     if (!isValidDomain(domain)) {
       throw new BadRequestException(`'${domain}' ${INVALID_DOMAIN_MESSAGE}`);
     }
 
-    const covering = await this.prisma.schoolDomain.findFirst({
-      where: { schoolId, domain: { in: [domain, ...parentDomains(domain)] } },
-    });
-    if (covering?.domain === domain) {
-      throw new ConflictException(`Domain '${domain}' is already allowed for this school`);
-    }
-    if (covering) {
-      throw new ConflictException(`Domain '${domain}' is already covered by '${covering.domain}' for this school`);
-    }
-    await assertDomainsAvailable(this.prisma, [domain], schoolId);
-
-    const domainsBefore = await this.domainsOf(schoolId);
-
-    const created = await (async () => {
-      try {
-        return await this.prisma.$transaction(async (tx) => {
-          const row = await tx.schoolDomain.create({ data: { schoolId, domain } });
-          await this.syncAllowedDomains(tx, schoolId);
-          return this.toEntity(row);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const school = await this.lockSchool(tx, schoolId);
+        const covering = await tx.schoolDomain.findFirst({
+          where: { schoolId, domain: { in: [domain, ...parentDomains(domain)] } },
         });
-      } catch (error) {
-        // The unique index on school_domains.domain decides between simultaneous requests.
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-          throw new ConflictException(`Domain '${domain}' is already assigned to a school`);
+        if (covering?.domain === domain) {
+          throw new ConflictException(`Domain '${domain}' is already allowed for this school`);
         }
-        throw error;
+        if (covering) {
+          throw new ConflictException(`Domain '${domain}' is already covered by '${covering.domain}' for this school`);
+        }
+        await assertDomainsAvailable(tx, [domain], schoolId);
+
+        const domainsBefore = await this.domainsOf(schoolId, tx);
+        const row = await tx.schoolDomain.create({ data: { schoolId, domain } });
+        await this.syncAllowedDomains(tx, schoolId);
+        const domainsAfter = await this.domainsOf(schoolId, tx);
+
+        await this.audit.record(
+          AuditEvents.schoolDomainAdded(
+            {
+              schoolId,
+              school: school.name,
+              domain,
+              domainsBefore,
+              domainsAfter,
+              addedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+            },
+            auditContext,
+          ),
+          tx,
+        );
+
+        return this.toEntity(row);
+      });
+    } catch (error) {
+      // The unique index on school_domains.domain decides between simultaneous cross-school requests.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Domain '${domain}' is already assigned to a school`);
       }
-    })();
-
-    const domainsAfter = await this.domainsOf(schoolId);
-    await this.audit.record(
-      AuditEvents.schoolDomainAdded(
-        {
-          schoolId,
-          school: school.name,
-          domain,
-          domainsBefore,
-          domainsAfter,
-          addedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
-        },
-        auditContext,
-      ),
-    );
-
-    return created;
+      throw error;
+    }
   }
 
   /** DELETE /schools/:id/domains/:domainId: 404 if the domain is not one of this school's. */
@@ -111,40 +108,44 @@ export class SchoolDomainsService {
     auditContext: AuditRequestContext = SYSTEM_AUDIT_CONTEXT,
   ): Promise<void> {
     assertSchoolAccess(actor, 'schools:update', schoolId);
-    const school = await this.findSchool(schoolId);
-
-    const row = await this.prisma.schoolDomain.findFirst({ where: { id: domainId, schoolId } });
-    if (!row) {
-      throw new NotFoundException(`Domain with ID ${domainId} not found for this school`);
-    }
-    const domainsBefore = await this.domainsOf(schoolId);
 
     await this.prisma.$transaction(async (tx) => {
+      const school = await this.lockSchool(tx, schoolId);
+      const row = await tx.schoolDomain.findFirst({ where: { id: domainId, schoolId } });
+      if (!row) {
+        throw new NotFoundException(`Domain with ID ${domainId} not found for this school`);
+      }
+
+      const domainsBefore = await this.domainsOf(schoolId, tx);
       const { count } = await tx.schoolDomain.deleteMany({ where: { id: domainId, schoolId } });
       if (count === 0) {
         throw new NotFoundException(`Domain with ID ${domainId} not found for this school`);
       }
       await this.syncAllowedDomains(tx, schoolId);
-    });
+      const domainsAfter = await this.domainsOf(schoolId, tx);
 
-    const domainsAfter = await this.domainsOf(schoolId);
-    await this.audit.record(
-      AuditEvents.schoolDomainRemoved(
-        {
-          schoolId,
-          school: school.name,
-          domain: row.domain,
-          domainsBefore,
-          domainsAfter,
-          removedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
-        },
-        auditContext,
-      ),
-    );
+      await this.audit.record(
+        AuditEvents.schoolDomainRemoved(
+          {
+            schoolId,
+            school: school.name,
+            domain: row.domain,
+            domainsBefore,
+            domainsAfter,
+            removedBy: { userId: actor.id, role: actor.role, schoolId: actor.schoolId },
+          },
+          auditContext,
+        ),
+        tx,
+      );
+    });
   }
 
-  private async findSchool(schoolId: string): Promise<{ id: string; name: string }> {
-    const school = await this.prisma.school.findUnique({
+  private async findSchool(
+    schoolId: string,
+    db: Pick<Prisma.TransactionClient, 'school'> = this.prisma,
+  ): Promise<{ id: string; name: string }> {
+    const school = await db.school.findUnique({
       where: { id: schoolId },
       select: { id: true, name: true },
     });
@@ -154,9 +155,19 @@ export class SchoolDomainsService {
     return school;
   }
 
-  /** The school's allowed domains, sorted: the before/after value of a domain audit row (#5). */
-  private async domainsOf(schoolId: string): Promise<string[]> {
-    const rows = await this.prisma.schoolDomain.findMany({
+  /** Acquires the school row lock before domain reads/writes so concurrent modifications queue cleanly. */
+  private async lockSchool(tx: Prisma.TransactionClient, schoolId: string): Promise<{ id: string; name: string }> {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM schools WHERE id = ${schoolId} FOR UPDATE`;
+    if (locked.length === 0) {
+      throw new NotFoundException(`School with ID '${schoolId}' not found`);
+    }
+    return this.findSchool(schoolId, tx);
+  }
+
+  /** The school's allowed domains, sorted: the before/after value of a domain audit row (#50). */
+  private async domainsOf(schoolId: string, db: Pick<Prisma.TransactionClient, 'schoolDomain'>): Promise<string[]> {
+    const rows = await db.schoolDomain.findMany({
       where: { schoolId },
       select: { domain: true },
       orderBy: { domain: 'asc' },

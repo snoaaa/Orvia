@@ -180,5 +180,41 @@ describe('UserManagementService', () => {
     expect(docReq.request.body).toEqual({ schoolId: 'school-a', granted: true });
     docReq.flush(mockUser);
   });
+
+  it('should paginate across all pages when fetching schools', () => {
+    let schools: Array<{ id: string; name: string }> = [];
+    service.getSchools().subscribe((res) => {
+      schools = res;
+    });
+
+    const p1 = httpMock.expectOne(
+      (r) =>
+        r.url === `${environment.apiUrl}/schools` &&
+        r.params.get('page') === '1' &&
+        r.params.get('limit') === '100'
+    );
+    p1.flush({
+      data: [{ id: 's1', name: 'School 1' }],
+      page: 1,
+      totalPages: 2
+    });
+
+    const p2 = httpMock.expectOne(
+      (r) =>
+        r.url === `${environment.apiUrl}/schools` &&
+        r.params.get('page') === '2' &&
+        r.params.get('limit') === '100'
+    );
+    p2.flush({
+      data: [{ id: 's2', name: 'School 2' }],
+      page: 2,
+      totalPages: 2
+    });
+
+    expect(schools).toEqual([
+      { id: 's1', name: 'School 1' },
+      { id: 's2', name: 'School 2' }
+    ]);
+  });
 });
 

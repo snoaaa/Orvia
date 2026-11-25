@@ -37,12 +37,12 @@ export type TokenRefreshFailureReason =
 
 export type SessionRevocationReason = 'admin_action' | 'user_suspended' | 'token_reuse' | 'user_request';
 
-/** The mutable fields of a school, as they were before a change or became after it (#5). */
+/** The mutable fields of a school, as they were before a change or became after it (#50). */
 export interface SchoolSnapshot {
   name: string;
   status: string;
   domains: string[];
-  settings?: unknown;
+  settings: unknown;
 }
 
 /** `{ before, after }` for one changed field. */
@@ -52,6 +52,18 @@ export type FieldChange = { before: unknown; after: unknown };
 export type SchoolChanges = Record<string, FieldChange>;
 
 const anonymous: AuditActor = { userId: null, role: null, schoolId: null };
+
+/**
+ * Stamps `audit_events.school_id` with the target school rather than `actor.schoolId`, so
+ * platform-admin and multi-school actions remain visible to that school's admins and do not leak.
+ */
+function targetSchoolActor(actor: AuditActor | null | undefined, schoolId: string): AuditActor {
+  return {
+    userId: actor?.userId ?? null,
+    role: actor?.role ?? null,
+    schoolId,
+  };
+}
 
 export const AuditEvents = {
   loginSuccess(
@@ -193,7 +205,83 @@ export const AuditEvents = {
   },
 
   /**
-   * A school was registered (`POST /schools`, #5, §4.5). `before` is null: there was no school.
+   * A custom role was edited through `PATCH /roles/:id` (#45): its name, scope and/or permission set.
+   *
+   * `previousName` / `previousScope` keep the before-values of the fields that can move, so a
+   * scope-only edit (`school` → `group`) is still readable in the trail; `addedPermissions` /
+   * `removedPermissions` carry the difference against the previous set, so a reader can tell a rename
+   * from a capability change without diffing two snapshots.
+   */
+  roleUpdated(
+    p: {
+      roleId: string;
+      role: string;
+      previousName: string;
+      previousScope: string;
+      scope: string;
+      permissions: string[];
+      addedPermissions: string[];
+      removedPermissions: string[];
+      updatedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ROLE_UPDATED,
+      actor: p.updatedBy ?? anonymous,
+      entity: { type: 'role', id: p.roleId },
+      details: {
+        role: p.role,
+        previousName: p.previousName,
+        previousScope: p.previousScope,
+        scope: p.scope,
+        permissions: [...p.permissions].sort(),
+        addedPermissions: [...p.addedPermissions].sort(),
+        removedPermissions: [...p.removedPermissions].sort(),
+      },
+      context,
+    };
+  },
+
+  /**
+   * An unused custom role was deleted (`DELETE /roles/:id`, #46).
+   *
+   * `documentAccessRulesRemoved` counts the `document_access` rules that cascaded away with the role, so
+   * the audit trail says what the publish state of those documents lost.
+   *
+   * `assignmentRecordsRemoved` counts the `user_assignments` rows the cascade removed: normally only
+   * soft-deleted tombstones (a role with an active assignment is refused), kept for the mobile delta sync
+   * (#49), so the trail does not lose them silently.
+   */
+  roleDeleted(
+    p: {
+      roleId: string;
+      role: string;
+      scope: string;
+      documentAccessRulesRemoved: number;
+      assignmentRecordsRemoved: number;
+      deletedBy?: AuditActor | null;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.IDENTITY_ACCESS,
+      action: AuditAction.ROLE_DELETED,
+      actor: p.deletedBy ?? anonymous,
+      entity: { type: 'role', id: p.roleId },
+      details: {
+        role: p.role,
+        scope: p.scope,
+        documentAccessRulesRemoved: p.documentAccessRulesRemoved,
+        assignmentRecordsRemoved: p.assignmentRecordsRemoved,
+      },
+      context,
+    };
+  },
+
+  /**
+   * A school was registered (`POST /schools`, #50, §4.5). `before` is null: there was no school.
    *
    * The `after` snapshot carries the mutable fields the platform cares about; `settings` goes through
    * `redactSecrets()` like every other detail, so a provider key stored there is stored as "[REDACTED]".
@@ -205,15 +293,15 @@ export const AuditEvents = {
     return {
       category: AuditCategory.IDENTITY_ACCESS,
       action: AuditAction.SCHOOL_CREATED,
-      actor: p.createdBy ?? anonymous,
+      actor: targetSchoolActor(p.createdBy, p.schoolId),
       entity: { type: 'school', id: p.schoolId },
-      details: { school: p.snapshot.name, before: null, after: p.snapshot },
+      details: { schoolId: p.schoolId, school: p.snapshot.name, before: null, after: p.snapshot },
       context,
     };
   },
 
   /**
-   * A school's name, settings or allowed domains were edited (`PATCH /schools/:id`, #5).
+   * A school's name, settings or allowed domains were edited (`PATCH /schools/:id`, #50).
    *
    * `changes` only holds the fields that really moved, each as `{ before, after }`; the caller records
    * nothing at all when the payload changes nothing.
@@ -225,14 +313,14 @@ export const AuditEvents = {
     return {
       category: AuditCategory.IDENTITY_ACCESS,
       action: AuditAction.SCHOOL_UPDATED,
-      actor: p.updatedBy ?? anonymous,
+      actor: targetSchoolActor(p.updatedBy, p.schoolId),
       entity: { type: 'school', id: p.schoolId },
-      details: { school: p.school, changes: p.changes },
+      details: { schoolId: p.schoolId, school: p.school, changes: p.changes },
       context,
     };
   },
 
-  /** A school was deactivated (`PATCH /schools/:id/deactivate`, #5, §4.5). */
+  /** A school was deactivated (`PATCH /schools/:id/deactivate`, #50, §4.5). */
   schoolDeactivated(
     p: { schoolId: string; school: string; previousStatus: string; deactivatedBy?: AuditActor | null },
     context: AuditRequestContext,
@@ -240,14 +328,18 @@ export const AuditEvents = {
     return {
       category: AuditCategory.IDENTITY_ACCESS,
       action: AuditAction.SCHOOL_DEACTIVATED,
-      actor: p.deactivatedBy ?? anonymous,
+      actor: targetSchoolActor(p.deactivatedBy, p.schoolId),
       entity: { type: 'school', id: p.schoolId },
-      details: { school: p.school, changes: { status: { before: p.previousStatus, after: 'deactivated' } } },
+      details: {
+        schoolId: p.schoolId,
+        school: p.school,
+        changes: { status: { before: p.previousStatus, after: 'deactivated' } },
+      },
       context,
     };
   },
 
-  /** A school was reactivated (`PATCH /schools/:id/reactivate`, #5, §4.5). */
+  /** A school was reactivated (`PATCH /schools/:id/reactivate`, #50, §4.5). */
   schoolReactivated(
     p: { schoolId: string; school: string; previousStatus: string; reactivatedBy?: AuditActor | null },
     context: AuditRequestContext,
@@ -255,15 +347,19 @@ export const AuditEvents = {
     return {
       category: AuditCategory.IDENTITY_ACCESS,
       action: AuditAction.SCHOOL_REACTIVATED,
-      actor: p.reactivatedBy ?? anonymous,
+      actor: targetSchoolActor(p.reactivatedBy, p.schoolId),
       entity: { type: 'school', id: p.schoolId },
-      details: { school: p.school, changes: { status: { before: p.previousStatus, after: 'active' } } },
+      details: {
+        schoolId: p.schoolId,
+        school: p.school,
+        changes: { status: { before: p.previousStatus, after: 'active' } },
+      },
       context,
     };
   },
 
   /**
-   * An email domain was allowed for a school (`POST /schools/:id/domains`, #5, §4.6).
+   * An email domain was allowed for a school (`POST /schools/:id/domains`, #50, §4.6).
    *
    * `changes.domains` holds the whole allowed-domain set before and after, so a reader sees the effect
    * on the school's login and invitation rules rather than just the row that was inserted.
@@ -282,9 +378,10 @@ export const AuditEvents = {
     return {
       category: AuditCategory.IDENTITY_ACCESS,
       action: AuditAction.SCHOOL_DOMAIN_ADDED,
-      actor: p.addedBy ?? anonymous,
+      actor: targetSchoolActor(p.addedBy, p.schoolId),
       entity: { type: 'school', id: p.schoolId },
       details: {
+        schoolId: p.schoolId,
         school: p.school,
         domain: p.domain,
         changes: { domains: { before: p.domainsBefore, after: p.domainsAfter } },
@@ -293,7 +390,7 @@ export const AuditEvents = {
     };
   },
 
-  /** An email domain was removed from a school (`DELETE /schools/:id/domains/:domainId`, #5, §4.6). */
+  /** An email domain was removed from a school (`DELETE /schools/:id/domains/:domainId`, #50, §4.6). */
   schoolDomainRemoved(
     p: {
       schoolId: string;
@@ -308,9 +405,10 @@ export const AuditEvents = {
     return {
       category: AuditCategory.IDENTITY_ACCESS,
       action: AuditAction.SCHOOL_DOMAIN_REMOVED,
-      actor: p.removedBy ?? anonymous,
+      actor: targetSchoolActor(p.removedBy, p.schoolId),
       entity: { type: 'school', id: p.schoolId },
       details: {
+        schoolId: p.schoolId,
         school: p.school,
         domain: p.domain,
         changes: { domains: { before: p.domainsBefore, after: p.domainsAfter } },
@@ -650,6 +748,101 @@ export const AuditEvents = {
         schoolId: p.schoolId,
         added: p.added,
         removed: p.removed,
+      },
+      context,
+    };
+  },
+
+  /** A document space was created in a school (POST /documents/spaces, #97). */
+  spaceCreated(
+    p: {
+      spaceId: string;
+      schoolId: string;
+      name: string;
+      language: string;
+      privacy: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.SPACE_CREATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        // Stamp the target space's school rather than actor.schoolId so platform/multi-school edits
+        // stay visible to that school's admins and never leak to another school's audit trail.
+        schoolId: p.schoolId,
+      },
+      entity: { type: 'space', id: p.spaceId },
+      details: {
+        schoolId: p.schoolId,
+        name: p.name,
+        language: p.language,
+        privacy: p.privacy,
+      },
+      context,
+    };
+  },
+
+  /**
+   * Name, description, language and/or privacy of a space changed (PATCH /documents/spaces/:id, #97).
+   * `changes` only holds the fields whose value really changed. The school of a space never changes.
+   */
+  spaceUpdated(
+    p: {
+      spaceId: string;
+      schoolId: string;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+      changes: Record<string, { from: unknown; to: unknown }>;
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.SPACE_UPDATED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.schoolId,
+      },
+      entity: { type: 'space', id: p.spaceId },
+      details: {
+        schoolId: p.schoolId,
+        changes: p.changes,
+      },
+      context,
+    };
+  },
+
+  /**
+   * A space was soft-deleted (DELETE /documents/spaces/:id, #98). `name` is the name before the row was
+   * renamed; `documentsCount` is the number of documents that became hidden with the space.
+   */
+  spaceDeleted(
+    p: {
+      spaceId: string;
+      schoolId: string;
+      name: string;
+      documentsCount: number;
+      actor: { userId: string; role?: string | null; schoolId?: string | null };
+    },
+    context: AuditRequestContext,
+  ): RecordAuditEventInput {
+    return {
+      category: AuditCategory.DOCUMENTS,
+      action: AuditAction.SPACE_DELETED,
+      actor: {
+        userId: p.actor.userId,
+        role: p.actor.role ?? null,
+        schoolId: p.schoolId,
+      },
+      entity: { type: 'space', id: p.spaceId },
+      details: {
+        schoolId: p.schoolId,
+        name: p.name,
+        documentsCount: p.documentsCount,
       },
       context,
     };
