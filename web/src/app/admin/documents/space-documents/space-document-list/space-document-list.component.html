@@ -236,17 +236,15 @@
                         >
                           <i class="ti ti-edit f-18"></i>
                         </button>
-                        <!-- Version history (#116) and the access editor (#117) plug in here. -->
-                        <span title="Version history: coming with #116">
-                          <button
-                            type="button"
-                            class="btn btn-icon btn-link-secondary document-versions-action"
-                            aria-label="Version history (coming soon)"
-                            disabled
-                          >
-                            <i class="ti ti-history f-18"></i>
-                          </button>
-                        </span>
+                        <a
+                          class="btn btn-icon btn-link-secondary document-versions-action"
+                          title="Version history"
+                          [attr.aria-label]="'Version history of ' + doc.title"
+                          [routerLink]="['/admin/documents', doc.id, 'versions']"
+                        >
+                          <i class="ti ti-history f-18"></i>
+                        </a>
+                        <!-- The access editor (#117) plugs in here. -->
                         <span title="Access rules: coming with #117">
                           <button
                             type="button"

@@ -1,0 +1,130 @@
+<div class="row">
+  <div class="col-12">
+    <app-card [cardTitle]="heading()">
+      @if (!canManage()) {
+        <div class="alert alert-warning mb-0" id="versions-no-access" role="alert">
+          <i class="ti ti-lock me-1"></i>You do not have permission to manage documents.
+        </div>
+      } @else {
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            @if (document()?.spaceId; as sid) {
+              <a
+                id="versions-back-documents"
+                class="btn btn-sm btn-outline-secondary"
+                [routerLink]="['/admin/spaces', sid, 'documents']"
+              >
+                <i class="ti ti-arrow-left me-1"></i>Back to documents
+              </a>
+            } @else {
+              <a id="versions-back-spaces" class="btn btn-sm btn-outline-secondary" routerLink="/admin/spaces">
+                <i class="ti ti-arrow-left me-1"></i>Spaces
+              </a>
+            }
+            <span class="text-muted text-sm">
+              Replacing the file adds a new version; earlier versions are kept.
+            </span>
+          </div>
+          <label
+            class="btn btn-sm btn-primary mb-0"
+            [class.disabled]="replacing()"
+            for="replace-file-input"
+          >
+            <i class="ti ti-file-upload me-1"></i>Replace file
+          </label>
+          <input
+            id="replace-file-input"
+            type="file"
+            class="visually-hidden"
+            [disabled]="replacing()"
+            (change)="onReplacePicked($event)"
+          />
+        </div>
+        @if (replacing()) {
+          <div
+            class="progress mb-3"
+            id="replace-progress"
+            role="progressbar"
+            [attr.aria-valuenow]="replaceProgress()"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div class="progress-bar" [style.width.%]="replaceProgress()">
+              {{ replaceProgress() }}%
+            </div>
+          </div>
+        }
+        @if (replaceError()) {
+          <div class="alert alert-danger" id="replace-error" role="alert">
+            {{ replaceError() }}
+          </div>
+        }
+        @if (error()) {
+          <div class="alert alert-danger d-flex align-items-center justify-content-between" id="versions-error" role="alert">
+            <span>{{ error() }}</span>
+            <button type="button" class="btn btn-sm btn-light-danger" (click)="load()">Retry</button>
+          </div>
+        } @else if (loading()) {
+          <p class="text-muted mb-0" id="versions-loading">Loading versions…</p>
+        } @else if (versions().length === 0) {
+          <p class="text-muted mb-0" id="versions-empty">This document has no versions.</p>
+        } @else {
+          <div class="table-responsive">
+            <table class="table align-middle mb-0" id="versions-list">
+              <thead>
+                <tr>
+                  <th>VERSION</th>
+                  <th>DATE</th>
+                  <th>UPLOADED BY</th>
+                  <th>SIZE</th>
+                  <th>STATUS</th>
+                  <th class="text-end">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (version of versions(); track version.id) {
+                  <tr>
+                    <td>
+                      v{{ version.versionNumber }}
+                      @if (version.isCurrent) {
+                        <span class="badge bg-light-primary text-primary ms-1">Current</span>
+                      }
+                    </td>
+                    <td>{{ version.date | date: 'medium' }}</td>
+                    <td>{{ version.uploader?.name ?? '—' }}</td>
+                    <td>{{ formatFileSize(version.size) }}</td>
+                    <td>
+                      <span
+                        class="badge"
+                        [ngClass]="statusDisplay(version.status).badgeClass"
+                        [attr.title]="version.statusError || null"
+                      >
+                        {{ statusDisplay(version.status).label }}
+                      </span>
+                      @if (version.status === 'error' && version.statusError) {
+                        <small class="text-danger d-block mt-1 version-status-error">
+                          {{ version.statusError }}
+                        </small>
+                      }
+                    </td>
+                    <td class="text-end">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-light-primary version-download"
+                        [disabled]="downloading() !== null"
+                        (click)="download(version)"
+                      >
+                        <i class="ti ti-download me-1"></i>
+                        {{ downloading() === version.versionNumber ? 'Downloading…' : 'Download' }}
+                      </button>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      }
+    </app-card>
+  </div>
+</div>

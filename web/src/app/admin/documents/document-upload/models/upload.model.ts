@@ -56,6 +56,8 @@ export interface UploadItem extends UploadMetadata {
   status: UploadStatus;
   /** 0 to 100, meaningful while uploading. */
   progress: number;
+  /** Id of the created document, once uploaded (for the version history link). */
+  documentId?: string;
   /** The API's reason when the file was refused. */
   error: string | null;
 }

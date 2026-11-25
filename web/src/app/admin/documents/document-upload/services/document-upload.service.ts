@@ -1,11 +1,6 @@
-import {
-  HttpClient,
-  HttpErrorResponse,
-  HttpEventType,
-  HttpParams
-} from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, filter, forkJoin, map, of, switchMap } from 'rxjs';
+import { Observable, forkJoin, map, of, switchMap } from 'rxjs';
 import { environment } from 'src/environments/environment';
 import { apiErrorMessages } from '../../shared/api-error.util';
 import {
@@ -16,6 +11,7 @@ import {
   UploadedDocument,
   uploadKindOf
 } from '../models/upload.model';
+import { toUploadEvents } from './upload-events';
 
 /** Calls the document upload API (#102, #103) for the portal upload form (#115). */
 @Injectable({
@@ -73,19 +69,7 @@ export class DocumentUploadService {
         reportProgress: true,
         observe: 'events'
       })
-      .pipe(
-        map((event): UploadEvent | null => {
-          if (event.type === HttpEventType.UploadProgress) {
-            const percent = event.total ? Math.round((100 * event.loaded) / event.total) : 0;
-            return { type: 'progress', percent: Math.min(percent, 100) };
-          }
-          if (event.type === HttpEventType.Response) {
-            return { type: 'done', document: event.body as UploadedDocument };
-          }
-          return null;
-        }),
-        filter((event): event is UploadEvent => event !== null)
-      );
+      .pipe(toUploadEvents());
   }
 
   /** The API's reason for a refused file (type, size, antivirus, duplicate...), or a readable fallback. */

@@ -345,15 +345,15 @@ describe('SpaceDocumentListComponent', () => {
   });
 
   describe('actions', () => {
-    it('shows every action to document managers; versions and access wait for #116 and #117', () => {
+    it('shows every action to document managers; access waits for #117', () => {
       create();
       const row = element().querySelector('tbody tr') as HTMLElement;
       expect(row.querySelector('.document-open-action')).not.toBeNull();
       expect(row.querySelector('.document-edit-action')).not.toBeNull();
       expect(row.querySelector('.document-delete-action')).not.toBeNull();
-      expect((row.querySelector('.document-versions-action') as HTMLButtonElement).disabled).toBe(
-        true
-      );
+      expect(
+        (row.querySelector('.document-versions-action') as HTMLAnchorElement).getAttribute('href')
+      ).toContain('/admin/documents/d1/versions');
       expect((row.querySelector('.document-access-action') as HTMLButtonElement).disabled).toBe(
         true
       );
@@ -617,6 +617,11 @@ describe('SpaceDocumentListComponent', () => {
       expect(uploadLink).not.toBeNull();
       expect(uploadLink?.getAttribute('href')).toContain('/admin/documents/upload');
       expect(uploadLink?.getAttribute('href')).toContain('spaceId=sp1');
+      const versionsLinks = element().querySelectorAll('a.document-versions-action');
+      expect(versionsLinks.length).toBe(2);
+      expect((versionsLinks[0] as HTMLAnchorElement).getAttribute('href')).toContain(
+        '/admin/documents/d1/versions'
+      );
     });
 
     it('hides the upload link for read-only users', () => {

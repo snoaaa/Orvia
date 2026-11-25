@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class DocumentVersionUploaderEntity {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174001', description: 'Uploader user UUID' })
@@ -49,6 +49,9 @@ export class DocumentVersionItemEntity {
 
   @ApiProperty({ example: 'available', description: 'Processing status: pending, ocr, segmentation, indexing, available or error' })
   status: string;
+
+  @ApiPropertyOptional({ example: null, nullable: true, description: 'Error message when processing failed' })
+  statusError?: string | null;
 
   @ApiProperty({ example: 'application/pdf', description: 'MIME type' })
   mimeType: string;

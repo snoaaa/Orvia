@@ -185,6 +185,21 @@ describe('DocumentUploadComponent', () => {
     expect(uploads).toHaveLength(5);
   });
 
+  it('links an uploaded file to its version history', () => {
+    create();
+    component.pickedSpaceId.set('s1');
+    component.addFiles([pdf('a.pdf')]);
+    component.startUpload();
+    expect(el().querySelector('.upload-versions')).toBeNull();
+
+    uploads[0].subject.next({ type: 'done', document: doc('d1') });
+    fixture.detectChanges();
+    expect(component.items()[0].documentId).toBe('d1');
+    expect(el().querySelector('.upload-versions')?.getAttribute('href')).toBe(
+      '/admin/documents/d1/versions'
+    );
+  });
+
   it('emits each created document and toasts once the batch is over', () => {
     create();
     const emitted: string[] = [];

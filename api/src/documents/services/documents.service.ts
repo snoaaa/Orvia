@@ -395,70 +395,82 @@ export class DocumentsService {
       finalExtension = prepared.extension;
     }
 
-    // Determine the next version number
-    const latestVersion = await this.prisma.documentVersion.findFirst({
-      where: { documentId },
-      orderBy: { versionNo: 'desc' },
-      select: { versionNo: true },
-    });
-    const nextVersionNo = (latestVersion?.versionNo ?? 0) + 1;
-
     const versionId = randomUUID();
     const jobId = randomUUID();
-    const storageKey = buildDocumentStorageKey({
-      spaceId: doc.spaceId,
-      documentId,
-      version: nextVersionNo,
-      extension: finalExtension,
-    });
-
-    // 1. Save file to storage
-    await this.storageService.save(storageKey, finalBuffer);
-
-    // 2. Determine initial processing step
     const step = determineInitialProcessingStep(finalMimeType);
+    let savedStorageKey: string | null = null;
 
-    // 3. Perform DB transaction
+    // Serialize concurrent replacements per document with FOR UPDATE so versionNo and storageKey never collide (no P2034).
     try {
-      const { updatedDoc, createdVersion } = await this.prisma.$transaction(async (tx) => {
-        const ver = await tx.documentVersion.create({
-          data: {
-            id: versionId,
+      const { updatedDoc, createdVersion, nextVersionNo, storageKey } = await this.prisma.$transaction(
+        async (tx) => {
+          const lockedDoc = await tx.$queryRaw<Array<{ id: string; deletedAt: Date | null }>>`
+            SELECT id, deleted_at AS deletedAt FROM documents WHERE id = ${documentId} FOR UPDATE
+          `;
+          if (lockedDoc.length === 0 || lockedDoc[0].deletedAt !== null) {
+            throw new NotFoundException(`Document with ID ${documentId} not found`);
+          }
+
+          const latestVersion = await tx.documentVersion.findFirst({
+            where: { documentId },
+            orderBy: { versionNo: 'desc' },
+            select: { versionNo: true },
+          });
+          const versionNo = (latestVersion?.versionNo ?? 0) + 1;
+          const key = buildDocumentStorageKey({
+            spaceId: doc.spaceId,
             documentId,
-            versionNo: nextVersionNo,
-            storageKey,
-            mimeType: finalMimeType,
-            checksum: validated.checksum,
-            status: 'pending',
-            pageCount: isImage ? 1 : 0,
-          },
-        });
+            version: versionNo,
+            extension: finalExtension,
+          });
 
-        await tx.processingJob.create({
-          data: {
-            id: jobId,
-            versionId,
-            step,
-            status: 'pending',
-            durationMs: 0,
-            ocrConfidence: 1.0,
-            pageCount: isImage ? 1 : 0,
-            chunkCount: 0,
-          },
-        });
+          await this.storageService.save(key, finalBuffer);
+          savedStorageKey = key;
 
-        const docRecord = await tx.document.update({
-          where: { id: documentId },
-          data: {
-            updatedAt: new Date(),
-            currentVersionId: versionId, // #111: the new version becomes the current one
-          },
-        });
+          const ver = await tx.documentVersion.create({
+            data: {
+              id: versionId,
+              documentId,
+              versionNo,
+              storageKey: key,
+              mimeType: finalMimeType,
+              checksum: validated.checksum,
+              status: 'pending',
+              pageCount: isImage ? 1 : 0,
+            },
+          });
 
-        return { updatedDoc: docRecord, createdVersion: ver };
-      });
+          await tx.processingJob.create({
+            data: {
+              id: jobId,
+              versionId,
+              step,
+              status: 'pending',
+              durationMs: 0,
+              ocrConfidence: 1.0,
+              pageCount: isImage ? 1 : 0,
+              chunkCount: 0,
+            },
+          });
 
-      // 4. Dispatch background processing job
+          const docRecord = await tx.document.update({
+            where: { id: documentId },
+            data: {
+              updatedAt: new Date(),
+              currentVersionId: versionId, // #111: the new version becomes the current one
+            },
+          });
+
+          return {
+            updatedDoc: docRecord,
+            createdVersion: ver,
+            nextVersionNo: versionNo,
+            storageKey: key,
+          };
+        },
+      );
+
+      // Dispatch background processing job after DB commit
       this.processingQueueService.enqueueJob({
         jobId,
         versionId,
@@ -469,7 +481,7 @@ export class DocumentsService {
         targetStep: step,
       });
 
-      // 5. Write audit entry
+      // Write audit entry
       await this.audit.record(
         AuditEvents.documentReplaced(
           {
@@ -488,8 +500,9 @@ export class DocumentsService {
 
       return DocumentMapper.toEntity(updatedDoc, createdVersion);
     } catch (err) {
-      // Clean up written file from storage if DB transaction failed
-      await this.storageService.delete(storageKey).catch(() => {});
+      if (savedStorageKey) {
+        await this.storageService.delete(savedStorageKey).catch(() => {});
+      }
       throw err;
     }
   }
@@ -1417,14 +1430,14 @@ export class DocumentsService {
     if (actorIds.length > 0) {
       const users = await this.prisma.user.findMany({
         where: { id: { in: actorIds } },
-        select: { id: true, name: true, email: true },
+        select: { id: true, fullName: true, email: true },
       });
       for (const u of users) {
         userMap.set(
           u.id,
           new DocumentVersionUploaderEntity({
             id: u.id,
-            name: u.name,
+            name: u.fullName,
             email: u.email,
           }),
         );
@@ -1454,6 +1467,7 @@ export class DocumentsService {
         size: sizes[index],
         checksum: v.checksum,
         status: v.status,
+        statusError: v.statusError ?? null,
         mimeType: v.mimeType,
         storageKey: v.storageKey,
         pageCount: v.pageCount,
